@@ -1,36 +1,34 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
-import api, { GameState, BattleResult } from '@/lib/api';
+import api, { GameState, TowerBattleResult } from '@/lib/api';
 
 export default function TowerPage() {
-    const { user } = useAuth();
     const [gameState, setGameState] = useState<GameState | null>(null);
-    const [battleResult, setBattleResult] = useState<BattleResult | null>(null);
+    const [battleResult, setBattleResult] = useState<TowerBattleResult | null>(null);
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        loadGameState();
-    }, []);
-
-    const loadGameState = async () => {
+    async function loadGameState() {
         try {
             const state = await api.getGameState();
             setGameState(state);
         } catch (err) {
             console.error('加载游戏状态失败:', err);
         }
-    };
+    }
+
+    useEffect(() => {
+        queueMicrotask(loadGameState);
+    }, []);
 
     const handleChallenge = async () => {
         setLoading(true);
         try {
-            const result = await api.battle();
+            const result = await api.towerBattle();
             setBattleResult(result);
             if (result.won) {
-                setMessage(`挑战成功！击败了${result.monsterName}，获得${result.goldGained}金币`);
+                setMessage(`挑战成功！击败了${result.monsterName}，登上第${result.towerFloor}层，获得${result.goldGained}金币、${result.bossCoinGained}Boss币`);
             } else {
                 setMessage(`挑战失败！被${result.monsterName}击败`);
             }

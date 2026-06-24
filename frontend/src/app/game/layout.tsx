@@ -24,23 +24,23 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
     const pathname = usePathname();
     const [gameState, setGameState] = useState<GameState | null>(null);
 
-    useEffect(() => {
-        if (!isLoading && !user) {
-            router.push('/');
-        }
-        if (user) {
-            loadGameState();
-        }
-    }, [user, isLoading]);
-
-    const loadGameState = async () => {
+    async function loadGameState() {
         try {
             const state = await api.getGameState();
             setGameState(state);
         } catch (err) {
             console.error('加载游戏状态失败:', err);
         }
-    };
+    }
+
+    useEffect(() => {
+        if (!isLoading && !user) {
+            router.push('/');
+        }
+        if (user) {
+            queueMicrotask(loadGameState);
+        }
+    }, [user, isLoading, router]);
 
     if (isLoading || !user) {
         return (

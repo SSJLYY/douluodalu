@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #111827;
+  --foreground: #f9fafb;
 }
 
 @theme inline {
@@ -20,7 +20,125 @@
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: #111827;
+  color: #f9fafb;
   font-family: Arial, Helvetica, sans-serif;
+  color-scheme: dark;
+}
+
+body,
+body :where(main, section, article, header, nav, aside, div, p, span, label, li, h1, h2, h3, h4, h5, h6) {
+  color: inherit;
+}
+
+:where([class*="bg-gray-"], [class*="bg-slate-"], [class*="bg-zinc-"], [class*="bg-neutral-"], [class*="bg-purple-950"], [class*="from-gray-"], [class*="via-gray-"], [class*="to-gray-"]) {
+  color: #f9fafb;
+}
+
+:where([class*="bg-gray-"], [class*="bg-slate-"], [class*="bg-zinc-"], [class*="bg-neutral-"]) :where(p, span, label, li, h1, h2, h3, h4, h5, h6, div) {
+  color: inherit;
+}
+
+input,
+textarea,
+select {
+  background-color: #374151;
+  color: #ffffff;
+  caret-color: #facc15;
+  color-scheme: dark;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: #ffffff;
+  box-shadow: 0 0 0 1000px #374151 inset;
+  caret-color: #facc15;
+}
+
+::placeholder {
+  color: #d1d5db;
+  opacity: 1;
+}
+
+button:disabled {
+  color: #e5e7eb;
+  cursor: not-allowed;
+}
+
+.text-gray-500 {
+  color: #d1d5db;
+}
+
+.text-gray-400 {
+  color: #e5e7eb;
+}
+
+.text-gray-300 {
+  color: #f3f4f6;
+}
+
+.bg-gray-800,
+.bg-gray-800\/80,
+.bg-gray-800\/90 {
+  background-color: rgb(31 41 55 / var(--tw-bg-opacity, 1));
+}
+
+.text-transparent {
+  color: transparent;
+}
+
+.text-white {
+  color: #ffffff;
+}
+
+.text-yellow-400 {
+  color: #facc15;
+}
+
+.text-yellow-500 {
+  color: #eab308;
+}
+
+.text-orange-400 {
+  color: #fb923c;
+}
+
+.text-red-300 {
+  color: #fca5a5;
+}
+
+.text-red-400 {
+  color: #f87171;
+}
+
+.text-blue-300 {
+  color: #93c5fd;
+}
+
+.text-blue-400 {
+  color: #60a5fa;
+}
+
+.text-blue-500 {
+  color: #3b82f6;
+}
+
+.text-green-300 {
+  color: #86efac;
+}
+
+.text-green-400 {
+  color: #4ade80;
+}
+
+.text-purple-300 {
+  color: #d8b4fe;
+}
+
+.text-purple-400,
+.text-purple-500 {
+  color: #c084fc;
 }

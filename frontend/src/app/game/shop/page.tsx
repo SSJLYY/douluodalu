@@ -1,11 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
-import api, { GameState, ShopItem, LimitedShopItem, BackpackItem } from '@/lib/api';
+import api, { GameState, ShopItem, LimitedShopItem } from '@/lib/api';
 
 export default function ShopPage() {
-    const { user } = useAuth();
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [bossItems, setBossItems] = useState<ShopItem[]>([]);
     const [limitedItems, setLimitedItems] = useState<LimitedShopItem[]>([]);
@@ -13,21 +11,16 @@ export default function ShopPage() {
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        loadGameState();
-        loadShopItems();
-    }, []);
-
-    const loadGameState = async () => {
+    async function loadGameState() {
         try {
             const state = await api.getGameState();
             setGameState(state);
         } catch (err) {
             console.error('加载游戏状态失败:', err);
         }
-    };
+    }
 
-    const loadShopItems = async () => {
+    async function loadShopItems() {
         try {
             const [boss, limited] = await Promise.all([
                 api.getBossShopItems(),
@@ -38,7 +31,14 @@ export default function ShopPage() {
         } catch (err) {
             console.error('加载商店物品失败:', err);
         }
-    };
+    }
+
+    useEffect(() => {
+        queueMicrotask(() => {
+            loadGameState();
+            loadShopItems();
+        });
+    }, []);
 
     const handleBuyBossItem = async (itemId: number) => {
         setLoading(true);
@@ -69,6 +69,12 @@ export default function ShopPage() {
     if (!gameState) {
         return <div className="text-center py-8">加载中...</div>;
     }
+
+    const canAfford = (item: ShopItem) => item.currency === 'GOLD'
+        ? gameState.profile.gold >= item.price
+        : gameState.profile.bossCoin >= item.price;
+
+    const currencyLabel = (item: ShopItem) => item.currency === 'GOLD' ? '金币' : 'Boss币';
 
     return (
         <div className="space-y-6">
@@ -128,12 +134,11 @@ export default function ShopPage() {
                                     <p className="text-gray-400 text-sm mt-1">{item.description}</p>
                                     <div className="mt-4 flex justify-between items-center">
                                         <div className="flex items-center gap-2">
-                                            <span className="text-blue-500">💎</span>
-                                            <span className="font-semibold">{item.price}</span>
+                                            <span className="font-semibold">{item.price} {currencyLabel(item)}</span>
                                         </div>
                                         <button
                                             onClick={() => handleBuyBossItem(item.id)}
-                                            disabled={loading || gameState.profile.bossCoin < item.price}
+                                            disabled={loading || !canAfford(item)}
                                             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm"
                                         >
                                             购买
@@ -163,12 +168,11 @@ export default function ShopPage() {
                                     </div>
                                     <div className="mt-4 flex justify-between items-center">
                                         <div className="flex items-center gap-2">
-                                            <span className="text-blue-500">💎</span>
-                                            <span className="font-semibold">{item.price}</span>
+                                            <span className="font-semibold">{item.price} {currencyLabel(item)}</span>
                                         </div>
                                         <button
                                             onClick={() => handleBuyLimitedItem(item.id)}
-                                            disabled={loading || gameState.profile.bossCoin < item.price}
+                                            disabled={loading || !canAfford(item)}
                                             className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 rounded text-sm"
                                         >
                                             购买

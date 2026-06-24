@@ -16,30 +16,28 @@ export default function RankPage() {
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        loadRankData();
-    }, [activeRank]);
+        queueMicrotask(async () => {
+            setLoading(true);
+            try {
+                const rankType = RANK_TYPES.find(r => r.id === activeRank);
+                if (!rankType) return;
 
-    const loadRankData = async () => {
-        setLoading(true);
-        try {
-            const rankType = RANK_TYPES.find(r => r.id === activeRank);
-            if (!rankType) return;
-
-            let data: RankEntry[];
-            if (rankType.api === 'getLevelRank') {
-                data = await api.getLevelRank(50);
-            } else if (rankType.api === 'getTowerRank') {
-                data = await api.getTowerRank(50);
-            } else {
-                data = [];
+                let data: RankEntry[];
+                if (rankType.api === 'getLevelRank') {
+                    data = await api.getLevelRank(50);
+                } else if (rankType.api === 'getTowerRank') {
+                    data = await api.getTowerRank(50);
+                } else {
+                    data = [];
+                }
+                setRankData(data);
+            } catch (err) {
+                console.error('加载排行榜失败:', err);
+            } finally {
+                setLoading(false);
             }
-            setRankData(data);
-        } catch (err) {
-            console.error('加载排行榜失败:', err);
-        } finally {
-            setLoading(false);
-        }
-    };
+        });
+    }, [activeRank]);
 
     const getRankIcon = (rank: number) => {
         if (rank === 1) return '🥇';
@@ -78,7 +76,7 @@ export default function RankPage() {
                     <div className="text-center py-8 text-gray-500">暂无数据</div>
                 ) : (
                     <div className="divide-y divide-gray-700">
-                        {rankData.map((entry, index) => (
+                        {rankData.map((entry) => (
                             <div 
                                 key={entry.userId}
                                 className={`p-4 flex items-center justify-between ${

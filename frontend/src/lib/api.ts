@@ -89,6 +89,10 @@ class ApiClient {
         return this.request<BattleResult>('/api/action/battle', { method: 'POST' });
     }
 
+    async towerBattle() {
+        return this.request<TowerBattleResult>('/api/action/tower', { method: 'POST' });
+    }
+
     // Rank
     async getLevelRank(limit = 50) {
         return this.request<RankEntry[]>(`/api/rank/level?limit=${limit}`);
@@ -104,7 +108,7 @@ class ApiClient {
     }
 
     async buyBossShopItem(itemId: number) {
-        return this.request<{ message: string; item: any }>('/api/shop/boss/buy/' + itemId, {
+        return this.request<{ message: string; item: unknown }>('/api/shop/boss/buy/' + itemId, {
             method: 'POST',
         });
     }
@@ -114,7 +118,7 @@ class ApiClient {
     }
 
     async buyLimitedShopItem(itemId: number) {
-        return this.request<{ message: string; item: any }>('/api/shop/limited/buy/' + itemId, {
+        return this.request<{ message: string; item: unknown }>('/api/shop/limited/buy/' + itemId, {
             method: 'POST',
         });
     }
@@ -147,6 +151,29 @@ class ApiClient {
         });
     }
 
+    async donateGuild(amount: number) {
+        return this.request<{ message: string; guild: Guild; gold: number }>('/api/guild/donate', {
+            method: 'POST',
+            body: JSON.stringify({ amount }),
+        });
+    }
+
+    async challengeGuildBoss() {
+        return this.request<GuildBossResult>('/api/guild/boss/challenge', {
+            method: 'POST',
+        });
+    }
+
+    async getGuildShopItems() {
+        return this.request<ShopItem[]>('/api/guild/shop');
+    }
+
+    async buyGuildShopItem(itemId: number) {
+        return this.request<{ message: string; item: unknown }>('/api/guild/shop/buy/' + itemId, {
+            method: 'POST',
+        });
+    }
+
     // Talent
     async upgradeTalent(branch: string) {
         return this.request<{ message: string }>('/api/talent/upgrade/' + branch, {
@@ -159,16 +186,59 @@ class ApiClient {
         return this.request<GameState>('/api/equipment');
     }
 
-    async sellBackpackItem(itemIndex: number) {
+    async sellBackpackItem(backpackItemId: number) {
         return this.request<{ message: string }>('/api/equipment/backpack/sell', {
             method: 'POST',
-            body: JSON.stringify({ itemIndex }),
+            body: JSON.stringify({ backpackItemId }),
         });
     }
 
     async expandBackpack() {
         return this.request<{ message: string }>('/api/equipment/backpack/expand', {
             method: 'POST',
+        });
+    }
+
+    // Equip / Unequip
+    async equipRing(backpackItemId: number, slotIndex: number) {
+        return this.request<{ message: string }>('/api/equip/ring', {
+            method: 'POST',
+            body: JSON.stringify({ backpackItemId, slotIndex }),
+        });
+    }
+
+    async equipBone(backpackItemId: number, slotIndex: number) {
+        return this.request<{ message: string }>('/api/equip/bone', {
+            method: 'POST',
+            body: JSON.stringify({ backpackItemId, slotIndex }),
+        });
+    }
+
+    async equipCore(backpackItemId: number, slotType: string) {
+        return this.request<{ message: string }>('/api/equip/core', {
+            method: 'POST',
+            body: JSON.stringify({ backpackItemId, slotType }),
+        });
+    }
+
+    async unequipRing(slotIndex: number) {
+        return this.request<{ message: string }>('/api/unequip/ring', {
+            method: 'POST',
+            body: JSON.stringify({ slotIndex }),
+        });
+    }
+
+    async unequipBone(slotIndex: number) {
+        return this.request<{ message: string }>('/api/unequip/bone', {
+            method: 'POST',
+            body: JSON.stringify({ slotIndex }),
+        });
+    }
+
+    async unequipCore(slotType: string) {
+        return this.request<{ message: string }>('/api/unequip/core', {
+            method: 'POST',
+            body: JSON.stringify({ slotType }),
         });
     }
 }
@@ -243,10 +313,10 @@ export interface EquippedBone {
 export interface EquippedCore {
     slotType: string;
     coreName: string;
-    rarityOrdinal: number;
+    qualityOrdinal: number;
     passiveSkillName: string | null;
-    value: number;
-    level: number;
+    coreValue: number;
+    coreLevel: number;
 }
 
 export interface BackpackItem {
@@ -277,6 +347,19 @@ export interface BattleResult {
     playerLevel: number;
     playerGold: number;
     playerSoulPower: number;
+}
+
+export interface TowerBattleResult {
+    won: boolean;
+    rounds: number;
+    monsterName: string;
+    expGained: number;
+    goldGained: number;
+    bossCoinGained: number;
+    towerFloor: number;
+    killingIntent: number;
+    drops: BackpackItem[];
+    playerLevel: number;
 }
 
 export interface CultivateResult {
@@ -313,7 +396,7 @@ export interface ShopItem {
     price: number;
     currency: 'GOLD' | 'BOSS_COIN';
     itemType: string;
-    itemData: any;
+    itemData: unknown;
 }
 
 export interface LimitedShopItem extends ShopItem {
@@ -330,6 +413,16 @@ export interface Guild {
     maxMembers: number;
     notice: string | null;
     createdAt: string;
+}
+
+export interface GuildBossResult {
+    won: boolean;
+    damage: number;
+    bossHp: number;
+    goldGained: number;
+    bossCoinGained: number;
+    item: BackpackItem;
+    message: string;
 }
 
 export const api = new ApiClient();

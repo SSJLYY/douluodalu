@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import api, { AuthResponse, UserInfo } from '@/lib/api';
+import api, { UserInfo } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
 interface AuthContextType {
@@ -16,7 +16,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<UserInfo | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(() => typeof window !== 'undefined' && Boolean(localStorage.getItem('token')));
     const router = useRouter();
 
     useEffect(() => {
@@ -28,8 +28,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     api.setToken(null);
                 })
                 .finally(() => setIsLoading(false));
-        } else {
-            setIsLoading(false);
         }
     }, []);
 

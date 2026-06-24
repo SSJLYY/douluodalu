@@ -1,13 +1,10 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: "http://127.0.0.1:8080/api/:path*",
-      },
-    ];
+  allowedDevOrigins: ["*.monkeycode-ai.online"],
+  turbopack: {
+    root: path.parse(path.resolve(__dirname)).root,
   },
 };
 

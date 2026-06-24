@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
 import api, { GameState, CultivateResult, BreakthroughResult } from '@/lib/api';
 
 const REALM_NAMES = [
@@ -10,25 +9,24 @@ const REALM_NAMES = [
 ];
 
 export default function CultivationPage() {
-    const { user } = useAuth();
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [cultivateResult, setCultivateResult] = useState<CultivateResult | null>(null);
     const [breakthroughResult, setBreakthroughResult] = useState<BreakthroughResult | null>(null);
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        loadGameState();
-    }, []);
-
-    const loadGameState = async () => {
+    async function loadGameState() {
         try {
             const state = await api.getGameState();
             setGameState(state);
         } catch (err) {
             console.error('加载游戏状态失败:', err);
         }
-    };
+    }
+
+    useEffect(() => {
+        queueMicrotask(loadGameState);
+    }, []);
 
     const handleCultivate = async () => {
         setLoading(true);
@@ -50,7 +48,7 @@ export default function CultivationPage() {
             const result = await api.breakthrough();
             setBreakthroughResult(result);
             if (result.success) {
-                setMessage(`突破成功！提升至 ${REALM_NAMES[result.newLevel - 1] || '未知境界'}`);
+                setMessage(`突破成功！提升至等级 ${result.newLevel}`);
             } else {
                 setMessage('突破失败，魂力不足');
             }
@@ -66,9 +64,10 @@ export default function CultivationPage() {
         return <div className="text-center py-8">加载中...</div>;
     }
 
-    const currentRealm = REALM_NAMES[gameState.profile.level - 1] || '未知境界';
-    const nextRealm = REALM_NAMES[gameState.profile.level] || '已至巅峰';
-    const soulPowerNeeded = gameState.profile.level * 1000; // 简化的突破需求
+    const currentRealmIndex = Math.min(Math.floor((gameState.profile.level - 1) / 10), REALM_NAMES.length - 1);
+    const currentRealm = REALM_NAMES[currentRealmIndex];
+    const nextRealm = REALM_NAMES[Math.min(currentRealmIndex + 1, REALM_NAMES.length - 1)] || '已至巅峰';
+    const soulPowerNeeded = Math.floor(120 * Math.pow(gameState.profile.level, 1.55));
     const progress = Math.min(100, (gameState.profile.soulPower / soulPowerNeeded) * 100);
 
     return (
@@ -145,7 +144,7 @@ export default function CultivationPage() {
                     <h3 className="font-semibold mb-2">突破结果</h3>
                     <div>结果: {breakthroughResult.success ? '成功' : '失败'}</div>
                     {breakthroughResult.success && (
-                        <div>新境界: {REALM_NAMES[breakthroughResult.newLevel - 1] || '未知'}</div>
+                        <div>新等级: {breakthroughResult.newLevel}</div>
                     )}
                 </div>
             )}

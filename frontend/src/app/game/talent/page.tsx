@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useAuth } from '@/contexts/AuthContext';
 import api, { GameState } from '@/lib/api';
 
 const TALENT_BRANCHES = [
@@ -12,23 +11,22 @@ const TALENT_BRANCHES = [
 ];
 
 export default function TalentPage() {
-    const { user } = useAuth();
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        loadGameState();
-    }, []);
-
-    const loadGameState = async () => {
+    async function loadGameState() {
         try {
             const state = await api.getGameState();
             setGameState(state);
         } catch (err) {
             console.error('加载游戏状态失败:', err);
         }
-    };
+    }
+
+    useEffect(() => {
+        queueMicrotask(loadGameState);
+    }, []);
 
     const handleUpgradeTalent = async (branch: string) => {
         setLoading(true);
