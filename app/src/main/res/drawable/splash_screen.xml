@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 深色背景 -->
+    <item android:drawable="@color/bg_dark" />
+
+    <!-- 中央图标 (使用简易矢量图，避免自适应图标渲染崩溃) -->
+    <item
+        android:drawable="@drawable/ic_splash_center"
+        android:gravity="center" />
+</layer-list>

@@ -1,0 +1,573 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark"
+    android:fillViewport="true"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:gravity="center_horizontal">
+
+        <!-- 玩家状态卡片 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="14dp">
+
+            <TextView
+                android:id="@+id/tv_realm"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/accent"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:text="魂士 Lv.1" />
+
+            <TextView
+                android:id="@+id/tv_wuhun"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:text="武魂：未觉醒"
+                android:layout_marginTop="4dp" />
+
+            <!-- HP条 -->
+            <TextView
+                android:id="@+id/tv_hp_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/rarity_legendary"
+                android:textSize="12sp"
+                android:text="HP: 100/100"
+                android:layout_marginTop="6dp" />
+
+            <ProgressBar
+                android:id="@+id/progress_player_hp"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="10dp"
+                android:max="100"
+                android:progress="100"
+                android:progressDrawable="@drawable/progress_hp_bg"
+                android:layout_marginTop="2dp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="@color/divider"
+                android:layout_marginVertical="6dp" />
+
+            <!-- 属性行 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tv_attack"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:text="物攻: 10" />
+
+                <TextView
+                    android:id="@+id/tv_matk"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:text="魔攻: 5" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="2dp">
+
+                <TextView
+                    android:id="@+id/tv_crit"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:text="暴击: 5%/150%" />
+
+                <TextView
+                    android:id="@+id/tv_soul_power"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:text="魂力: 0" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="2dp">
+
+                <TextView
+                    android:id="@+id/tv_pdef"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:text="物防: 5" />
+
+                <TextView
+                    android:id="@+id/tv_mdef"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:text="魔防: 3" />
+            </LinearLayout>
+            
+            <!-- 武魂技能 -->
+            <LinearLayout
+                android:id="@+id/layout_skill"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="4dp"
+                android:visibility="gone">
+            
+                <TextView
+                    android:id="@+id/tv_skill_name"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/rarity_legendary"
+                    android:textSize="12sp"
+                    android:text="技能: 普通攻击" />
+            
+                <TextView
+                    android:id="@+id/tv_skill_cooldown"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp"
+                    android:text="冷却: 0/3" />
+            </LinearLayout>
+
+            <!-- V2: 战斗魂力 -->
+            <TextView
+                android:id="@+id/tv_battle_soul_power"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/rarity_uncommon"
+                android:textSize="12sp"
+                android:text="魂力: 100/100 ⚡"
+                android:layout_marginTop="2dp" />
+
+            <!-- 根骨/吸收容量 -->
+            <TextView
+                android:id="@+id/tv_root_bone"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/rarity_uncommon"
+                android:textSize="12sp"
+                android:text="根骨: 0.0 | 容量: 0/100"
+                android:layout_marginTop="2dp" />
+
+            <!-- V2: 自动突破开关 -->
+            <CheckBox
+                android:id="@+id/cb_auto_breakthrough"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🔄 自动突破"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- 死亡提示遮罩（默认隐藏） -->
+        <LinearLayout
+            android:id="@+id/death_overlay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/death_bg"
+            android:padding="12dp"
+            android:layout_marginTop="2dp"
+            android:visibility="gone"
+            android:gravity="center">
+
+            <TextView
+                android:id="@+id/tv_death_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="💀 阵亡"
+                android:textColor="@color/rarity_mythic"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_death_info"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="HP恢复中..."
+                android:textColor="@color/text_primary"
+                android:textSize="13sp"
+                android:layout_marginTop="4dp" />
+
+            <ProgressBar
+                android:id="@+id/progress_death_regen"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:max="100"
+                android:progress="0"
+                android:progressDrawable="@drawable/progress_hp_bg"
+                android:layout_marginTop="6dp" />
+        </LinearLayout>
+
+        <!-- 战场卡片(对阵式：玩家 vs 怪物组) -->
+        <LinearLayout
+            android:id="@+id/battlefield_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="12dp"
+            android:layout_marginTop="8dp">
+
+            <!-- 战场标题(程序化更新) -->
+            <TextView
+                android:id="@+id/tv_battlefield_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/accent"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:text="⚔️ 战斗" />
+
+            <!-- 战场对阵区(程序化构建：玩家 vs 怪物组) -->
+            <LinearLayout
+                android:id="@+id/battlefield_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:minHeight="100dp"
+                android:layout_marginTop="4dp" />
+
+            <!-- 战斗按钮 -->
+            <Button
+                android:id="@+id/btn_battle"
+                android:layout_width="match_parent"
+                android:layout_height="46dp"
+                android:layout_marginTop="8dp"
+                android:backgroundTint="@color/btn_hunt"
+                android:foreground="?attr/selectableItemBackground"
+                android:stateListAnimator="@null"
+                android:text="⚔️ 攻击"
+                android:textColor="@android:color/white"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <!-- 倍速按钮 -->
+            <Button
+                android:id="@+id/btn_speed"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="4dp"
+                android:backgroundTint="@color/card_bg"
+                android:foreground="?attr/selectableItemBackground"
+                android:stateListAnimator="@null"
+                android:minHeight="40dp"
+                android:text="🐢 一倍速"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <!-- 自动战斗开关 -->
+            <Button
+                android:id="@+id/btn_auto_battle"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginTop="6dp"
+                android:backgroundTint="@color/card_bg"
+                android:foreground="?attr/selectableItemBackground"
+                android:stateListAnimator="@null"
+                android:minHeight="44dp"
+                android:text="🤖 自动战斗: 关闭"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <!-- V2: 主动技能按钮 -->
+            <LinearLayout
+                android:id="@+id/active_skill_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+        <!-- 修炼区域 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="12dp"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🧘 境界修炼"
+                android:textColor="@color/text_gold"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_progress_info"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp"
+                android:text="魂力：0 / 100"
+                android:layout_marginTop="4dp" />
+
+            <ProgressBar
+                android:id="@+id/progress_soul_power"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="12dp"
+                android:max="100"
+                android:progress="0"
+                android:progressDrawable="@drawable/progress_soul_bg"
+                android:layout_marginTop="6dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="6dp">
+
+                <Button
+                    android:id="@+id/btn_cultivate"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="6dp"
+                    android:backgroundTint="@color/btn_cultivate"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:stateListAnimator="@null"
+                    android:minHeight="44dp"
+                    android:text="🧘修炼"
+                    android:textColor="@android:color/white"
+                    android:textSize="15sp" />
+
+                <Button
+                    android:id="@+id/btn_breakthrough"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="6dp"
+                    android:backgroundTint="@color/btn_breakthrough"
+                    android:foreground="?attr/selectableItemBackground"
+                    android:stateListAnimator="@null"
+                    android:minHeight="44dp"
+                    android:text="🔥突破"
+                    android:textColor="@android:color/white"
+                    android:textSize="15sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 卡级修炼 -->
+        <LinearLayout
+            android:id="@+id/capping_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="10dp"
+            android:layout_marginTop="6dp">
+
+            <TextView
+                android:id="@+id/tv_cap_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_gold"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:text="🔒 卡级修炼" />
+
+            <TextView
+                android:id="@+id/tv_cap_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/rarity_uncommon"
+                android:textSize="12sp"
+                android:text=""
+                android:layout_marginTop="2dp" />
+
+            <TextView
+                android:id="@+id/tv_cap_excess"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/rarity_legendary"
+                android:textSize="12sp"
+                android:text=""
+                android:layout_marginTop="2dp" />
+
+            <LinearLayout
+                android:id="@+id/cap_stat_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="4dp" />
+
+            <Button
+                android:id="@+id/btn_cap_toggle"
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:layout_marginTop="6dp"
+                android:backgroundTint="@color/btn_cultivate"
+                android:foreground="?attr/selectableItemBackground"
+                android:stateListAnimator="@null"
+                android:minHeight="44dp"
+                android:text=""
+                android:textColor="@android:color/white"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- 功能按钮行 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="6dp">
+
+            <Button
+                android:id="@+id/btn_awaken"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp"
+                android:backgroundTint="@color/btn_normal"
+                android:foreground="?attr/selectableItemBackground"
+                android:stateListAnimator="@null"
+                android:minHeight="44dp"
+                android:text="✨觉醒"
+                android:textColor="@android:color/white"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/btn_prestige"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginStart="6dp"
+                android:backgroundTint="@color/btn_prestige"
+                android:foreground="?attr/selectableItemBackground"
+                android:stateListAnimator="@null"
+                android:minHeight="44dp"
+                android:text="👑传承"
+                android:textColor="@android:color/white"
+                android:textSize="15sp" />
+        </LinearLayout>
+
+        <!-- 天赋树（原独立Tab合并到修炼页） -->
+        <LinearLayout
+            android:id="@+id/talent_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="10dp"
+            android:layout_marginTop="6dp">
+
+            <TextView
+                android:id="@+id/tv_talent_points"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/rarity_legendary"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:text="0"
+                android:layout_gravity="center" />
+
+            <TextView
+                android:id="@+id/tv_talent_progress"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                android:text="已消耗: 0 / 12"
+                android:layout_gravity="center"
+                android:layout_marginTop="2dp" />
+
+            <TextView
+                android:id="@+id/tv_talent_summary"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/rarity_uncommon"
+                android:textSize="11sp"
+                android:text=""
+                android:layout_gravity="center"
+                android:layout_marginTop="2dp" />
+
+            <TextView
+                android:id="@+id/tv_prestige_hint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/accent"
+                android:textSize="12sp"
+                android:text="🔒 完成神位传承获得天赋点"
+                android:layout_gravity="center"
+                android:layout_marginTop="4dp" />
+
+            <!-- 天赋分支容器 -->
+            <LinearLayout
+                android:id="@+id/talent_branches_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="6dp" />
+        </LinearLayout>
+
+        <!-- 战斗日志 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/card_bg"
+            android:padding="8dp"
+            android:layout_marginTop="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="战斗日志"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:id="@+id/log_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginTop="4dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

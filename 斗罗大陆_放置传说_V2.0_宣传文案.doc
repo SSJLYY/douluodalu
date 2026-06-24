@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>斗罗大陆·放置传说 V2.0 宣传文案</title>
+<style>
+body{font-family:'Microsoft YaHei',sans-serif;max-width:800px;margin:0 auto;padding:40px;color:#333;line-height:1.8}
+h1{font-size:28px;color:#8B0000;text-align:center;margin-bottom:5px}
+.subtitle{font-size:16px;color:#666;text-align:center;margin-bottom:20px}
+hr{border:none;border-top:2px dashed #ccc;margin:30px 0}
+h2{font-size:18px;color:#1A5276;border-left:4px solid #2E86C1;padding-left:10px;margin-top:30px}
+h3{font-size:15px;color:#2E86C1;margin-top:20px}
+p{font-size:12px;margin:6px 0;text-indent:0}
+.school-item{margin-left:20px}
+.school-balance{color:#1E8449}
+.school-physical{color:#8E44AD}
+.school-magic{color:#E67E22}
+.school-locked{color:#888}
+table{border-collapse:collapse;width:100%;margin:15px 0;font-size:11px}
+th{background:#2E86C1;color:#fff;padding:8px;font-weight:bold}
+td{border:1px solid #ddd;padding:6px;text-align:center}
+tr:nth-child(even){background:#f5f9fc}
+.footer{text-align:center;color:#999;font-size:10px;margin-top:40px;border-top:1px solid #eee;padding-top:15px}
+.note{font-size:10px;color:#999;text-align:center;margin:5px 0}
+</style>
+</head>
+<body>
+
+<h1>斗罗大陆·放置传说 V2.0</h1>
+<p class="subtitle">—— 武魂流派革新 · 回合制放置RPG ——</p>
+<hr>
+
+<h2>🎮 游戏简介</h2>
+<p>《斗罗大陆·放置传说》是一款以唐家三少经典IP《斗罗大陆》为背景的回合制放置RPG手游。玩家将化身为魂师，从圣魂村出发，踏上修炼成神之路。</p>
+<p>V2.0 版本迎来【武魂流派改革】——开局自由选择六大流派，告别随机觉醒时代。每个流派拥有独立的武魂池与属性偏重，带来截然不同的成长体验。</p>
+
+<h2>✨ 核心特色</h2>
+
+<h3>⚡ 六大武魂流派</h3>
+<p>开局自由选择流派，流派决定武魂池与属性偏重方向：</p>
+<p class="school-item school-balance">⚖️ 均衡流派 ── 全面发展，物法双修，生存专精，无短板万金油</p>
+<p class="school-item school-physical">⚔️ 物理流派 ── 近战强攻，ATK极致爆发，高物理防御</p>
+<p class="school-item school-magic">🔮 法系流派 ── 远程法术，MATK极致输出，高魔法防御</p>
+<p class="school-item school-locked">🛡️ 辅助流派 ── Lv.50 + 转生≥1次解锁，极致生存与团队增益</p>
+<p class="school-item school-locked">🌿 控制流派 ── Lv.70 + 转生≥2次解锁，束缚·冰冻·眩晕掌控战场</p>
+<p class="school-item school-locked">🗡️ 暗杀流派 ── Lv.90 + 转生≥3次解锁，高暴击高爆伤一击必杀</p>
+
+<h3>💍 魂环系统</h3>
+<p>9个魂环槽位（每20级解锁1个），五种年限（百年→千年→万年→十万年→百万年），每个魂环附带随机属性词缀与主动技能，自由搭配策略。</p>
+
+<h3>🦴 魂骨系统</h3>
+<p>6部位魂骨装备（头/双臂/躯干/双腿），四种品质（千年→万年→十万年→神级），可强化至+10级，附带随机被动技能（减伤/吸血/闪避/斩杀等）。</p>
+
+<h3>⚔️ 回合制多目标战斗</h3>
+<p>1vN波次战斗，手动/自动双模式。技能分为物理/法术两大派系——法系技能穿透魔防，物理技能穿透物防。魂力管理+冷却系统，策略深度拉满。</p>
+
+<h3>🗺️ 关卡制地图</h3>
+<p>8张地图×15关，每5关遭遇Boss。Boss有专属名字与特殊词缀。关卡倍率动态缩放，难度递增平滑。</p>
+
+<h3>🔄 转生传承</h3>
+<p>100级后开启转生，重置等级但保留装备/成就/图鉴/商店等级。每次转生全属性×1.5倍，魂师之道天赋树可保留流派与装备。</p>
+
+<h3>🗼 杀戮之都</h3>
+<p>独立爬塔100层，每击杀塔Boss永久ATK+10。后期核心属性来源，挑战极限。</p>
+
+<h2>📊 流派属性偏重系数</h2>
+<p class="note">（百分比表示基于基础属性的倍率，括号内为暴击/爆伤额外加成）</p>
+
+<table>
+<tr><th>流派</th><th>HP</th><th>ATK</th><th>MATK</th><th>PDEF</th><th>MDEF</th><th>暴击率</th><th>爆伤</th></tr>
+<tr><td>⚖️ 均衡</td><td>105%</td><td>100%</td><td>100%</td><td>105%</td><td>105%</td><td>+5%</td><td>+5%</td></tr>
+<tr><td>⚔️ 物理</td><td>100%</td><td>130%</td><td>45%</td><td>115%</td><td>70%</td><td>+8%</td><td>—</td></tr>
+<tr><td>🔮 法系</td><td>95%</td><td>45%</td><td>130%</td><td>70%</td><td>115%</td><td>—</td><td>+8%</td></tr>
+<tr><td>🛡️ 辅助</td><td>135%</td><td>55%</td><td>55%</td><td>115%</td><td>115%</td><td>—</td><td>—</td></tr>
+<tr><td>🌿 控制</td><td>115%</td><td>80%</td><td>80%</td><td>105%</td><td>105%</td><td>+10%</td><td>—</td></tr>
+<tr><td>🗡️ 暗杀</td><td>85%</td><td>135%</td><td>45%</td><td>75%</td><td>75%</td><td>+18%</td><td>+35%</td></tr>
+</table>
+
+<h2>🔢 核心数值公式</h2>
+<p>物理伤害 = ATK × (1 − 对方物防/(物防+200))，最低10%</p>
+<p>魔法伤害 = MATK × (1 − 对方魔防/(魔防+200))，最低10%</p>
+<p>暴击伤害 = 基础伤害 × 爆伤%</p>
+<p>楼层倍率 = 1 + 层数×0.05 &nbsp;|&nbsp; 地图倍率 = 1 + 地图ID×0.3</p>
+<p>突破消耗 = 100 × 等级^1.4 魂力</p>
+<p>魂力上限 = 100 + 等级×5 &nbsp;|&nbsp; 每回合回复 = 5 + 等级/10</p>
+
+<h2>👤 目标用户</h2>
+<p>· 喜爱《斗罗大陆》IP的玩家</p>
+<p>· 放置类/挂机类手游爱好者</p>
+<p>· 喜欢回合制RPG与数值策略的玩家</p>
+<p>· 碎片时间多、追求轻松成长的休闲玩家</p>
+
+<h2>📋 版本信息</h2>
+<p>版本号：V2.0</p>
+<p>平台：Android 9.0+</p>
+<p>类型：回合制放置RPG</p>
+<p>IP：斗罗大陆（唐家三少）</p>
+
+<p class="footer">斗罗大陆·放置传说 V2.0 | 武魂流派革新 | 回合制放置RPG</p>
+
+</body>
+</html>

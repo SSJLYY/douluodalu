@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- 主题色 -->
+    <color name="primary">#FF6B2FA0</color>
+    <color name="primary_dark">#FF4A1D70</color>
+    <color name="accent">#FFFFD700</color>
+    <color name="surface">#FF1A1A2E</color>
+    <color name="surface_light">#FF2A2A4A</color>
+    <color name="bg_dark">#FF0F0F1F</color>
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#FFB0B0C0</color>
+    <color name="text_gold">#FFFFD700</color>
+
+    <!-- 品质色 -->
+    <color name="rarity_common">#FF9E9E9E</color>
+    <color name="rarity_uncommon">#FF4CAF50</color>
+    <color name="rarity_rare">#FF2196F3</color>
+    <color name="rarity_epic">#FF9C27B0</color>
+    <color name="rarity_legendary">#FFFF9800</color>
+    <color name="rarity_mythic">#FFFF1744</color>
+
+    <!-- 按钮色 -->
+    <color name="btn_hunt">#FF4CAF50</color>
+    <color name="btn_cultivate">#FF2196F3</color>
+    <color name="btn_breakthrough">#FFFF9800</color>
+    <color name="btn_prestige">#FFFF1744</color>
+    <color name="btn_normal">#FF6B2FA0</color>
+    <color name="btn_disabled">#FF444466</color>
+
+    <!-- 卡片色 -->
+    <color name="card_bg">#FF252545</color>
+    <color name="card_border">#FF3A3A5A</color>
+    <color name="divider">#FF3A3A5A</color>
+</resources>

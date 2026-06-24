@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_cultivation"
+        android:title="@string/tab_cultivation"
+        android:icon="@drawable/ic_sword" />
+    <item
+        android:id="@+id/nav_adventure"
+        android:title="@string/tab_adventure"
+        android:icon="@drawable/ic_forest" />
+    <item
+        android:id="@+id/nav_equipment"
+        android:title="@string/tab_equipment"
+        android:icon="@drawable/ic_shield" />
+    <item
+        android:id="@+id/nav_shop"
+        android:title="@string/tab_shop"
+        android:icon="@drawable/ic_shop" />
+    <item
+        android:id="@+id/nav_wiki"
+        android:title="@string/tab_wiki"
+        android:icon="@drawable/ic_book" />
+</menu>
