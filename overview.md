@@ -208,6 +208,17 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 
 ---
 
+## 🗡️ 第十一轮：公会管理玩法 + 异常语义 + 全站窄屏治理（2026-09-24）
+
+1. **公会管理玩法**（后端）：踢人/转让/解散三端点（`POST /api/guild/kick|transfer|disband`，权限矩阵：仅宗主、不能对自己、目标须在本会）；宗主退出改判为"自动转让给最早成员，仅剩自己则解散"；转让用条件原子 UPDATE（CAS leaderId）防并发双转让；`contribution` 开始累计（donate 按额、Boss 按伤害/1000，暂无消费场景）。解散金币不退（防套现，代码注释说明）。
+2. **全局异常语义**：Boot 3.2 通配静态 handler 把打错 URL 的 API 请求兜成 500 —— 新增 `NoResourceFoundException`→404 映射（零配置改动），405 既有映射补测试锁定；响应白名单字段不含堆栈/DB 细节。
+3. **商店/DTO 清理**：神赐礼包 GIFT_PACK（奖励未实现）从限量商店下架，`rewardValidationError` 预检保留；SocialDto 5 个零引用死类删除。
+4. **前端窄屏与三态**（13 页 + 新增 `components/StateViews.tsx`）：375px 逻辑视口全路由零水平溢出、零 <44px 触控目标（同源 iframe 绕开 0×0 视口实测）；骨架/错误重试/空态三态统一收口（排行榜风格泛化，data-testid 保留）；useGameData 新增 loadError；顶栏窄屏横滚收纳；装备槽位 div→button 键盘可达 + 全局 focus-visible 焦点环；动画零新增（reduced-motion kill-switch 复核全覆盖）。
+5. **验证**：mvn test 基线 71→**94 全绿**（公会 17→34、新增 GlobalExceptionHandlerTest 5）；8090 真库冒烟：404 语义 ✓、903 已下架 ✓、无公会 kick/disband 均 400 干净拒绝 ✓；tsc/eslint 零输出；全路由浏览器断言 console 0 error。
+6. 遗留：kick/transfer/disband 后端已就绪但前端宗门页未接管理 UI（本轮按边界未做）；leave 对"转让后退出/解散"不分歧返回；残余无锁竞态窗口见 GuildService 注释（V6 唯一索引可事后发现）；物理真机未测。
+
+---
+
 ## 🔮 后续建议
 
 1. **前端优化**
