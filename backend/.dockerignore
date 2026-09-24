@@ -1,0 +1,10 @@
+# Docker 构建上下文瘦身（backend）
+target/
+build/
+logs/
+*.log
+.env
+.env.*
+.git
+.idea
+*.iml

@@ -36,6 +36,9 @@ simulation_reports/
 frontend/node_modules/
 frontend/.next/
 .env*.local
+# docker compose 本地变量文件（含密钥，勿提交；模板 .env.example 除外）
+.env
+!.env.example
 
 # 签名密钥
 *.keystore

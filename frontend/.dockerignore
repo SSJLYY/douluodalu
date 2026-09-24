@@ -1,0 +1,12 @@
+# Docker 构建上下文瘦身（frontend）
+node_modules
+.next
+out
+.git
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+Dockerfile
+.dockerignore
+tsconfig.tsbuildinfo

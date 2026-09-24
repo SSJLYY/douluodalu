@@ -1,0 +1,72 @@
+# 斗罗大陆·放置传说 —— Docker Compose 部署
+# 注意：本文件未在本机（无 Docker）验证过，Linux 首次部署请 review。
+# 必配变量先写入 .env（可从 .env.example 复制），再 docker compose up -d --build
+
+name: douluodalu
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: douluo-mysql
+    restart: unless-stopped
+    # 库/连接强制 utf8mb4，与后端 JDBC 与 Flyway 迁移脚本一致
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
+      MYSQL_DATABASE: ${DB_NAME:-douluo_game}
+      MYSQL_USER: ${DB_USER:-douluo}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    # 3306 不映射到宿主机；如确需本机调试可临时加 ports: - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [douluo]
+
+  backend:
+    build: ./backend
+    container_name: douluo-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql          # 容器网络内直连 mysql 服务
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-douluo_game}
+      DB_USER: ${DB_USER:-douluo}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      # 生产必填且 ≥32 字节，缺失时 compose 直接拒绝启动
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required, at least 32 bytes}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      # 其余可选：RATELIMIT_ENABLED / AUTH_RPM / GLOBAL_RPM / JWT_EXPIRATION / FLYWAY_ENABLED
+      # 表结构由 Flyway 在后端启动时自动迁移（V1~V4），无需手工建表
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    networks: [douluo]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # NEXT_PUBLIC_* 为构建时内联：改地址必须重新 build，改 compose env 无效
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+    container_name: douluo-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks: [douluo]
+
+networks:
+  douluo:
+    driver: bridge
+
+volumes:
+  mysql-data:

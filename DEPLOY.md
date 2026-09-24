@@ -16,6 +16,7 @@
 10. [配置 SSL 证书 (HTTPS)](#10-配置-ssl-证书-https)
 11. [设置开机自启](#11-设置开机自启)
 12. [常用运维命令](#12-常用运维命令)
+13. [Docker 部署（未在本机验证）](#13-docker-部署未在本机验证)
 
 ---
 
@@ -456,3 +457,71 @@ mysql -u douluo -p'强密码' douluo_game < /opt/backup/douluo_game.20260924.sql
 firewall-cmd --list-all     # 查看当前规则
 firewall-cmd --reload       # 重载规则
 ```
+
+---
+
+## 13. Docker 部署（未在本机验证）
+
+> ⚠️ **诚实声明**：以下 Dockerfile 与 compose 编写机上没有 Docker，**未经 `docker build` / `docker compose up` 实跑验证**（Linux 上首次部署请逐条 review，尤其后端 stage-2 的 curl 安装与 jar 名 `douluo-game-*.jar`）。前端镜像的 standalone 产物已在本地用 `node server.js` 冒烟验证通过（`/`、`/game` 均 200），构建流程与 CI 一致。
+
+仓库根目录已提供：`backend/Dockerfile`、`frontend/Dockerfile`、两个 `.dockerignore`、`docker-compose.yml`、`.env.example`。
+
+### 13.1 前置：安装 Docker 与 Compose 插件
+
+```bash
+dnf install -y yum-utils
+yum-config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+systemctl enable --now docker
+```
+
+### 13.2 配置环境变量
+
+```bash
+cd /opt/app/douluodalu
+cp .env.example .env
+chmod 600 .env
+vim .env
+```
+
+必填项（缺失时 `docker compose` 会直接报错拒绝启动）：
+
+| 变量 | 说明 |
+|------|------|
+| `MYSQL_ROOT_PASSWORD` | mysql 容器 root 密码 |
+| `DB_PASSWORD` | 业务账号 `douluo` 的密码（compose 会创建库 `DB_NAME`，Flyway 自动建表） |
+| `JWT_SECRET` | **必须 ≥ 32 字节**，用 `openssl rand -base64 48` 生成 |
+| `CORS_ORIGINS` | 后端允许的跨域来源 |
+| `NEXT_PUBLIC_API_URL` | 前端**构建时内联**的后端地址——改它必须加 `--build` 重新构建镜像 |
+
+### 13.3 构建并启动
+
+```bash
+docker compose up -d --build
+docker compose ps        # 三个服务应为 running (healthy)
+docker compose logs -f backend
+```
+
+启动顺序由 healthcheck 串联：mysql 健康后才起 backend，backend `/api/health` 通过后（约 60s start_period）才起 frontend。
+
+### 13.4 验证
+
+```bash
+curl http://127.0.0.1:8080/api/health          # 后端：{"status":"ok",... database:"UP"}
+curl -I http://127.0.0.1:3000                  # 前端：200
+docker inspect --format='{{.State.Health.Status}}' douluo-mysql douluo-backend douluo-frontend
+```
+
+浏览器访问 `http://<服务器IP>:3000`。对外服务仍建议按第 9、10 节配 Nginx + HTTPS，`NEXT_PUBLIC_API_URL` / `CORS_ORIGINS` 换成 https 域名后 `docker compose up -d --build frontend`。
+
+### 13.5 常用操作
+
+```bash
+docker compose restart backend                 # 只重启后端
+docker compose build frontend && docker compose up -d frontend   # 改了地址重新构建前端
+docker compose down                            # 停止（保留数据卷）
+docker volume rm douluodalu_mysql-data         # 彻底清库（危险）
+docker exec -it douluo-mysql mysqladmin shutdown   # 手动关 mysql
+# 备份：docker exec douluo-mysql sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" douluo_game' > backup.sql
+```
+
