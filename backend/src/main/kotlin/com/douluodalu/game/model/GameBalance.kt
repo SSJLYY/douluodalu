@@ -55,6 +55,18 @@ object GameBalance {
     const val DROP_CHANCE_PER_STAGE = 0.005
     const val BOSS_EXTRA_DROP_CHANCE = 0.4
 
+    // ======== 魂环负荷（任务#21/#22）========
+    // 吸收容量 = 根骨 × RING_CAPACITY_ROOT_MULT（RingLoadCalculator.absorptionCapacity）。
+    // 任务#22 负荷回路 90 天仿真（LongRunSimulationTest 专项）：shared 原始值 6 下第 45 天起
+    // 容量利用率恒 96~99%、约 80 次/日拒装、高档位环 100% 死掉落（背包永久积压）→ 恒卡形态。
+    // 6 → 24 后：利用率全程 ~70-82% 带内、30 天后死掉落率 0%、换装 treadmil 正常（10 种子复核见报告）。
+    const val RING_CAPACITY_ROOT_MULT = 24L
+    // 魂塔掉落魂环的年份档位上限（rollBackpackDrop）：塔满层后 towerLevel=300 使
+    // min(4, towerLevel/12+rand(2)) 恒为 4 档、percentage 饱和 999 → 每张塔魂环负荷 ~9.99M，
+    // 在 90 天容量规模（~1e6）下是 100% 不可装死掉落。封顶 2 档（负荷 ≤99.9k）后塔环重新可装，
+    // 3~4 档保留为推图终局(6-7 号图)/后续轮回内容的专属追求。
+    const val TOWER_RING_DROP_YEAR_CAP = 2
+
     // ======== 离线收益（P1 修复：语义由「每秒」改为「每小时」）========
     // 换算依据（《数值仿真报告-90天.md》实测）：中活跃玩家日均"主动玩法"收入约 7,000 金币/日
     // （第 9~90 天区间 5.6k~8.4k），设计意图「离线 12h ≈ 主动游玩 30~60 分钟产出」≈ 主动日收入的

@@ -1,6 +1,7 @@
 package com.douluodalu.game.service
 
 import com.douluodalu.game.entity.EquippedRing
+import com.douluodalu.game.model.GameBalance
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -33,14 +34,30 @@ class RingLoadCalculatorTest {
     }
 
     @Test
-    fun `capacity is root bone times six with floor 100`() {
+    fun `capacity is root bone times GameBalance multiplier with floor 100`() {
         // 根骨 = atk×3 + matk×3 + pdef×2 + mdef×2 + maxHp/100（matk/pdef/mdef 后端未建模传0）
-        // Lv.8 无装备：atk=50+80=130, hp=500 → 根骨395 → 容量2370
-        assertEquals(2370L, RingLoadCalculator.absorptionCapacity(RingLoadCalculator.calcRootBone(500, 130, 0, 0, 0)))
-        // 全零属性也保底 100
-        assertEquals(100L, RingLoadCalculator.absorptionCapacity(RingLoadCalculator.calcRootBone(0, 0, 0, 0, 0)))
+        // 任务#22 负荷回路调参：shared 原值 ×6 → GameBalance.RING_CAPACITY_ROOT_MULT（当前 24）
+        // Lv.8 无装备：atk=50+80=130, hp=500 → 根骨395 → 容量 395×24=9480
+        assertEquals(9480L, RingLoadCalculator.absorptionCapacity(RingLoadCalculator.calcRootBone(500, 130, 0, 0, 0)))
+        // 默认容量恒等于「显式传入 GameBalance.RING_CAPACITY_ROOT_MULT」——参数化分支同源
+        assertEquals(
+            RingLoadCalculator.absorptionCapacity(500.0, GameBalance.RING_CAPACITY_ROOT_MULT),
+            RingLoadCalculator.absorptionCapacity(500.0)
+        )
+        // shared 原始乘数 6 仍可通过重载显式复现（仿真调参对比用）
+        assertEquals(3000L, RingLoadCalculator.absorptionCapacity(500.0, 6L))
         // 五维公式与 shared Models.kt:322 完全一致：100×3+50×3+30×2+20×2+4300/100 = 593
         assertEquals(593.0, RingLoadCalculator.calcRootBone(4300, 100, 50, 30, 20), 1e-9)
+    }
+
+    @Test
+    fun `capacity floor 100 applies regardless of multiplier`() {
+        // 全零属性也保底 100（默认乘数）
+        assertEquals(100L, RingLoadCalculator.absorptionCapacity(RingLoadCalculator.calcRootBone(0, 0, 0, 0, 0)))
+        // 小根骨 × 小乘数仍被 100 兜底
+        assertEquals(100L, RingLoadCalculator.absorptionCapacity(10.0, 6L))
+        // 100 恰好不被截断
+        assertEquals(100L, RingLoadCalculator.absorptionCapacity(100.0, 1L))
     }
 
     @Test

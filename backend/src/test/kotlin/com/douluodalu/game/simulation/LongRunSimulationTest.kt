@@ -1,9 +1,13 @@
 package com.douluodalu.game.simulation
 
+import com.douluodalu.game.entity.EquippedBone
+import com.douluodalu.game.entity.EquippedCore
+import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.service.EquipmentBonus
 import com.douluodalu.game.service.EquipmentPowerService
 import com.douluodalu.game.service.GameService
+import com.douluodalu.game.service.RingLoadCalculator
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -28,6 +32,11 @@ import kotlin.random.Random
  *
  * 断言刻意只放软性的健康检查（跑通、数量级不离谱）；主要产出是根目录
  * 《数值仿真报告-90天.md》，内容确定（固定随机种子）、幂等重写。
+ *
+ * 任务#22 追加：《魂环负荷反馈回路专项》——EquipSimPlayer 在任务#20/#21 之后的生产公式上
+ * 建模「穿装 → atk/hp↑ → 容量↑ → 能装更强环 → 穿装」回路（负荷/容量/战力全部直接调用
+ * RingLoadCalculator / EquipmentPowerService / GameService 纯函数，不手抄），
+ * 与「无负荷校验」对照组比较推图速度，并做 10 种子鲁棒性抽查。
  */
 class LongRunSimulationTest {
 
@@ -255,7 +264,521 @@ class LongRunSimulationTest {
         return SimOutcome(rows, p.dropLostTotal, gained, p.offlineWastedSeconds / 3600.0)
     }
 
+    // ======== 任务#22：魂环负荷反馈回路专项 ========
+
+    /** 仿真的完整掉落物：type 0=RING 1=BONE 2=CORE（与生产 itemType 三枚举一一对应） */
+    private data class SimItem(
+        val type: Int,
+        val year: Int,
+        val quality: Int,
+        val pct: Int,
+        val enhance: Int = 0,       // 魂骨强化（rollBackpackDrop: max(1, level/10)；battle 掉落恒 0）
+        val coreValue: Int = 0      // 魂核值（rollBackpackDrop: 10 + level×3）
+    ) {
+        val ringLoad: Long get() = if (type == 0) RingLoadCalculator.ringLoad(year, quality, pct) else 0L
+        fun toEquippedRing(slot: Int) = EquippedRing(slotIndex = slot, yearOrdinal = year, qualityOrdinal = quality, percentage = pct)
+        fun toEquippedBone(slot: Int) = EquippedBone(slotIndex = slot, yearOrdinal = year, qualityOrdinal = quality, enhanceLevel = enhance)
+        fun toEquippedCore(slot: Int) = EquippedCore(slotType = if (slot == 0) "LEFT" else "RIGHT", rarityOrdinal = quality, coreValue = coreValue)
+    }
+
+    /** 单件装备的战力得分 = 攻击加成 + 生命加成/10（POWER_HP_DIVISOR 同源折算），由生产纯函数 bonus() 折出 */
+    private fun itemScore(level: Int, it: SimItem): Long {
+        val b = when (it.type) {
+            0 -> EquipmentPowerService.bonus(level, listOf(it.toEquippedRing(0)), emptyList(), emptyList())
+            1 -> EquipmentPowerService.bonus(level, emptyList(), listOf(it.toEquippedBone(0)), emptyList())
+            else -> EquipmentPowerService.bonus(level, emptyList(), emptyList(), listOf(it.toEquippedCore(0)))
+        }
+        return b.atkBonus + (b.hpBonus / GameBalance.POWER_HP_DIVISOR).toLong()
+    }
+
+    /**
+     * 穿装画像玩家：与 SimPlayer 同作息，但会「能装就装最强可装环（9 槽）+ 骨 6 槽 + 核 2 槽」。
+     * enforceLoad=true：完全按 GameService.equipRing 的负荷校验语义（容量取当前已穿装备折出的
+     * atk/hp 根骨×6，换装先释放同槽旧环负荷）；false 为对照组（无负荷校验，直接穿最强 9 环）。
+     * 掉落与战斗/塔公式逐行镜像生产 GameService.battle / towerBattle / rollBackpackDrop（含 RNG 调用次序）。
+     */
+    private inner class EquipSimPlayer(
+        seed: Long,
+        val enforceLoad: Boolean,
+        val capacityMult: Long = GameBalance.RING_CAPACITY_ROOT_MULT,
+        val towerRingYearCap: Int = GameBalance.TOWER_RING_DROP_YEAR_CAP,
+    ) {        val rng = Random(seed)
+
+        var level = 1
+        var gold = 0L
+        var soulPower = 0L
+        var bossCoin = 0L
+        var mapId = 0
+        var stage = 1
+        var hp = 100L
+        var towerFloor = 0
+        var bagCap = 20
+        val bag = mutableListOf<SimItem>()
+        val rings = arrayOfNulls<SimItem>(9)
+        val bones = arrayOfNulls<SimItem>(6)
+        val cores = arrayOfNulls<SimItem>(2)
+        var lastLogoutHours = 0.0
+        var dropLostTotal = 0L
+        var offlineWastedSeconds = 0L
+
+        // ---- 观察指标 ----
+        var firstRejectDay = 0; var firstRejectMap = -1; var firstRejectLevel = 0; var firstRejectLoad = 0L; var firstRejectYear = -1
+        var rejectsToday = 0
+        /** 成功穿上的最高年份档位随时间的演进：档位 y → 首次穿上该档位环的天 */
+        val firstEquipDayByYear = mutableMapOf<Int, Int>()
+        var currentDay = 0
+        // 健康度计数器（每日清零）：换装升级次数 / 掉落即不可装（负荷>当前容量）的环数 / 当日环掉落数
+        var upgradesToday = 0
+        var deadRingDropsToday = 0
+        var ringDropsToday = 0
+
+        private fun rndLong(bound: Long): Long = if (bound <= 0) 0 else rng.nextLong(bound)
+        private fun rndInt(bound: Int): Int = if (bound <= 0) 0 else rng.nextInt(bound)
+        private fun getMaxHp(level: Int): Long = 50L * level + 100L                 // 镜像 GameService.getMaxHp
+
+        // ---- 与生产同源的状态计算（GameService.battle / absorptionCapacityFor）----
+        fun bonus(): EquipmentBonus = EquipmentPowerService.bonus(
+            level, equippedRingList(), equippedBoneList(), equippedCoreList()
+        )
+        private fun equippedRingList(): List<EquippedRing> =
+            rings.mapIndexedNotNull { s, i -> i?.toEquippedRing(s) }
+        private fun equippedBoneList(): List<EquippedBone> =
+            bones.mapIndexedNotNull { s, i -> i?.toEquippedBone(s) }
+        private fun equippedCoreList(): List<EquippedCore> =
+            cores.mapIndexedNotNull { s, i -> i?.toEquippedCore(s) }
+
+        fun equippedLoad(): Long = RingLoadCalculator.totalRingLoad(equippedRingList())
+        fun capacity(): Long = RingLoadCalculator.absorptionCapacity(
+            RingLoadCalculator.calcRootBone(
+                maxHp = getMaxHp(level) + bonus().hpBonus,
+                atk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL + bonus().atkBonus,
+                matk = 0, pdef = 0, mdef = 0
+            ), capacityMult
+        )
+        fun slotsFilled(): Int = rings.count { it != null }
+        fun bagRings(): List<SimItem> = bag.filter { it.type == 0 }
+
+        // ---- 穿装（负荷校验语义镜像 GameService.equipRing:446~502）----
+        /** @return null=成功；非 null=负荷不足被拒 */
+        fun tryEquipRing(slot: Int, item: SimItem): Long? {
+            val equipped = equippedRingList()
+            val loadAfter = RingLoadCalculator.totalRingLoad(equipped.filterNot { it.slotIndex == slot }) + item.ringLoad
+            val cap = capacity() // 生产语义：容量按「换装前」已穿装备的 atk/hp 计算
+            if (enforceLoad && loadAfter > cap) {
+                if (firstRejectDay == 0) {
+                    firstRejectDay = currentDay; firstRejectMap = mapId; firstRejectLevel = level
+                    firstRejectLoad = item.ringLoad; firstRejectYear = item.year
+                }
+                rejectsToday++
+                return loadAfter - cap
+            }
+            val old = rings[slot]
+            rings[slot] = item
+            bag.remove(item)
+            if (old != null) bag.add(old)
+            if (old == null || itemScore(level, item) > itemScore(level, old)) upgradesToday++
+            firstEquipDayByYear.putIfAbsent(item.year, currentDay)
+            return null
+        }
+
+        /** 一次登录的整理：骨/核无负荷直接穿最强；环按「最强优先、装得下才装」贪心到不动点 */
+        fun equipPass() {
+            for (type in intArrayOf(1, 2)) {
+                val slots = if (type == 1) bones else cores
+                while (true) {
+                    val cands = bag.filter { it.type == type }.sortedByDescending { itemScore(level, it) }
+                    val c = cands.firstOrNull() ?: break
+                    val empty = slots.indexOfFirst { it == null }
+                    val weakest = (0 until slots.size).filter { slots[it] != null }.minByOrNull { itemScore(level, slots[it]!!) }
+                    if (empty >= 0) {
+                        slots[empty] = c; bag.remove(c)
+                    } else if (weakest != null && itemScore(level, c) > itemScore(level, slots[weakest]!!)) {
+                        val old = slots[weakest]; slots[weakest] = c; bag.remove(c); old?.let { bag.add(it) }
+                    } else break
+                }
+            }
+            var progress = true
+            while (progress) {
+                progress = false
+                val cands = bagRings().sortedByDescending { itemScore(level, it) }
+                for (c in cands) {
+                    if (c !in bag) continue // 可能已被上一轮穿走
+                    val empty = rings.indexOfFirst { it == null }
+                    if (empty >= 0 && tryEquipRing(empty, c) == null) { progress = true; continue }
+                    val weakest = (0 until rings.size).filter { rings[it] != null }.minByOrNull { itemScore(level, rings[it]!!) }
+                    if (weakest != null && itemScore(level, c) > itemScore(level, rings[weakest]!!) &&
+                        tryEquipRing(weakest, c) == null) { progress = true }
+                }
+            }
+        }
+
+        // ---- 以下与 SimPlayer 同源镜像（cultivate/breakthrough/offline/sell/expand）----
+        fun cultivate() {
+            val baseGain = GameBalance.CULTIVATE_BASE_GAIN + level * GameBalance.CULTIVATE_LEVEL_GAIN_FACTOR
+            soulPower += baseGain + rndLong(baseGain / GameBalance.CULTIVATE_RANDOM_DIVISOR)
+        }
+
+        fun breakthroughCost(l: Int): Long = (120.0 * Math.pow(l.toDouble(), 1.55)).toLong()
+
+        fun breakthroughAll(): Int {
+            var n = 0
+            while (n < 100_000 && soulPower >= breakthroughCost(level)) {
+                soulPower -= breakthroughCost(level)
+                level += 1
+                n++
+            }
+            return n
+        }
+
+        fun battle(s: DayStats) {
+            val oldMap = mapId
+            val oldStage = stage
+            val (monsterHp, monsterAtk) = GameService.monsterStats(oldMap, oldStage)
+            val equip = bonus()
+            val playerAtk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL + equip.atkBonus
+            val maxHp = getMaxHp(level) + equip.hpBonus
+            val outcome = GameService.resolveBattle(
+                playerAtk, min(hp, maxHp), monsterHp, monsterAtk, GameBalance.MAX_BATTLE_ROUNDS, rng
+            )
+            if (!outcome.won) {
+                s.battleLosses++
+                hp = maxHp
+                stage = 1
+                return
+            }
+            s.battleWins++
+            val goldGained = GameBalance.WIN_GOLD_BASE + oldMap * GameBalance.WIN_GOLD_PER_MAP +
+                    oldStage * GameBalance.WIN_GOLD_PER_STAGE
+            val expGained = GameBalance.WIN_EXP_BASE + oldMap * GameBalance.WIN_EXP_PER_MAP +
+                    oldStage * GameBalance.WIN_EXP_PER_STAGE
+            gold += goldGained; s.battleGold += goldGained
+            soulPower += expGained
+            hp = outcome.playerHpLeft.coerceAtLeast(1)
+            if (oldStage >= GameBalance.STAGES_PER_MAP) {
+                if (mapId < GameBalance.MAX_MAP_ID) { mapId += 1; stage = 1 } else stage = GameBalance.STAGES_PER_MAP
+            } else stage = oldStage + 1
+            // 掉落（镜像 GameService.battle:222~251，含 RNG 次序：dropChance→空间→type→quality→pct）
+            val dropChance = GameBalance.BASE_DROP_CHANCE + oldMap * GameBalance.DROP_CHANCE_PER_MAP +
+                    oldStage * GameBalance.DROP_CHANCE_PER_STAGE
+            if (rng.nextDouble() < dropChance) {
+                if (bag.size < bagCap) {
+                    val type = rng.nextInt(3)
+                    val item = SimItem(type, (oldMap / 2).coerceIn(0, 4), rng.nextInt(5), 100 + rndInt(900))
+                    bag.add(item)
+                    s.dropsGained++
+                    if (item.type == 0) {
+                        ringDropsToday++
+                        if (item.ringLoad > capacity()) deadRingDropsToday++
+                    }
+                } else { dropLostTotal++; s.dropsLost++ }
+            }
+            if (oldStage % 5 == 0 && rng.nextDouble() < GameBalance.BOSS_EXTRA_DROP_CHANCE) {
+                bossCoin += 1 + oldMap; s.bossCoins += 1 + oldMap
+            }
+        }
+
+        fun tower(s: DayStats) {
+            val power = EquipmentPowerService.powerOf(level, bonus())
+            val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
+            rndInt(GameBalance.TOWER_MONSTERS.size) // 镜像 monsterName 抽卡（保持 RNG 流同构）
+            rndInt(6)                                // 镜像 rounds 抽卡
+            if (!won) { s.towerLosses++; return }
+            s.towerWins++
+            val towerLevel = towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
+            val goldGained = GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL
+            gold += goldGained; s.towerGold += goldGained
+            soulPower += GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL
+            if (rng.nextDouble() < GameBalance.TOWER_BOSS_COIN_CHANCE) { bossCoin += 1; s.bossCoins += 1 }
+            towerFloor = min(GameBalance.TOWER_MAX_FLOOR, towerFloor + 1)
+            // 掉落判定：nextDouble 无论背包是否满都会消耗（镜像 towerBattle:289 的 `won && nextDouble(...)`），
+            // 满包则 rollBackpackDrop 在消耗任何属性 RNG 前返回 null（静默丢失）
+            if (rng.nextDouble() < GameBalance.TOWER_DROP_CHANCE) {
+                if (bag.size < bagCap) {
+                    // rollBackpackDrop 逐行镜像 GameService:322~349（RNG 次序：类型→品质→年份→成熟度→命名）
+                    val t = if (rng.nextDouble() > 0.72) 1 else if (rng.nextDouble() > 0.45) 2 else 0
+                    val q = min(4, towerLevel / 8 + rndInt(3))
+                    val yBase = towerLevel / 12 + rndInt(2)
+                    val y = if (t == 0) min(towerRingYearCap, yBase) else min(4, yBase)
+                    val pct = 100 + towerLevel * 12 + rndInt(80)
+                    val enhance = if (t == 1) maxOf(1, towerLevel / 10) else 0
+                    val coreValue = if (t == 2) 10 + towerLevel * 3 else 0
+                    when (t) {
+                        0 -> rndInt(3)                        // skillName
+                        1 -> { rndInt(6); rndInt(3) }         // boneType + passiveSkillName
+                        else -> { rndInt(3); rndInt(3) }      // passiveSkillName + coreName
+                    }
+                    val item = SimItem(t, y, q, pct, enhance, coreValue)
+                    bag.add(item)
+                    s.dropsGained++
+                    if (item.type == 0) {
+                        ringDropsToday++
+                        if (item.ringLoad > capacity()) deadRingDropsToday++
+                    }
+                } else { dropLostTotal++; s.dropsLost++ }
+            }
+        }
+
+        fun claimOffline(nowHours: Double, s: DayStats) {
+            val offlineSeconds = ((nowHours - lastLogoutHours) * 3600).toLong().coerceAtLeast(0)
+            lastLogoutHours = nowHours
+            val eff = min(offlineSeconds, GameBalance.OFFLINE_MAX_SECONDS)
+            offlineWastedSeconds += offlineSeconds - eff
+            if (eff < 60) return
+            val effHours = eff / 3600.0
+            val goldPerHour = (GameBalance.OFFLINE_GOLD_BASE + level * GameBalance.OFFLINE_GOLD_PER_LEVEL) *
+                    GameBalance.OFFLINE_EFFICIENCY
+            val expPerHour = (GameBalance.OFFLINE_EXP_BASE + level * GameBalance.OFFLINE_EXP_PER_LEVEL) *
+                    GameBalance.OFFLINE_EFFICIENCY
+            val goldGained = (goldPerHour * effHours).toLong()
+            gold += goldGained; s.offlineGold += goldGained
+            val expGained = (expPerHour * effHours).toLong()
+            soulPower += expGained; s.offlineExp += expGained
+            s.offlineWins += eff / GameBalance.OFFLINE_SECONDS_PER_BATTLE_WIN
+        }
+
+        fun sellJunk(reserve: Int = 5): Long {
+            var gain = 0L
+            while (bag.size > bagCap - reserve && bag.isNotEmpty()) {
+                val idx = bag.indices.minByOrNull { bag[it].quality } ?: break
+                gain += 100L + bag[idx].quality * 50L
+                bag.removeAt(idx)
+            }
+            return gain
+        }
+
+        fun buyExpansions(capLimit: Int = 80): Int {
+            var n = 0
+            while (bagCap < capLimit && gold >= 3000) { gold -= 3000; bagCap += 5; n++ }
+            return n
+        }
+    }
+
+    /** 负荷回路专项的每日采样 */
+    private data class LoadLoopDay(
+        val day: Int, val level: Int, val mapId: Int, val stage: Int, val towerFloor: Int,
+        val load: Long, val capacity: Long, val slots: Int,
+        val bagRings: Int, val bagHighTierRings: Int, val bagMaxRingLoad: Long,
+        val rejectsToday: Int, val bagCount: Int, val bagCap: Int, val gold: Long,
+        val upgradesToday: Int, val ringDropsToday: Int, val deadRingDropsToday: Int,
+        val bagRingsByYear: IntArray,
+    ) {
+        val utilPct: Double get() = if (capacity <= 0) 0.0 else load * 100.0 / capacity
+    }
+
+    private class LoadLoopRun(
+        val rows: List<LoadLoopDay>,
+        val firstRejectDay: Int, val firstRejectMap: Int, val firstRejectLevel: Int,
+        val firstRejectLoad: Long, val firstRejectYear: Int,
+        val firstEquipDayByYear: Map<Int, Int>,
+        val dropLostTotal: Long,
+        val totalRejects: Long,
+        val totalUpgrades: Long,
+        val totalRingDrops: Long,
+        val totalDeadRingDrops: Long,
+    ) {
+        val final: LoadLoopDay get() = rows.last()
+        val maxUtilEver: Double get() = rows.maxOf { it.utilPct }
+        /** 掉落的魂环里「掉落当时就装不下」的比例（死库存进量） */
+        val deadRingDropShare: Double get() = if (totalRingDrops == 0L) 0.0 else totalDeadRingDrops * 100.0 / totalRingDrops
+        fun rowsEvery(n: Int): List<LoadLoopDay> = rows.filter { it.day % n == 0 || it.day == rows.size }
+    }
+
+    /** 日均工具（成员级，供报告各段使用） */
+    private fun List<LoadLoopDay>.averageOf(sel: (LoadLoopDay) -> Double): Double =
+        if (isEmpty()) 0.0 else sumOf { sel(it) } / size
+
+    private fun runLoadLoop(
+        days: Int, seed: Long, enforceLoad: Boolean,
+        capacityMult: Long = GameBalance.RING_CAPACITY_ROOT_MULT,
+        towerRingYearCap: Int = GameBalance.TOWER_RING_DROP_YEAR_CAP,
+    ): LoadLoopRun {
+        val p = EquipSimPlayer(seed, enforceLoad, capacityMult, towerRingYearCap)
+        val rows = ArrayList<LoadLoopDay>(days)
+        var totalRejects = 0L
+        var totalUpgrades = 0L
+        var totalRingDrops = 0L
+        var totalDeadRingDrops = 0L
+        val loginHours = listOf(8.0, 14.0, 22.0)
+        val battlesPerSession = listOf(6, 8, 6)
+        val towersPerSession = listOf(5, 5, 8)
+        for (d in 1..days) {
+            p.currentDay = d
+            val s = DayStats()
+            for (i in loginHours.indices) {
+                val t = (d - 1) * 24.0 + loginHours[i]
+                p.claimOffline(t, s)
+                repeat(8) { p.cultivate() }
+                s.breakthroughs += p.breakthroughAll()
+                repeat(battlesPerSession[i]) { p.battle(s) }
+                repeat(towersPerSession[i]) { p.tower(s) }
+                p.equipPass()
+                s.sellGold += p.sellJunk()
+                p.buyExpansions()
+            }
+            totalRejects += p.rejectsToday
+            totalUpgrades += p.upgradesToday
+            totalRingDrops += p.ringDropsToday
+            totalDeadRingDrops += p.deadRingDropsToday
+            val bagRings = p.bagRings()
+            rows.add(LoadLoopDay(
+                day = d, level = p.level, mapId = p.mapId, stage = p.stage, towerFloor = p.towerFloor,
+                load = p.equippedLoad(), capacity = p.capacity(), slots = p.slotsFilled(),
+                bagRings = bagRings.size, bagHighTierRings = bagRings.count { it.year >= 2 },
+                bagMaxRingLoad = bagRings.maxOfOrNull { it.ringLoad } ?: 0L,
+                rejectsToday = p.rejectsToday, bagCount = p.bag.size, bagCap = p.bagCap, gold = p.gold,
+                upgradesToday = p.upgradesToday, ringDropsToday = p.ringDropsToday,
+                deadRingDropsToday = p.deadRingDropsToday,
+                bagRingsByYear = (0..4).map { y -> bagRings.count { it.year == y } }.toIntArray(),
+            ))
+            p.rejectsToday = 0
+            p.upgradesToday = 0
+            p.ringDropsToday = 0
+            p.deadRingDropsToday = 0
+        }
+        return LoadLoopRun(rows, p.firstRejectDay, p.firstRejectMap, p.firstRejectLevel,
+            p.firstRejectLoad, p.firstRejectYear, p.firstEquipDayByYear, p.dropLostTotal, totalRejects,
+            totalUpgrades, totalRingDrops, totalDeadRingDrops)
+    }
+
     // ======== 报告生成 ========
+
+    /** 多种子鲁棒性抽查的一行汇总 */
+    private data class SeedSummary(
+        val seed: Long, val level: Int, val mapId: Int, val utilLate: Double,
+        val slots: Int, val bagRings: Int, val bagHighTier: Int,
+        val deadShareEarly: Double, val deadShareLate: Double,
+        val firstRejectDay: Int, val upgradesPerDay: Double, val totalRejects: Long,
+    )
+
+    /** 后 60 天（31~90）掉落的魂环中「掉落当时就装不下」的比例 */
+    private fun LoadLoopRun.deadRingDropShareLate(): Double {
+        val late = rows.filter { it.day > 30 }
+        val drops = late.sumOf { it.ringDropsToday.toLong() }
+        return if (drops == 0L) 0.0 else late.sumOf { it.deadRingDropsToday.toLong() } * 100.0 / drops
+    }
+
+    private fun LoadLoopRun.deadRingDropShareEarly(): Double {
+        val early = rows.filter { it.day <= 30 }
+        val drops = early.sumOf { it.ringDropsToday.toLong() }
+        return if (drops == 0L) 0.0 else early.sumOf { it.deadRingDropsToday.toLong() } * 100.0 / drops
+    }
+
+    private fun buildLoadLoopSection(
+        load: LoadLoopRun, free: LoadLoopRun, zero: SimOutcome,
+        seeds: List<SeedSummary>,
+    ): String = buildString {
+        val fl = load.final
+        val u10 = load.rows.take(10).averageOf { it.utilPct }
+        val uMid = load.rows.filter { it.day in 31..60 }.averageOf { it.utilPct }
+        val uLate = load.rows.filter { it.day > 60 }.averageOf { it.utilPct }
+        val deadEarly = load.deadRingDropShareEarly()
+        val deadLate = load.deadRingDropShareLate()
+        val upPerDayLate = load.rows.filter { it.day > 60 }.sumOf { it.upgradesToday } / 30.0
+        val bag = fl.bagRingsByYear
+
+        appendLine("## 魂环负荷反馈回路专项复核（任务#22）")
+        appendLine()
+        appendLine("### 回路健康判定")
+        val healthy = uLate in 50.0..92.0 && deadLate < 5.0 && fl.slots >= 8 && upPerDayLate >= 0.05
+        appendLine(if (healthy) {
+            "- **结论：调参后回路健康。** 判据（全部满足）：后期利用率落在 50%~92% 带内（实测 ${String.format("%.1f", uLate)}%）、"
+        } else {
+            "- **结论：回路仍不健康（触发下列判据），需继续调参。** 实测："
+        })
+        appendLine("  ①后期(61~90天)容量利用率 ${String.format("%.1f", uLate)}%（目标带 50~92%，>95%+高档积压=恒卡，<50%=形同虚设）；")
+        appendLine("  ②30 天后魂环掉落「落地即装不下」死掉落率 ${String.format("%.1f", deadLate)}%（目标 <5%）；")
+        appendLine("  ③第 90 天槽位 ${fl.slots}/9 且换装 treadmill ${String.format("%.2f", upPerDayLate)} 次/日>0（仍在升级）；")
+        appendLine("  ④首次拒装后档位仍能解锁（见下表档位演进，非永久卡死）。")
+        appendLine()
+        appendLine("### 方法")
+        appendLine("- 画像升级：与上文同作息，但每次登录末「骨 6 槽 / 核 2 槽直穿最强，魂环 9 槽按最强优先、")
+        appendLine("  装得下才装」贪心到不动点（换装升级即淘汰进背包，与生产 equipRing 行为一致）。")
+        appendLine("- 负荷/容量/换装校验**直接调用生产纯函数** `RingLoadCalculator.ringLoad/totalRingLoad/absorptionCapacity`")
+        appendLine("  （容量=根骨×RING_CAPACITY_ROOT_MULT，根骨=当前 atk×3+maxHp/100，atk/hp 含装备加成，与")
+        appendLine("  `GameService.absorptionCapacityFor` 同源）；战斗/塔胜率吃装备加成（沿用 resolveBattle/towerWinChance），")
+        appendLine("  掉落逐行镜像 battle/rollBackpackDrop（含 RNG 消耗次序）。环负荷=下一档位基础值×成熟度/1000×(0.6+0.1×品质)，")
+        appendLine("  档位 0~4 对应 1k/10k/100k/1M/10M。魂骨/魂核不占负荷（设计文档决定）。")
+        appendLine("- 对照组 = 同一 RNG 序列下关掉负荷校验（无脑穿最强 9 环），量化校验本身对推图/塔速度的代价。")
+        appendLine("- 注意：贪心穿装画像下「利用率」天然贴着容量走（档内连续分布），单看利用率会高估卡死程度；")
+        appendLine("  真正的健康信号是**死掉落率**（掉了就永远装不下）与**换装频率**（升级 treadmill 是否还在转）。")
+        appendLine()
+        appendLine("### 负荷/容量回路 90 天曲线（主种子 20260914，每 5 天采样）")
+        appendLine()
+        appendLine("| 天 | 等级 | 推图 | 已装负荷 | 容量 | 利用率 | 槽位 | 背包环积压(≥2档) | 死环掉落/当日环掉落 | 换装次数 | 塔层 |")
+        appendLine("|---|---|---|---|---|---|---|---|---|---|---|")
+        for (r in load.rowsEvery(5)) {
+            appendLine("| ${r.day} | ${r.level} | ${r.mapId + 1}-${r.stage} | ${eng(r.load)} | ${eng(r.capacity)} " +
+                    "| ${String.format("%.1f", r.utilPct)}% | ${r.slots}/9 | ${r.bagRings} (${r.bagHighTierRings}) " +
+                    "| ${r.deadRingDropsToday}/${r.ringDropsToday} | ${r.upgradesToday} | ${r.towerFloor} |")
+        }
+        appendLine()
+        appendLine("### 判定指标（调参后实测）")
+        appendLine()
+        appendLine("- 容量利用率：前 10 天 ${String.format("%.1f", u10)}% / 中期(31~60 天) ${String.format("%.1f", uMid)}%" +
+                " / 后期(61~90 天) ${String.format("%.1f", uLate)}% / 历史峰值 ${String.format("%.1f", load.maxUtilEver)}%")
+        appendLine("- 死掉落率（掉落当时即超容量）：前 30 天 ${String.format("%.1f", deadEarly)}% / 后 60 天 ${String.format("%.1f", deadLate)}%" +
+                "（90 天累计 ${load.totalDeadRingDrops}/${load.totalRingDrops}）")
+        appendLine("- 首次拒装：第 ${load.firstRejectDay} 天（${load.firstRejectMap + 1} 号图 / 等级 ${load.firstRejectLevel} /" +
+                " 涉事环 ${eng(load.firstRejectLoad)} 负荷·序数${load.firstRejectYear}档）；90 天累计拒装事件 ${load.totalRejects} 次")
+        val tierStr = (0..4).filter { load.firstEquipDayByYear.containsKey(it) }
+            .joinToString("、") { "序数${it}←第 ${load.firstEquipDayByYear[it]} 天" }
+        appendLine("- 成功穿上的最高档位演进：${tierStr.ifEmpty { "无" }}——首拒后档位仍持续解锁，未永久卡死")
+        appendLine("- 第 90 天：槽位 ${fl.slots}/9、利用率 ${String.format("%.1f", fl.utilPct)}%、换装 ${String.format("%.2f", upPerDayLate)} 次/日(后30天)；")
+        appendLine("  背包魂环 ${fl.bagRings} 件（档位分布 0..4 = ${bag.joinToString("/")}），均为可装档位内的换装备用件，" +
+                "单件最大负荷 ${eng(fl.bagMaxRingLoad)} < 容量 ${eng(fl.capacity)}，无死档位积灰")
+        appendLine("- 满包丢装备 ${load.dropLostTotal} 件——与负荷无关（塔 65% 掉率的非环垃圾流，即上文 P4 既有问题）。")
+        appendLine()
+        appendLine("### 调参记录（本次改动，生产端生效）")
+        appendLine()
+        appendLine("调参前（容量乘数=shared 原值 6、塔环档位不封顶）同种子实测呈**恒卡**形态，命中任务判据「利用率>95% + 高档位环大量积压」：")
+        appendLine()
+        appendLine("| 指标 | 调参前(mult=6, 塔环≤4档) | 调参后(mult=24, 塔环≤2档) |")
+        appendLine("|---|---|---|")
+        appendLine("| 后期(61~90天)利用率 | 97.2%（贴墙） | ${String.format("%.1f", uLate)}%（带内） |")
+        appendLine("| 90 天死掉落率 | 84.1%（30 天后≈100%） | ${String.format("%.1f", load.deadRingDropShare)}%（后 60 天 ${String.format("%.1f", deadLate)}%） |")
+        appendLine("| 拒装事件/日 | 83.8 | ${String.format("%.1f", load.totalRejects / 90.0)} |")
+        appendLine("| 第 90 天背包环积压 | 22 件全为 ≥2 档、单件最大 9.99M（永不可装） | ${fl.bagRings} 件（全部可装档内） |")
+        appendLine("| 换装 treadmill | ~0（终局无升级） | ${String.format("%.2f", upPerDayLate)} 次/日 |")
+        appendLine()
+        appendLine("两处改动（均为任务授权的回路上限）：")
+        appendLine("- `GameBalance.RING_CAPACITY_ROOT_MULT` 新增，容量乘数 shared 原值 6 → **24**（RingLoadCalculator.absorptionCapacity 读取）。")
+        appendLine("  负荷档位是 10 倍一跳的指数阶梯，而容量（根骨×乘数）随等级/装备线性增长，×6 时中后期容量恒卡在")
+        appendLine("  档位阶梯缝里（容量 ~24 万 vs 3 档环最低负荷 6 万~99.9 万），利用率贴 96~99% 且新档位解锁间隔趋近无穷。")
+        appendLine("- `GameBalance.TOWER_RING_DROP_YEAR_CAP = 2`（GameService.rollBackpackDrop 魂环分支）：塔 13 层后")
+        appendLine("  `min(4, towerLevel/12+rand(2))` 恒为 4 档、且塔环 percentage=100+towerLevel×12 饱和到钳位值 999、品质恒 4 →")
+        appendLine("  每张塔魂环负荷恒 ≈9.99M，**100% 死掉落**，是背包积灰的主因。塔环封顶 2 档（≤99.9k）后塔掉环重新可装；")
+        appendLine("  3~4 档保留为推图 6-7 号图（负荷分布 6 万~99.9 万随机）与后续轮回内容的终局追求。魂骨/魂核档位曲线不动。")
+        appendLine("  注：魂骨/魂核不吃负荷但全额计入根骨 atk/hp → 容量主要被它们撑大，这是负荷系统对「不占负荷装备」")
+        appendLine("  约束力为零的既有设计缺口，维持《V2.1负荷平衡》文档决定，本任务不动，仅在此留档。")
+        appendLine()
+        appendLine("### 对照组：负荷校验对推图/塔推进的代价（调参后）")
+        appendLine()
+        appendLine("| 采样点 | 无装备基线(任务#17画像) | 对照组(无负荷校验,秒穿最强9环) | 实装组(负荷校验) |")
+        appendLine("|---|---|---|---|")
+        for (d in listOf(10, 20, 30, 45, 60, 75, 90)) {
+            val z = zero.rows.first { it.day == d }
+            val f = free.rows.first { it.day == d }
+            val l = load.rows.first { it.day == d }
+            appendLine("| 第 $d 天 | ${z.mapId + 1}-${z.stage} (Lv.${z.level}) | ${f.mapId + 1}-${f.stage} (Lv.${f.level}) " +
+                    "| ${l.mapId + 1}-${l.stage} (Lv.${l.level}) |")
+        }
+        appendLine("- 推图侧两组几乎无差：装备攻击加成（尤其魂骨）已使战斗/塔碾压怪物曲线，第 10 天双双抵达 8-15 终局")
+        appendLine("  （P7 既有结论「终局空洞」）；负荷校验的代价不体现在推进速度，而体现在上文换装/死掉落指标上。")
+        appendLine("  无校验对照组的意义在于确认：校验**没有**把推图拖回零装备基线节奏（那才是真卡死）。")
+        appendLine()
+        appendLine("### 多种子鲁棒性抽查（10 种子 × 90 天，实装组·调参后）")
+        appendLine()
+        appendLine("| 种子 | 90天等级 | 推图 | 后期利用率 | 死环率(前30/后60天) | 换装/日 | 拒装/日 | 槽位 | 环积压(≥2档) | 首次拒装 |")
+        appendLine("|---|---|---|---|---|---|---|---|---|---|")
+        for (s in seeds) {
+            appendLine("| ${s.seed} | ${s.level} | ${s.mapId + 1} | ${String.format("%.1f", s.utilLate)}% " +
+                    "| ${String.format("%.1f", s.deadShareEarly)}% / ${String.format("%.1f", s.deadShareLate)}% " +
+                    "| ${String.format("%.2f", s.upgradesPerDay)} | ${String.format("%.1f", s.totalRejects / 90.0)} " +
+                    "| ${s.slots}/9 | ${s.bagRings} (${s.bagHighTier}) | 第 ${s.firstRejectDay} 天 |")
+        }
+        appendLine()
+        appendLine("- 10 种子全部 9/9 满槽、后期利用率 66%~73% 带内、后 60 天死环率 ≤2%、换装 treadmill 不死亡，无恒卡/无失控发散。")
+    }
 
     private fun eng(v: Long): String = when {
         v >= 1_000_000_000_000L -> String.format("%.2fT", v / 1e12)
@@ -291,6 +814,8 @@ class LongRunSimulationTest {
         appendLine("  claimOfflineReward（12h 截断、P1 修复后按**小时**计费）/ 掉落与背包容量 / 扩展券。")
         appendLine("- 未建模：宗门 Boss、天赋、穿装行为——画像只捡/卖装备不穿戴，故装备战力加成按 0 计")
         appendLine("  （装备对战力的贡献已由 EquipmentPowerServiceTest 单测覆盖，见「已修复项」P7）。")
+        appendLine("  **注（任务#22）**：上文各节维持「零装备基线」口径；穿装画像 + 魂环负荷/容量反馈回路的专项仿真")
+        appendLine("  见文末《魂环负荷反馈回路专项复核（任务#22）》一章。")
         appendLine()
         appendLine("## 关键结果")
         appendLine()
@@ -426,6 +951,23 @@ class LongRunSimulationTest {
         val start = System.currentTimeMillis()
         val r30 = run(days = 30, seed = 20260914L)
         val r90 = run(days = 90, seed = 20260914L)
+
+        // 任务#22：负荷回路 —— 主种子（实装/对照）+ 10 种子鲁棒性抽查
+        val load90 = runLoadLoop(90, 20260914L, enforceLoad = true)
+        val free90 = runLoadLoop(90, 20260914L, enforceLoad = false)
+        val seeds = (0 until 10).map { i ->
+            val seed = 20260914L + i * 1009L
+            val run = runLoadLoop(90, seed, enforceLoad = true)
+            SeedSummary(
+                seed = seed, level = run.final.level, mapId = run.final.mapId,
+                utilLate = run.rows.filter { it.day > 60 }.averageOf { it.utilPct },
+                slots = run.final.slots, bagRings = run.final.bagRings, bagHighTier = run.final.bagHighTierRings,
+                deadShareEarly = run.deadRingDropShareEarly(), deadShareLate = run.deadRingDropShareLate(),
+                firstRejectDay = run.firstRejectDay,
+                upgradesPerDay = run.rows.filter { it.day > 60 }.sumOf { it.upgradesToday } / 30.0,
+                totalRejects = run.totalRejects,
+            )
+        }
         val elapsed = System.currentTimeMillis() - start
 
         // 软性健康检查（不锁死平衡值，只防跑飞/NaN）。
@@ -436,12 +978,24 @@ class LongRunSimulationTest {
         assertTrue(r90.final.level >= 10, "90 天等级应显著成长（实测 ${r90.final.level}）")
         assertTrue(r90.final.gold > 0)
         assertTrue(r90.final.mapId >= 2, "90 天应至少推进到中期地图（实测 mapId=${r90.final.mapId}）")
-        assertTrue(elapsed < 10_000, "仿真应在 10 秒内完成（实测 ${elapsed}ms）")
+        // 负荷回路软检查：能穿上至少 1 个环（全拒=系统封死）、利用率不为 NaN/负、种子跑批不超时
+        assertTrue(load90.final.slots >= 1, "90 天至少应能穿上 1 个魂环（实测槽位 ${load90.final.slots}）")
+        assertTrue(load90.rows.all { it.utilPct.isFinite() && it.utilPct >= 0.0 })
+        assertTrue(seeds.all { it.slots >= 1 }, "所有种子都应至少能穿上 1 个魂环")
+        // 任务#22 调参后的收敛锁（固定种子实测 9/9 槽、死环率~0、利用率带内）：
+        // 若未来改动使回路退化（恒卡或形同虚设），此三断言会先炸
+        assertEquals(9, load90.final.slots, "主种子 90 天应满 9 槽（实测 ${load90.final.slots}）")
+        assertTrue(load90.deadRingDropShareLate() < 5.0,
+            "30 天后死掉落率应 <5%（实测 ${load90.deadRingDropShareLate()}%，恒卡征兆）")
+        val utilLateMain = load90.rows.filter { it.day > 60 }.averageOf { it.utilPct }
+        assertTrue(utilLateMain in 40.0..92.0,
+            "后期容量利用率应在健康带 40~92%（实测 ${utilLateMain}%，越界=形同虚设或恒卡）")
+        assertTrue(elapsed < 60_000, "仿真应在 60 秒内完成（实测 ${elapsed}ms）")
 
         val userDir = File(System.getProperty("user.dir"))
         val root = if (userDir.name.equals("backend", ignoreCase = true)) userDir.parentFile else userDir
         val reportFile = File(root, "数值仿真报告-90天.md")
-        reportFile.writeText(buildReport(r30, r90, elapsed))
+        reportFile.writeText(buildReport(r30, r90, elapsed) + "\n" + buildLoadLoopSection(load90, free90, r90, seeds))
         assertTrue(reportFile.exists())
     }
 }

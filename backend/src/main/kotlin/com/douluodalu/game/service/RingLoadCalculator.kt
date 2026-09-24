@@ -1,6 +1,7 @@
 package com.douluodalu.game.service
 
 import com.douluodalu.game.entity.EquippedRing
+import com.douluodalu.game.model.GameBalance
 
 /**
  * 魂环负荷/吸收容量计算器（任务#21）。
@@ -11,7 +12,8 @@ import com.douluodalu.game.entity.EquippedRing
  * 已被 shared 引擎推翻：现行实现为「负荷 = 等效年份 = 下一档位基础值 × 成熟度比例 × 品质系数」）。
  * 成熟度 percentage 与 shared 一致采用 100~999（即 10.0%~99.9%）语义，掉落生成侧已符合。
  *
- * 容量 = 根骨 × 6（Models.kt:332），根骨 = atk×3 + matk×3 + pdef×2 + mdef×2 + maxHp/100（Models.kt:322）。
+ * 容量 = 根骨 × GameBalance.RING_CAPACITY_ROOT_MULT（shared Models.kt:332 原值 6，任务#22 负荷回路仿真调参为 24），
+ * 根骨 = atk×3 + matk×3 + pdef×2 + mdef×2 + maxHp/100（Models.kt:322）。
  * 后端战斗模型只建模 攻击/生命 两维（GameService.battle），故 matk/pdef/mdef 传 0，
  * atk/maxHp 与战斗结算同源：PLAYER_ATK_BASE + level×PER_LEVEL + 装备攻击加成、50×level+100 + 装备生命加成。
  *
@@ -52,9 +54,13 @@ object RingLoadCalculator {
     fun calcRootBone(maxHp: Long, atk: Long, matk: Int, pdef: Int, mdef: Int): Double =
         atk * 3.0 + matk * 3.0 + pdef * 2.0 + mdef * 2.0 + maxHp / 100.0
 
-    /** 吸收容量 = 根骨 × 6，下限 100（Models.kt:331~333） */
+    /** 吸收容量 = 根骨 × RING_CAPACITY_ROOT_MULT（shared Models.kt:331~333 的 ×6），下限 100 */
     fun absorptionCapacity(rootBone: Double): Long =
-        (rootBone * 6).toLong().coerceAtLeast(100)
+        absorptionCapacity(rootBone, GameBalance.RING_CAPACITY_ROOT_MULT)
+
+    /** 重载：容量乘数可注入（默认读 GameBalance；LongRunSimulationTest 调参扫描用） */
+    fun absorptionCapacity(rootBone: Double, capacityMult: Long): Long =
+        (rootBone * capacityMult).toLong().coerceAtLeast(100)
 
     /**
      * 超负荷校验（shared GameEngine.kt:1851~1861 吸收检测的同构逻辑）：

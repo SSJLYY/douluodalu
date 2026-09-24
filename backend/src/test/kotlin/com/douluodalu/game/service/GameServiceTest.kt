@@ -3,6 +3,7 @@ package com.douluodalu.game.service
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
+import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.BackpackItemRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
@@ -167,5 +168,31 @@ class GameServiceTest {
 
         assertNotNull(dto)
         verify(backpackRepo).save(any())
+    }
+
+    @Test
+    fun `task22 tower ring drops should be year-capped while bone and core keep full tier`() {
+        // 塔满层 towerLevel=300：旧公式所有装备恒为 4 档环（负荷 ~9.99M 死掉落）；
+        // 现在魂环封顶 GameBalance.TOWER_RING_DROP_YEAR_CAP，魂骨/魂核（不占负荷）保留 4 档战力曲线
+        val p = profile()
+        p.backpackCapacity = 5
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+        doAnswer { it.arguments[0] }.whenever(backpackRepo).save(any())
+
+        var sawRing = false
+        var sawNonRing = false
+        repeat(600) {
+            val dto = gameService.rollBackpackDrop(1L, 300)!!
+            if (dto.itemType == "RING") {
+                sawRing = true
+                assertTrue(dto.yearOrdinal <= GameBalance.TOWER_RING_DROP_YEAR_CAP,
+                    "塔环年份 ${dto.yearOrdinal} 应 ≤ ${GameBalance.TOWER_RING_DROP_YEAR_CAP}")
+            } else {
+                sawNonRing = true
+                assertEquals(4, dto.yearOrdinal, "level=300 时魂骨/魂核年份应仍饱和在 4 档")
+            }
+        }
+        assertTrue(sawRing && sawNonRing, "600 次掉落应同时覆盖魂环与非环分支")
     }
 }

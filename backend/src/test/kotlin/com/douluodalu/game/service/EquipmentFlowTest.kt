@@ -154,16 +154,16 @@ class EquipmentFlowTest {
 
     @Test
     fun `equipRing should reject over-capacity ring with 负荷不足 message and write nothing`() {
-        // Lv.8 容量 = ((50+80)×3 + 500/100)×6 = 2370；千年完美(23.8%) 负荷 = 10000×0.238×1.0 = 2380 → 超 10
-        val r = ring(id = 71L, year = 1, quality = 4, percentage = 238)
+        // Lv.8 容量 = ((50+80)×3 + 500/100)×24 = 9480（任务#22 容量乘数 6→24）；千年完美(94.9%) 负荷 = 10000×0.949×1.0 = 9490 → 超 10
+        val r = ring(id = 71L, year = 1, quality = 4, percentage = 949)
         doReturn(listOf(r)).whenever(backpackRepo).findByUserIdAndItemType(1L, "RING")
         doReturn(null).whenever(equippedRingRepo).findByUserIdAndSlotIndex(1L, 0)
         doReturn(levelProfile(8)).whenever(profileRepo).findByUserId(1L)
 
         val err = assertThrows(IllegalArgumentException::class.java) { gameService.equipRing(1L, 0, 0) }
         assertTrue(err.message!!.startsWith("负荷不足"))
-        assertTrue(err.message!!.contains("当前负荷 0/2370"))
-        assertTrue(err.message!!.contains("该魂环需负荷 2380"))
+        assertTrue(err.message!!.contains("当前负荷 0/9480"))
+        assertTrue(err.message!!.contains("该魂环需负荷 9490"))
         assertTrue(err.message!!.contains("还需 10"))
 
         verify(equippedRingRepo, never()).save(any())
@@ -172,8 +172,8 @@ class EquipmentFlowTest {
 
     @Test
     fun `equipRing should allow ring whose load exactly equals capacity (boundary)`() {
-        // 千年完美(23.7%) 负荷 = 2370 = Lv.8 容量 → 等载允许（<=）
-        val r = ring(id = 72L, year = 1, quality = 4, percentage = 237)
+        // 千年完美(94.8%) 负荷 = 9480 = Lv.8 容量 → 等载允许（<=）
+        val r = ring(id = 72L, year = 1, quality = 4, percentage = 948)
         doReturn(listOf(r)).whenever(backpackRepo).findByUserIdAndItemType(1L, "RING")
         doReturn(null).whenever(equippedRingRepo).findByUserIdAndSlotIndex(1L, 0)
         doReturn(levelProfile(8)).whenever(profileRepo).findByUserId(1L)
@@ -185,16 +185,16 @@ class EquipmentFlowTest {
 
     @Test
     fun `overloaded ring should become equippable after leveling up (扩容闭环)`() {
-        val r = ring(id = 73L, year = 1, quality = 4, percentage = 238)
+        val r = ring(id = 73L, year = 1, quality = 4, percentage = 949)
         doReturn(listOf(r)).whenever(backpackRepo).findByUserIdAndItemType(1L, "RING")
         doReturn(null).whenever(equippedRingRepo).findByUserIdAndSlotIndex(1L, 0)
         val profile = levelProfile(8)
         doReturn(profile).whenever(profileRepo).findByUserId(1L)
 
-        // Lv.8 容量 2370 < 2380 → 拒绝
+        // Lv.8 容量 9480 < 9490 → 拒绝
         assertThrows(IllegalArgumentException::class.java) { gameService.equipRing(1L, 0, 0) }
 
-        // 升级后容量 = ((50+90)×3 + 550/100)×6 = 2553 ≥ 2380 → 可装
+        // 升级后容量 = ((50+90)×3 + 550/100)×24 = 10212 ≥ 9490 → 可装
         profile.level = 9
         assertTrue(gameService.equipRing(1L, 0, 0))
         verify(equippedRingRepo).save(any())
