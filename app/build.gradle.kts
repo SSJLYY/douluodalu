@@ -1,8 +1,18 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.android)
 }
+
+// 读取签名等敏感配置：环境变量优先，其次本机 local.properties（已 gitignore），均无则返回空串
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun secret(key: String, default: String = ""): String =
+    System.getenv(key) ?: localProps.getProperty(key) ?: default
 
 android {
     namespace = "com.example.garygame"
@@ -20,10 +30,11 @@ android {
 
     signingConfigs {
         create("release") {
+            // 签名凭据不入库：优先环境变量，其次 local.properties（已被 gitignore）
             storeFile = file("release.keystore")
-            storePassword = "android"
-            keyAlias = "release"
-            keyPassword = "android"
+            storePassword = secret("RELEASE_STORE_PASSWORD")
+            keyAlias = secret("RELEASE_KEY_ALIAS", "release")
+            keyPassword = secret("RELEASE_KEY_PASSWORD")
         }
     }
 
@@ -59,6 +70,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":shared"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.appcompat)

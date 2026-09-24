@@ -2,8 +2,6 @@ package com.example.garygame.ui
 
 import android.app.AlertDialog
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -12,9 +10,13 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import com.example.garygame.R
 import com.example.garygame.engine.GameEngine
 import com.example.garygame.model.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class ShopFragment : Fragment() {
 
@@ -43,14 +45,6 @@ class ShopFragment : Fragment() {
     // 限时珍品
     private lateinit var tvLimitedTimer: TextView
     private lateinit var limitedShopItems: LinearLayout
-    private val timerHandler = Handler(Looper.getMainLooper())
-    private val timerRunnable = object : Runnable {
-        override fun run() {
-            updateLimitedShopTimer()
-            timerHandler.postDelayed(this, 1000L)
-        }
-    }
-
     private val updateListener = { updateUI() }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
@@ -108,7 +102,13 @@ class ShopFragment : Fragment() {
 
         GameEngine.addListener(updateListener)
         updateUI()
-        timerHandler.post(timerRunnable)
+        updateLimitedShopTimer()
+        viewLifecycleOwner.lifecycleScope.launch {
+            while (isActive) {
+                delay(1000L)
+                updateLimitedShopTimer()
+            }
+        }
         return view
     }
 
@@ -600,7 +600,7 @@ class ShopFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        timerHandler.removeCallbacks(timerRunnable)
+        // viewLifecycleOwner.lifecycleScope 随视图销毁自动取消计时协程
         GameEngine.removeListener(updateListener)
     }
 

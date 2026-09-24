@@ -2,8 +2,6 @@ package com.example.garygame
 
 import android.app.AlertDialog
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.animation.Animation
 import android.view.animation.AnimationUtils
 import android.widget.CheckBox
@@ -12,16 +10,21 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import com.example.garygame.engine.GameEngine
 import com.example.garygame.engine.GameEngine.NotifyType
 import com.example.garygame.model.CodexData
 import com.example.garygame.model.RealmData
+import com.example.garygame.platform.AndroidStorage
 import com.example.garygame.ui.AdventureFragment
 import com.example.garygame.ui.CultivationFragment
 import com.example.garygame.ui.EquipmentFragment
 import com.example.garygame.ui.ShopFragment
 import com.example.garygame.ui.WikiFragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -30,27 +33,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var progressTopLevel: ProgressBar
     private lateinit var bottomNav: BottomNavigationView
 
-    private val handler = Handler(Looper.getMainLooper())
-    private val tickRunnable = object : Runnable {
-        override fun run() {
-            try {
-                GameEngine.tick()
-                updateTopBar()
-                showPendingNotifications()
-            } catch (e: Exception) {
-                GameEngine.addLog("⚠️ 自动循环异常: ${e.message}")
-            }
-            handler.postDelayed(this, 500)
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         // 切换回主主题（去掉启动画面背景）
         setTheme(R.style.Theme_MyApplication)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        GameEngine.init(this)
+        GameEngine.init(AndroidStorage(this, "DouluoIdleGameV2"))
 
         tvTopRealm = findViewById(R.id.tv_top_realm)
         tvTopGold = findViewById(R.id.tv_top_gold)
@@ -80,7 +69,18 @@ class MainActivity : AppCompatActivity() {
             true
         }
 
-        handler.post(tickRunnable)
+        lifecycleScope.launch {
+            while (isActive) {
+                try {
+                    GameEngine.tick()
+                    updateTopBar()
+                    showPendingNotifications()
+                } catch (e: Exception) {
+                    GameEngine.addLog("⚠️ 自动循环异常: ${e.message}")
+                }
+                delay(500)
+            }
+        }
     }
 
     private fun switchFragment(fragment: Fragment) {
@@ -156,7 +156,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        handler.removeCallbacks(tickRunnable)
+        // lifecycleScope 随 Activity 销毁自动取消 tick 协程
         GameEngine.state.save()
     }
 }

@@ -106,8 +106,7 @@ class EquipmentFragment : Fragment() {
             line.addView(ringView)
 
             // V2: 显示主动技能
-            if (ring?.skill != null) {
-                val skill = ring.skill
+            ring?.skill?.let { skill ->
                 val cd = s.activeSkillCooldowns[slot.index] ?: 0
                 val cdText = if (cd <= 0) "✅就绪" else "⏳${cd}回合"
                 val soulEnough = if (s.battleSoulPower >= skill.soulCost) "🔋" else "⚡魂力"
@@ -216,8 +215,7 @@ class EquipmentFragment : Fragment() {
             line.addView(nameView)
 
             // V2: 显示被动技能
-            if (currentBone?.passiveSkill != null) {
-                val ps = currentBone.passiveSkill
+            currentBone?.passiveSkill?.let { ps ->
                 val valAtRarity = ps.getValue(currentBone.combinedTier)
                 line.addView(TextView(requireContext()).apply {
                     text = "    被动: ${ps.name} (${ps.type.displayName}) ${ps.description}: $valAtRarity"

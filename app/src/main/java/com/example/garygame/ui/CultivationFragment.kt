@@ -2,8 +2,6 @@ package com.example.garygame.ui
 
 import android.app.AlertDialog
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -14,9 +12,13 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import com.example.garygame.R
 import com.example.garygame.engine.GameEngine
 import com.example.garygame.model.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class CultivationFragment : Fragment() {
 
@@ -77,14 +79,6 @@ class CultivationFragment : Fragment() {
     private lateinit var tvTalentSummary: TextView
     private lateinit var tvPrestigeHint: TextView
     private lateinit var talentBranchesContainer: LinearLayout
-
-    private val refreshHandler = Handler(Looper.getMainLooper())
-    private val refreshRunnable = object : Runnable {
-        override fun run() {
-            updateUI()
-            refreshHandler.postDelayed(this, 500)
-        }
-    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         val view = inflater.inflate(R.layout.fragment_cultivation, container, false)
@@ -213,7 +207,12 @@ class CultivationFragment : Fragment() {
 
         GameEngine.addListener(updateListener)
         updateUI()
-        refreshHandler.post(refreshRunnable)
+        viewLifecycleOwner.lifecycleScope.launch {
+            while (isActive) {
+                delay(500)
+                updateUI()
+            }
+        }
 
         return view
     }
@@ -783,7 +782,7 @@ class CultivationFragment : Fragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         GameEngine.removeListener(updateListener)
-        refreshHandler.removeCallbacks(refreshRunnable)
+        // viewLifecycleOwner.lifecycleScope 随视图销毁自动取消轮询协程
     }
 
     // ======== 详情弹窗 ========
