@@ -24,6 +24,11 @@ jwt:
 ratelimit:
   enabled: false
 
+# 关闭审计清理调度（SchedulingConfig / AuditLogCleanupService 整 Bean 不注册），
+# 防止定时任务在测试运行期间触发造成抖动
+audit:
+  cleanup-enabled: false
+
 logging:
   level:
     com.douluodalu.game: DEBUG

@@ -64,7 +64,8 @@ class AuditLogAspect(
                 }
             }
 
-            auditLogRepository.save(
+            // 审计写入是同步且发生在请求线程：失败只降级告警，绝不阻断业务
+            saveQuietly(
                 AuditLogRecord(
                     userId = userId,
                     action = auditLog.action,
@@ -83,7 +84,8 @@ class AuditLogAspect(
         } catch (e: Exception) {
             val duration = System.currentTimeMillis() - startTime
 
-            auditLogRepository.save(
+            // 同上：审计落库失败不得吞掉/替换业务原始异常
+            saveQuietly(
                 AuditLogRecord(
                     userId = userId,
                     action = auditLog.action,
@@ -101,6 +103,19 @@ class AuditLogAspect(
                 userId, auditLog.action, methodName, ip, traceId, duration, e.message)
 
             throw e
+        }
+    }
+
+    /**
+     * 同步 save 的降级包装：audit_log 写入异常（库故障、字段超长等）仅记 warn，
+     * 不影响业务方法的返回值或异常传播。
+     */
+    private fun saveQuietly(record: AuditLogRecord) {
+        try {
+            auditLogRepository.save(record)
+        } catch (e: Exception) {
+            log.warn("[AUDIT] 审计日志写入失败已降级跳过 action={} userId={} error={}",
+                record.action, record.userId, e.message)
         }
     }
 }

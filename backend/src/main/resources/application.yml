@@ -60,6 +60,16 @@ game:
     max-hours: 12
     efficiency: 0.8
 
+# ==================== 审计日志保留策略 ====================
+audit:
+  # 保留天数：清理任务每日凌晨删除 created_at 早于 N 天前的记录；<=0 表示永久保留
+  retention-days: ${AUDIT_RETENTION_DAYS:30}
+  # 清理任务开关（含 @EnableScheduling）。默认开；application-test.yml 显式关闭，
+  # 保证测试 profile 下调度器不启动、不引入抖动
+  cleanup-enabled: ${AUDIT_CLEANUP_ENABLED:true}
+  # 每日 03:00 执行（避开 00:00 整点高峰）
+  cleanup-cron: "0 0 3 * * ?"
+
 # ==================== 日志配置 ====================
 logging:
   level:
