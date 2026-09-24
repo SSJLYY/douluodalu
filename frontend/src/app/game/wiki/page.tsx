@@ -136,7 +136,7 @@ export default function WikiPage() {
                                         </span>
                                     )}
                                     {'id' in item && !('year' in item) && !('slot' in item) && (
-                                        <span className="bg-gray-600 px-2 py-1 rounded text-sm">
+                                        <span className="bg-gray-600 dl-badge-outline px-2 py-1 rounded text-sm">
                                             地图 {item.id + 1}
                                         </span>
                                     )}

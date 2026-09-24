@@ -158,7 +158,7 @@ export default function EquipmentPage() {
                                 <div
                                     key={i}
                                     className={`p-2 rounded text-center text-sm cursor-pointer ${
-                                        ring ? 'bg-purple-900 border border-purple-600' : 'bg-gray-700'
+                                        ring ? 'bg-purple-900 border border-purple-600' : 'bg-gray-700 dl-slot-empty'
                                     } ${selectedSlot === slotKey ? 'ring-2 ring-yellow-400' : ''}`}
                                     onClick={() => handleSlotClick(slotKey, Boolean(ring))}
                                 >
@@ -184,7 +184,7 @@ export default function EquipmentPage() {
                                 <div
                                     key={i}
                                     className={`p-2 rounded text-center text-sm cursor-pointer ${
-                                        bone ? 'bg-blue-900 border border-blue-600' : 'bg-gray-700'
+                                        bone ? 'bg-blue-900 border border-blue-600' : 'bg-gray-700 dl-slot-empty'
                                     } ${selectedSlot === slotKey ? 'ring-2 ring-yellow-400' : ''}`}
                                     onClick={() => handleSlotClick(slotKey, Boolean(bone))}
                                 >
@@ -210,7 +210,7 @@ export default function EquipmentPage() {
                                 <div
                                     key={slot.slotType}
                                     className={`p-3 rounded cursor-pointer ${
-                                        core ? 'bg-green-900 border border-green-600' : 'bg-gray-700'
+                                        core ? 'bg-green-900 border border-green-600' : 'bg-gray-700 dl-slot-empty'
                                     } ${selectedSlot === slotKey ? 'ring-2 ring-yellow-400' : ''}`}
                                     onClick={() => handleSlotClick(slotKey, Boolean(core))}
                                 >

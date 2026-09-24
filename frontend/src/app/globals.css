@@ -22,7 +22,7 @@
   --muted: #525d70;         /* 次要文字 */
   --accent: #a16207;        /* 品牌金（亮色下加深保对比度） */
   --on-solid: #ffffff;      /* 饱和色按钮上的文字（两主题恒白） */
-  --disabled-fg: #6b7280;
+  --disabled-fg: #4b5563;   /* 禁用文字：亮色下加深，配 disabled 底纹达 AA */
   --input-bg: #ffffff;
   --input-fg: #1b2230;
   --placeholder: #94a3b8;
@@ -33,8 +33,8 @@
   --pal-gray-300: #cbd5e1;
   --pal-gray-400: #c9d1dc;
   --pal-gray-500: #c3cbd8;
-  --pal-gray-600: #d3d9e3;
-  --pal-gray-700: #e7ebf2;
+  --pal-gray-600: #c6cdd9;  /* 徽章/边框/禁用底：亮色下再压深一档保辨识度 */
+  --pal-gray-700: #dfe5ee;  /* 内嵌小块/空槽底：与白卡拉开层次 */
   --pal-gray-800: #ffffff;
   --pal-gray-900: #e9edf4;
 
@@ -43,8 +43,8 @@
   --pal-yellow-300: #854d0e;
   --pal-yellow-400: #a16207;
   --pal-yellow-500: #b45309;
-  --pal-yellow-600: #ca8a04;
-  --pal-yellow-700: #a16207;
+  --pal-yellow-600: #a16207; /* 实心黄按钮/徽章底：与白字达 4.9:1（AA） */
+  --pal-yellow-700: #854d0e; /* hover 底：比 600 再深一档且白字 6.9:1 */
   --pal-yellow-900: #fef3c7;
   --pal-orange-400: #c2410c;
   --pal-orange-500: #ea580c;
@@ -193,7 +193,18 @@ html:not(.dark) .text-gray-100 { color: #111827; }
 html:not(.dark) .text-gray-200 { color: #1f2937; }
 html:not(.dark) .text-gray-300 { color: #3d4757; }
 html:not(.dark) .text-gray-400 { color: #4d586b; }
-html:not(.dark) .text-gray-500 { color: #66707f; }
+html:not(.dark) .text-gray-500 { color: #5b6575; }
+
+/* 亮色：装备空槽加虚线描边（outline 不占布局；暗色下无此类规则 = 零变化） */
+html:not(.dark) .dl-slot-empty {
+  outline: 1px dashed #94a0b3;
+  outline-offset: -1px;
+}
+
+/* 亮色：浅灰徽章加内描边，避免与卡片/条目底色糊在一起（暗色零变化） */
+html:not(.dark) .dl-badge-outline {
+  box-shadow: inset 0 0 0 1px #8a97a9;
+}
 
 /* ---------- 表单控件（变量驱动，两主题自适应） ---------- */
 input,
