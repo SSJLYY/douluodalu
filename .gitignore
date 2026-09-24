@@ -1,0 +1,42 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.kotlin/
+
+# 构建产物 / 误提交目录
+BOOT-INF/
+build/
+**/build/
+backend/target/
+**/target/
+
+# 本地工具与会话数据
+.workbuddy/
+/.idea/
+
+# 日志
+*.log
+
+# 仿真生成报告（可由仿真脚本重新生成）
+simulation_reports/
+
+# 前端依赖与构建缓存
+frontend/node_modules/
+frontend/.next/
+.env*.local
+
+# 签名密钥
+*.keystore
+*.jks
