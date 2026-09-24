@@ -118,6 +118,13 @@
             <artifactId>caffeine</artifactId>
         </dependency>
 
+        <!-- 任务#29：Spring Cache 抽象 + Caffeine 适配（CaffeineCacheManager），
+             排行榜读缓存用；spring-context-support 版本由 Boot BOM 管理 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context-support</artifactId>
+        </dependency>
+
         <!-- SpringDoc OpenAPI -->
         <dependency>
             <groupId>org.springdoc</groupId>

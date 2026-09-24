@@ -14,6 +14,7 @@ import com.douluodalu.game.repository.EquippedRingRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
 import com.douluodalu.game.repository.UserRepository
+import org.springframework.cache.annotation.CacheEvict
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Duration
@@ -140,6 +141,9 @@ class GameService(
         return CultivateResponse(gain, profile.soulPower, profile.level)
     }
 
+    // 任务#29：level 是等级榜分数，突破成功后清空榜单缓存（allEntries，键含 limit 无法定点失效）；
+    // cache.rank.enabled=false 时注解惰化，直连数据库
+    @CacheEvict(cacheNames = ["rank"], allEntries = true)
     @Transactional
     fun breakthrough(userId: Long): BreakthroughResponse {
         val profile = getProfile(userId)
@@ -269,6 +273,8 @@ class GameService(
         )
     }
 
+    // 任务#29：towerFloor 是爬塔榜分数，唯一写点，结算后清空榜单缓存
+    @CacheEvict(cacheNames = ["rank"], allEntries = true)
     @Transactional
     fun towerBattle(userId: Long): TowerResponse {
         val profile = getProfile(userId)

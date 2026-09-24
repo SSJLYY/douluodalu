@@ -54,6 +54,16 @@ ratelimit:
   global:
     requests-per-minute: ${GLOBAL_RPM:300}
 
+# ==================== 读缓存（任务#29） ====================
+# 排行榜 Caffeine 缓存。enabled=false 时 CacheConfig 整体不注册（@EnableCaching 随
+# 之消失），所有 @Cacheable/@CacheEvict 惰化为直查数据库 —— 一键关闭开关，
+# 与 ratelimit.enabled 同款风格。ttl-seconds 为写入后自动过期兜底；
+# 分数写路径（breakthrough/towerBattle）另有主动 @CacheEvict。
+cache:
+  rank:
+    enabled: ${CACHE_RANK_ENABLED:true}
+    ttl-seconds: ${CACHE_RANK_TTL_SECONDS:30}
+
 # ==================== 游戏配置 ====================
 game:
   offline:
