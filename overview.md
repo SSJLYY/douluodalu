@@ -160,8 +160,8 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
    - Next.js ISR（排行榜缓存）
 
 2. **运维**
-   - Docker 化（后端 Dockerfile + docker-compose）
-   - CI/CD（GitHub Actions）
+   - Docker 化（后端 Dockerfile + docker-compose）— 未完成
+   - ~~CI/CD（GitHub Actions）~~ ✅ 已完成：`.github/workflows/ci.yml`，push/PR to main 触发，backend `mvn -B test` + frontend `lint`/`build` 两个并行 job（Android Gradle 工程不构建）
    - Prometheus 指标监控
 
 3. **高级特性**
