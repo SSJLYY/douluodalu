@@ -27,4 +27,3 @@ dependencyResolutionManagement {
 rootProject.name = "DouluoDalu"
 include(":app")
 include(":shared")
-include(":backend")
