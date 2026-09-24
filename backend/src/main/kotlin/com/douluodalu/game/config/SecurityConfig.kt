@@ -1,6 +1,7 @@
 package com.douluodalu.game.config
 
 import com.douluodalu.game.security.JwtAuthFilter
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -21,7 +22,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
 @EnableWebSecurity
 class SecurityConfig(
     private val jwtAuthFilter: JwtAuthFilter,
-    private val rateLimitInterceptor: RateLimitInterceptor,
+    // ratelimit.enabled=false 时该 Bean 不存在，用 ObjectProvider 避免启动失败
+    private val rateLimitInterceptorProvider: ObjectProvider<RateLimitInterceptor>,
     // 文档端点是否公开，与 springdoc.api-docs.enabled 联动：
     // 非 prod 默认 true（放行 Swagger）；prod profile 在 application-prod.yml 里置 false，
     // 既关闭 springdoc 本身，也不再放行文档路径（届时 /v3/api-docs 等需认证，且实际返回 404）
@@ -47,10 +49,11 @@ class SecurityConfig(
                     // /ws/{server}/{session}/xhr 等）无法携带 Authorization 头，
                     // 握手一律放行（SockJS 子路径 + 原生端点 /ws-native），鉴权在应用层消息处理中做
                     .requestMatchers("/ws", "/ws/**", "/ws-native").permitAll()
-                    .anyRequest().authenticated()
+                // springdoc 关闭时（prod）这些路径不再匿名放行，且端点本身 404
                 if (docsEnabled) {
                     auth.requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                 }
+                auth.anyRequest().authenticated()
             }
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter::class.java)
         return http.build()
@@ -62,8 +65,9 @@ class SecurityConfig(
     @Bean
     fun webMvc(): WebMvcConfigurer = object : WebMvcConfigurer {
         override fun addInterceptors(registry: InterceptorRegistry) {
-            registry.addInterceptor(rateLimitInterceptor)
-                .addPathPatterns("/api/**")
+            rateLimitInterceptorProvider.ifAvailable {
+                registry.addInterceptor(it).addPathPatterns("/api/**")
+            }
         }
     }
 
