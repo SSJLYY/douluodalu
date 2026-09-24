@@ -1,44 +1,25 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import api, { GameState, TowerBattleResult } from '@/lib/api';
+import { useState } from 'react';
+import api, { TowerBattleResult } from '@/lib/api';
+import { useGameData } from '@/lib/hooks';
 
 export default function TowerPage() {
-    const [gameState, setGameState] = useState<GameState | null>(null);
+    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
     const [battleResult, setBattleResult] = useState<TowerBattleResult | null>(null);
-    const [message, setMessage] = useState('');
-    const [loading, setLoading] = useState(false);
 
-    async function loadGameState() {
-        try {
-            const state = await api.getGameState();
-            setGameState(state);
-        } catch (err) {
-            console.error('加载游戏状态失败:', err);
-        }
-    }
-
-    useEffect(() => {
-        queueMicrotask(loadGameState);
-    }, []);
-
-    const handleChallenge = async () => {
-        setLoading(true);
-        try {
-            const result = await api.towerBattle();
+    const handleChallenge = () => runAction(
+        () => api.towerBattle(),
+        (result) => {
             setBattleResult(result);
             if (result.won) {
                 setMessage(`挑战成功！击败了${result.monsterName}，登上第${result.towerFloor}层，获得${result.goldGained}金币、${result.bossCoinGained}Boss币`);
             } else {
                 setMessage(`挑战失败！被${result.monsterName}击败`);
             }
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '挑战失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+        },
+        '挑战失败',
+    );
 
     if (!gameState) {
         return <div className="text-center py-8">加载中...</div>;

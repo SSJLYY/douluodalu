@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import api, { GameState, BattleResult } from '@/lib/api';
+import api, { BattleResult } from '@/lib/api';
+import { useGameData } from '@/lib/hooks';
 
 const MAP_NAMES = ['圣魂村', '诺丁城外', '星斗外围', '落日森林', '极北之地', '海神岛', '杀戮之都外域', '神界废墟'];
 const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣', '魂斗罗', '封号斗罗', '极限斗罗', '半神', '神祇', '神王', '至高神王', '创世神'];
@@ -11,72 +12,33 @@ const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂�
 export default function GamePage() {
     const { user, isLoading, logout } = useAuth();
     const router = useRouter();
-    const [gameState, setGameState] = useState<GameState | null>(null);
+    const { gameState, message, setMessage, actionLoading, runAction } = useGameData();
     const [battleResult, setBattleResult] = useState<BattleResult | null>(null);
-    const [message, setMessage] = useState('');
-    const [actionLoading, setActionLoading] = useState(false);
 
-    async function loadGameState() {
-        try {
-            const state = await api.getGameState();
-            setGameState(state);
-        } catch (err) {
-            console.error('加载游戏状态失败:', err);
-        }
-    }
-
-    useEffect(() => {
-        if (!isLoading && !user) {
-            router.push('/');
-        }
-        if (user) {
-            queueMicrotask(loadGameState);
-        }
-    }, [user, isLoading, router]);
-
-    const handleBattle = async () => {
-        setActionLoading(true);
-        try {
-            const result = await api.battle();
+    const handleBattle = () => runAction(
+        () => api.battle(),
+        (result) => {
             setBattleResult(result);
             const dropText = result.drops.length > 0 ? `，掉落${result.drops.length}件装备` : '';
             setMessage(result.won
                 ? `胜利！击败了${result.monsterName}，获得${result.goldGained}金币、${result.expGained}魂力${dropText}`
                 : `战败！被${result.monsterName}击败，回城恢复...`
             );
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '战斗失败');
-        } finally {
-            setActionLoading(false);
-        }
-    };
+        },
+        '战斗失败',
+    );
 
-    const handleCultivate = async () => {
-        setActionLoading(true);
-        try {
-            const result = await api.cultivate();
-            setMessage(`修炼成功！获得${result.soulPowerGained}魂力，总计${result.totalSoulPower}`);
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '修炼失败');
-        } finally {
-            setActionLoading(false);
-        }
-    };
+    const handleCultivate = () => runAction(
+        () => api.cultivate(),
+        (result) => setMessage(`修炼成功！获得${result.soulPowerGained}魂力，总计${result.totalSoulPower}`),
+        '修炼失败',
+    );
 
-    const handleBreakthrough = async () => {
-        setActionLoading(true);
-        try {
-            const result = await api.breakthrough();
-            setMessage(result.message);
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '突破失败');
-        } finally {
-            setActionLoading(false);
-        }
-    };
+    const handleBreakthrough = () => runAction(
+        () => api.breakthrough(),
+        (result) => setMessage(result.message),
+        '突破失败',
+    );
 
     if (isLoading || !gameState) {
         return (

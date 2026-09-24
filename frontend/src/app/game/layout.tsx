@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
-import api, { GameState } from '@/lib/api';
+import { useGameData } from '@/lib/hooks';
 
 const NAV_ITEMS = [
     { href: '/game', label: '战斗', icon: '⚔️' },
@@ -22,25 +22,18 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
     const { user, isLoading, logout } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
-    const [gameState, setGameState] = useState<GameState | null>(null);
-
-    async function loadGameState() {
-        try {
-            const state = await api.getGameState();
-            setGameState(state);
-        } catch (err) {
-            console.error('加载游戏状态失败:', err);
-        }
-    }
+    const { gameState, refresh } = useGameData();
 
     useEffect(() => {
         if (!isLoading && !user) {
             router.push('/');
         }
-        if (user) {
-            queueMicrotask(loadGameState);
-        }
     }, [user, isLoading, router]);
+
+    // 切换子页面时刷新顶部资源栏（金币/魂力/Boss币）
+    useEffect(() => {
+        queueMicrotask(refresh);
+    }, [pathname, refresh]);
 
     if (isLoading || !user) {
         return (
@@ -79,10 +72,7 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
                     )}
 
                     <button
-                        onClick={() => {
-                            logout();
-                            router.push('/');
-                        }}
+                        onClick={logout}
                         className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-sm"
                     >
                         退出

@@ -1,10 +1,16 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
+// 后端地址：Spring Boot（端口 8080，无 context-path，Controller 自带 /api 前缀）。
+// 通过 frontend/.env.local 的 NEXT_PUBLIC_API_URL 注入；兜底值与本地开发约定一致。
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+
+/** token 失效时派发的全局事件，AuthContext 监听后做软跳转（避免 window.location 硬刷新） */
+export const UNAUTHORIZED_EVENT = 'douluodalu:unauthorized';
 
 class ApiClient {
     private token: string | null = null;
 
     setToken(token: string | null) {
         this.token = token;
+        if (typeof window === 'undefined') return;
         if (token) {
             localStorage.setItem('token', token);
         } else {
@@ -13,8 +19,8 @@ class ApiClient {
     }
 
     getToken(): string | null {
-        if (!this.token) {
-            this.token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+        if (!this.token && typeof window !== 'undefined') {
+            this.token = localStorage.getItem('token');
         }
         return this.token;
     }
@@ -36,13 +42,17 @@ class ApiClient {
 
         if (res.status === 401 || res.status === 403) {
             this.setToken(null);
-            window.location.href = '/';
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+            }
             throw new Error('认证失败，请重新登录');
         }
 
         if (!res.ok) {
-            const err = await res.json().catch(() => ({ message: '请求失败' }));
-            throw new Error(err.message || '请求失败');
+            // 后端错误体不完全统一：GlobalExceptionHandler 输出 {error,message}，
+            // 部分 Controller 业务失败只输出 {error}，这里两者都兼容。
+            const err = await res.json().catch(() => ({ message: '请求失败' })) as { message?: string; error?: string };
+            throw new Error(err.message || err.error || '请求失败');
         }
 
         return res.json();
@@ -65,6 +75,10 @@ class ApiClient {
 
     async getMe() {
         return this.request<UserInfo>('/api/auth/me');
+    }
+
+    async logout() {
+        return this.request<SimpleResponse>('/api/auth/logout', { method: 'POST' });
     }
 
     // Game State
@@ -102,7 +116,7 @@ class ApiClient {
         return this.request<RankEntry[]>(`/api/rank/tower?limit=${limit}`);
     }
 
-    // Shop
+    // Shop（后端 ShopItem：currencyType 为字符串，itemData 为编码字符串）
     async getBossShopItems() {
         return this.request<ShopItem[]>('/api/shop/boss');
     }
@@ -114,7 +128,7 @@ class ApiClient {
     }
 
     async getLimitedShopItems() {
-        return this.request<LimitedShopItem[]>('/api/shop/limited');
+        return this.request<ShopItem[]>('/api/shop/limited');
     }
 
     async buyLimitedShopItem(itemId: number) {
@@ -125,15 +139,15 @@ class ApiClient {
 
     // Guild
     async getGuildList() {
-        return this.request<Guild[]>('/api/guild/list');
+        return this.request<GuildSummary[]>('/api/guild/list');
     }
 
     async getMyGuild() {
-        return this.request<Guild | null>('/api/guild/my');
+        return this.request<GuildMyResponse>('/api/guild/my');
     }
 
     async createGuild(name: string) {
-        return this.request<{ message: string; guild: Guild }>('/api/guild/create', {
+        return this.request<{ message: string; guild: GuildSummary }>('/api/guild/create', {
             method: 'POST',
             body: JSON.stringify({ name, description: '' }),
         });
@@ -152,7 +166,7 @@ class ApiClient {
     }
 
     async donateGuild(amount: number) {
-        return this.request<{ message: string; guild: Guild; gold: number }>('/api/guild/donate', {
+        return this.request<{ message: string }>('/api/guild/donate', {
             method: 'POST',
             body: JSON.stringify({ amount }),
         });
@@ -186,10 +200,16 @@ class ApiClient {
         return this.request<GameState>('/api/equipment');
     }
 
-    async sellBackpackItem(backpackItemId: number) {
+    /**
+     * 后端索引语义（GameService）：
+     * - itemIndex：背包全列表（按创建时间排序，与 /api/game/state 返回顺序一致）中的下标；
+     * - ringIndex/boneIndex/coreIndex：背包中同类型物品（RING/BONE/CORE）子列表中的下标。
+     * 页面里用 backpackItems 计算下标后调用本组接口。
+     */
+    async sellBackpackItem(itemIndex: number) {
         return this.request<{ message: string }>('/api/equipment/backpack/sell', {
             method: 'POST',
-            body: JSON.stringify({ backpackItemId }),
+            body: JSON.stringify({ itemIndex }),
         });
     }
 
@@ -199,46 +219,46 @@ class ApiClient {
         });
     }
 
-    // Equip / Unequip
-    async equipRing(backpackItemId: number, slotIndex: number) {
-        return this.request<{ message: string }>('/api/equip/ring', {
+    async equipRing(ringIndex: number, slotIndex: number) {
+        return this.request<{ message: string }>('/api/equipment/ring/equip', {
             method: 'POST',
-            body: JSON.stringify({ backpackItemId, slotIndex }),
+            body: JSON.stringify({ slotIndex, ringIndex }),
         });
     }
 
-    async equipBone(backpackItemId: number, slotIndex: number) {
-        return this.request<{ message: string }>('/api/equip/bone', {
+    async equipBone(boneIndex: number, slotIndex: number) {
+        return this.request<{ message: string }>('/api/equipment/bone/equip', {
             method: 'POST',
-            body: JSON.stringify({ backpackItemId, slotIndex }),
+            body: JSON.stringify({ slotIndex, boneIndex }),
         });
     }
 
-    async equipCore(backpackItemId: number, slotType: string) {
-        return this.request<{ message: string }>('/api/equip/core', {
+    /** 魂核只有两个槽位：slotIndex 0 = 左（LEFT），1 = 右（RIGHT） */
+    async equipCore(coreIndex: number, slotIndex: number) {
+        return this.request<{ message: string }>('/api/equipment/core/equip', {
             method: 'POST',
-            body: JSON.stringify({ backpackItemId, slotType }),
+            body: JSON.stringify({ slotIndex, coreIndex }),
         });
     }
 
     async unequipRing(slotIndex: number) {
-        return this.request<{ message: string }>('/api/unequip/ring', {
+        return this.request<{ message: string }>('/api/equipment/ring/unequip', {
             method: 'POST',
             body: JSON.stringify({ slotIndex }),
         });
     }
 
     async unequipBone(slotIndex: number) {
-        return this.request<{ message: string }>('/api/unequip/bone', {
+        return this.request<{ message: string }>('/api/equipment/bone/unequip', {
             method: 'POST',
             body: JSON.stringify({ slotIndex }),
         });
     }
 
-    async unequipCore(slotType: string) {
-        return this.request<{ message: string }>('/api/unequip/core', {
+    async unequipCore(slotIndex: number) {
+        return this.request<{ message: string }>('/api/equipment/core/unequip', {
             method: 'POST',
-            body: JSON.stringify({ slotType }),
+            body: JSON.stringify({ slotIndex }),
         });
     }
 }
@@ -256,6 +276,11 @@ export interface UserInfo {
     username: string;
     nickname: string;
     avatarUrl: string | null;
+}
+
+export interface SimpleResponse {
+    success: boolean;
+    message: string;
 }
 
 export interface GameState {
@@ -310,13 +335,14 @@ export interface EquippedBone {
     passiveSkillName: string | null;
 }
 
+/** 对应后端 EquippedCoreDto：rarityOrdinal / value / level（无 qualityOrdinal/coreValue/coreLevel） */
 export interface EquippedCore {
     slotType: string;
     coreName: string;
-    qualityOrdinal: number;
+    rarityOrdinal: number;
     passiveSkillName: string | null;
-    coreValue: number;
-    coreLevel: number;
+    value: number;
+    level: number;
 }
 
 export interface BackpackItem {
@@ -389,30 +415,32 @@ export interface RankEntry {
     extraData: string | null;
 }
 
+/** 对应后端 model/ShopItem：currencyType 字符串、itemData 编码字符串、stock=-1 无限 */
 export interface ShopItem {
     id: number;
     name: string;
     description: string;
     price: number;
-    currency: 'GOLD' | 'BOSS_COIN';
+    currencyType: 'GOLD' | 'BOSS_COIN' | string;
     itemType: string;
-    itemData: unknown;
+    itemData: string;
+    stock: number;
+    requiresLevel: number;
 }
 
-export interface LimitedShopItem extends ShopItem {
-    refreshTime: string;
-}
-
-export interface Guild {
+/** 后端裁剪 DTO：memberCount 为当前人数，notice 即宗门公告 */
+export interface GuildSummary {
     id: number;
     name: string;
-    leaderId: number;
     level: number;
-    exp: number;
     memberCount: number;
     maxMembers: number;
     notice: string | null;
-    createdAt: string;
+}
+
+export interface GuildMyResponse {
+    joined: boolean;
+    guild: GuildSummary | null;
 }
 
 export interface GuildBossResult {

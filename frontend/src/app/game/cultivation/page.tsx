@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import api, { GameState, CultivateResult, BreakthroughResult } from '@/lib/api';
+import { useState } from 'react';
+import api, { CultivateResult, BreakthroughResult } from '@/lib/api';
+import { useGameData } from '@/lib/hooks';
 
 const REALM_NAMES = [
     '魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣',
@@ -9,56 +10,27 @@ const REALM_NAMES = [
 ];
 
 export default function CultivationPage() {
-    const [gameState, setGameState] = useState<GameState | null>(null);
+    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
     const [cultivateResult, setCultivateResult] = useState<CultivateResult | null>(null);
     const [breakthroughResult, setBreakthroughResult] = useState<BreakthroughResult | null>(null);
-    const [message, setMessage] = useState('');
-    const [loading, setLoading] = useState(false);
 
-    async function loadGameState() {
-        try {
-            const state = await api.getGameState();
-            setGameState(state);
-        } catch (err) {
-            console.error('加载游戏状态失败:', err);
-        }
-    }
-
-    useEffect(() => {
-        queueMicrotask(loadGameState);
-    }, []);
-
-    const handleCultivate = async () => {
-        setLoading(true);
-        try {
-            const result = await api.cultivate();
+    const handleCultivate = () => runAction(
+        () => api.cultivate(),
+        (result) => {
             setCultivateResult(result);
             setMessage(`修炼成功！获得 ${result.soulPowerGained} 魂力`);
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '修炼失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+        },
+        '修炼失败',
+    );
 
-    const handleBreakthrough = async () => {
-        setLoading(true);
-        try {
-            const result = await api.breakthrough();
+    const handleBreakthrough = () => runAction(
+        () => api.breakthrough(),
+        (result) => {
             setBreakthroughResult(result);
-            if (result.success) {
-                setMessage(`突破成功！提升至等级 ${result.newLevel}`);
-            } else {
-                setMessage('突破失败，魂力不足');
-            }
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '突破失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+            setMessage(result.success ? `突破成功！提升至等级 ${result.newLevel}` : `突破失败：${result.message}`);
+        },
+        '突破失败',
+    );
 
     if (!gameState) {
         return <div className="text-center py-8">加载中...</div>;

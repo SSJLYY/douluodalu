@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import api, { UserInfo } from '@/lib/api';
+import api, { UserInfo, UNAUTHORIZED_EVENT } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
 interface AuthContextType {
@@ -31,6 +31,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
+    // api.ts 检测到 401/403 时派发该事件，这里统一做软跳转（替代 window.location 硬跳）
+    useEffect(() => {
+        const onUnauthorized = () => {
+            setUser(null);
+            router.push('/');
+        };
+        window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+        return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    }, [router]);
+
     const login = async (username: string, password: string) => {
         const res = await api.login(username, password);
         api.setToken(res.token);
@@ -46,6 +56,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const logout = () => {
+        // 通知后端拉黑 token 并记录登出时间（离线收益起算点），失败不阻塞本地登出
+        api.logout().catch(() => undefined);
         api.setToken(null);
         setUser(null);
         router.push('/');

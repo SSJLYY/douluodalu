@@ -2,42 +2,25 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import api, { RankEntry } from '@/lib/api';
+import api from '@/lib/api';
+import { useAsync } from '@/lib/hooks';
 
 const RANK_TYPES = [
-    { id: 'level', name: '等级排行', icon: '⚡', api: 'getLevelRank' },
-    { id: 'tower', name: '爬塔排行', icon: '🏰', api: 'getTowerRank' },
+    { id: 'level', name: '等级排行', icon: '⚡' },
+    { id: 'tower', name: '爬塔排行', icon: '🏰' },
 ];
 
 export default function RankPage() {
     const { user } = useAuth();
     const [activeRank, setActiveRank] = useState('level');
-    const [rankData, setRankData] = useState<RankEntry[]>([]);
-    const [loading, setLoading] = useState(false);
+    const { data: rankData, loading, error, refresh } = useAsync(() =>
+        activeRank === 'level' ? api.getLevelRank(50) : api.getTowerRank(50)
+    );
 
+    // 切换榜单类型时重新拉取
     useEffect(() => {
-        queueMicrotask(async () => {
-            setLoading(true);
-            try {
-                const rankType = RANK_TYPES.find(r => r.id === activeRank);
-                if (!rankType) return;
-
-                let data: RankEntry[];
-                if (rankType.api === 'getLevelRank') {
-                    data = await api.getLevelRank(50);
-                } else if (rankType.api === 'getTowerRank') {
-                    data = await api.getTowerRank(50);
-                } else {
-                    data = [];
-                }
-                setRankData(data);
-            } catch (err) {
-                console.error('加载排行榜失败:', err);
-            } finally {
-                setLoading(false);
-            }
-        });
-    }, [activeRank]);
+        queueMicrotask(refresh);
+    }, [activeRank, refresh]);
 
     const getRankIcon = (rank: number) => {
         if (rank === 1) return '🥇';
@@ -72,7 +55,9 @@ export default function RankPage() {
             <div className="bg-gray-800 rounded-lg overflow-hidden">
                 {loading ? (
                     <div className="text-center py-8">加载中...</div>
-                ) : rankData.length === 0 ? (
+                ) : error ? (
+                    <div className="text-center py-8 text-red-400">{error}</div>
+                ) : !rankData || rankData.length === 0 ? (
                     <div className="text-center py-8 text-gray-500">暂无数据</div>
                 ) : (
                     <div className="divide-y divide-gray-700">

@@ -1,174 +1,102 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import api, { GameState, GuildBossResult, ShopItem } from '@/lib/api';
-
-interface Guild {
-    id: number;
-    name: string;
-    leaderId: number;
-    level: number;
-    exp: number;
-    memberCount: number;
-    maxMembers: number;
-    notice: string | null;
-    createdAt: string;
-}
+import { useCallback, useEffect, useState } from 'react';
+import api, { GuildBossResult, GuildSummary, ShopItem } from '@/lib/api';
+import { useGameData } from '@/lib/hooks';
 
 export default function GuildPage() {
-    const [gameState, setGameState] = useState<GameState | null>(null);
-    const [guilds, setGuilds] = useState<Guild[]>([]);
-    const [myGuild, setMyGuild] = useState<Guild | null>(null);
-    const [message, setMessage] = useState('');
-    const [loading, setLoading] = useState(false);
+    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
+    const [guilds, setGuilds] = useState<GuildSummary[]>([]);
+    const [myGuild, setMyGuild] = useState<GuildSummary | null>(null);
     const [showCreateForm, setShowCreateForm] = useState(false);
     const [newGuildName, setNewGuildName] = useState('');
     const [donationAmount, setDonationAmount] = useState(500);
     const [guildShopItems, setGuildShopItems] = useState<ShopItem[]>([]);
     const [bossResult, setBossResult] = useState<GuildBossResult | null>(null);
 
-    async function loadGameState() {
+    const loadGuilds = useCallback(async () => {
         try {
-            const state = await api.getGameState();
-            setGameState(state);
-        } catch (err) {
-            console.error('加载游戏状态失败:', err);
-        }
-    }
-
-    async function loadGuilds() {
-        try {
-            const guildList = await api.getGuildList();
-            setGuilds(guildList);
-            try {
-                const myGuildData = await api.getMyGuild();
-                if (myGuildData && typeof myGuildData === 'object' && 'id' in myGuildData) {
-                    setMyGuild(myGuildData as unknown as Guild);
-                } else {
-                    setMyGuild(null);
-                }
-            } catch {
-                setMyGuild(null);
-            }
+            setGuilds(await api.getGuildList());
         } catch (err) {
             console.error('加载宗门列表失败:', err);
         }
-    }
+        try {
+            // 后端 /guild/my 返回 {joined, guild}，未加入时 guild 为 null
+            const res = await api.getMyGuild();
+            setMyGuild(res.joined ? res.guild : null);
+        } catch (err) {
+            console.error('加载我的宗门失败:', err);
+            setMyGuild(null);
+        }
+    }, []);
 
-    async function loadGuildShop() {
+    const loadGuildShop = useCallback(async () => {
         try {
             setGuildShopItems(await api.getGuildShopItems());
         } catch (err) {
             console.error('加载宗门商店失败:', err);
         }
-    }
+    }, []);
 
     useEffect(() => {
         queueMicrotask(() => {
-            loadGameState();
             loadGuilds();
             loadGuildShop();
         });
-    }, []);
+    }, [loadGuilds, loadGuildShop]);
 
-    const handleCreateGuild = async () => {
-        if (!newGuildName.trim()) {
-            setMessage('请输入宗门名称');
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const resp = await api.createGuild(newGuildName);
-            if (resp && resp.guild) {
-                setMyGuild(resp.guild as unknown as Guild);
-            }
+    const handleCreateGuild = () => runAction(
+        () => api.createGuild(newGuildName),
+        (resp) => {
+            if (resp.guild) setMyGuild(resp.guild);
             setMessage('宗门创建成功！');
             setShowCreateForm(false);
             setNewGuildName('');
-            await loadGuilds();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '创建失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+        },
+        '创建失败',
+    ).then(loadGuilds);
 
-    const handleJoinGuild = async (guildId: number) => {
+    const handleJoinGuild = (guildId: number) => {
         if (myGuild) {
             setMessage('请先退出当前宗门，再加入其他宗门');
-            return;
+            return Promise.resolve();
         }
-
-        setLoading(true);
-        try {
-            await api.joinGuild(guildId);
-            setMessage('加入宗门成功！');
-            await loadGuilds();
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '加入失败');
-        } finally {
-            setLoading(false);
-        }
+        return runAction(
+            () => api.joinGuild(guildId),
+            () => setMessage('加入宗门成功！'),
+            '加入失败',
+        ).then(loadGuilds);
     };
 
-    const handleLeaveGuild = async () => {
-        setLoading(true);
-        try {
-            await api.leaveGuild();
+    const handleLeaveGuild = () => runAction(
+        () => api.leaveGuild(),
+        () => {
             setMessage('已退出宗门');
             setMyGuild(null);
-            await loadGuilds();
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '退出失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+        },
+        '退出失败',
+    ).then(loadGuilds);
 
-    const handleDonate = async () => {
-        setLoading(true);
-        try {
-            const result = await api.donateGuild(donationAmount);
-            setMessage(result.message);
-            await loadGuilds();
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '捐献失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+    const handleDonate = () => runAction(
+        () => api.donateGuild(donationAmount),
+        (result) => setMessage(result.message),
+        '捐献失败',
+    ).then(loadGuilds);
 
-    const handleChallengeBoss = async () => {
-        setLoading(true);
-        try {
-            const result = await api.challengeGuildBoss();
+    const handleChallengeBoss = () => runAction(
+        () => api.challengeGuildBoss(),
+        (result) => {
             setBossResult(result);
             setMessage(`${result.message}，获得 ${result.goldGained} 金币、${result.bossCoinGained} Boss币和 1 件装备`);
-            await loadGuilds();
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '挑战失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+        },
+        '挑战失败',
+    ).then(loadGuilds);
 
-    const handleBuyGuildItem = async (itemId: number) => {
-        setLoading(true);
-        try {
-            const result = await api.buyGuildShopItem(itemId);
-            setMessage(result.message);
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '购买失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+    const handleBuyGuildItem = (itemId: number) => runAction(
+        () => api.buyGuildShopItem(itemId),
+        (result) => setMessage(result.message),
+        '购买失败',
+    );
 
     if (!gameState) {
         return <div className="text-center py-8">加载中...</div>;
@@ -301,7 +229,7 @@ export default function GuildPage() {
                         <h2 className="text-lg font-semibold mb-3 text-green-400">宗门商店</h2>
                         <div className="space-y-3">
                             {guildShopItems.map((item) => (
-                                <div key={item.id} className="bg-gray-700 rounded p-3 border border-gray-600">
+                                <div key={`${item.id}-${item.name}`} className="bg-gray-700 rounded p-3 border border-gray-600">
                                     <div className="font-semibold">{item.name}</div>
                                     <p className="text-sm text-gray-200">{item.description}</p>
                                     <div className="mt-2 flex items-center justify-between text-sm">
@@ -379,7 +307,7 @@ export default function GuildPage() {
             <div className="bg-gray-800 rounded-lg p-4 border border-gray-600">
                 <h3 className="font-semibold mb-2">宗门说明</h3>
                 <ul className="text-sm text-gray-100 space-y-1">
-                    <li>• 创建宗门需要消耗金币</li>
+                    <li>• 创建宗门需要达到 30 级并消耗 10000 金币</li>
                     <li>• 宗门成员可以一起参与宗门活动</li>
                     <li>• 宗门等级越高，可容纳成员越多</li>
                     <li>• 宗门捐献可提升宗门等级</li>

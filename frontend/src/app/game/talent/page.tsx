@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import api, { GameState } from '@/lib/api';
+import api from '@/lib/api';
+import { useGameData } from '@/lib/hooks';
 
 const TALENT_BRANCHES = [
     { id: 'WAR_GOD', name: '战神', icon: '⚔️', description: '提升战斗能力' },
@@ -10,36 +10,17 @@ const TALENT_BRANCHES = [
     { id: 'DIVINE', name: '神圣', icon: '✨', description: '提升特殊能力' },
 ];
 
+// 与后端 TalentBranch.maxLevel 保持一致
+const TALENT_MAX_LEVEL = 3;
+
 export default function TalentPage() {
-    const [gameState, setGameState] = useState<GameState | null>(null);
-    const [message, setMessage] = useState('');
-    const [loading, setLoading] = useState(false);
+    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
 
-    async function loadGameState() {
-        try {
-            const state = await api.getGameState();
-            setGameState(state);
-        } catch (err) {
-            console.error('加载游戏状态失败:', err);
-        }
-    }
-
-    useEffect(() => {
-        queueMicrotask(loadGameState);
-    }, []);
-
-    const handleUpgradeTalent = async (branch: string) => {
-        setLoading(true);
-        try {
-            await api.upgradeTalent(branch);
-            setMessage('天赋升级成功！');
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '升级失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+    const handleUpgradeTalent = (branch: string) => runAction(
+        () => api.upgradeTalent(branch),
+        () => setMessage('天赋升级成功！'),
+        '升级失败',
+    );
 
     if (!gameState) {
         return <div className="text-center py-8">加载中...</div>;
@@ -67,7 +48,7 @@ export default function TalentPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {TALENT_BRANCHES.map((branch) => {
                     const currentLevel = talents[branch.id] || 0;
-                    const maxLevel = 10;
+                    const maxLevel = TALENT_MAX_LEVEL;
                     const canUpgrade = talentPoints > 0 && currentLevel < maxLevel;
 
                     return (

@@ -56,9 +56,8 @@ const WIKI_CATEGORIES = [
         title: '魂核系统',
         icon: '💎',
         content: [
-            { name: '攻击魂核', type: 'ATTACK', description: '提升攻击相关属性' },
-            { name: '防御魂核', type: 'DEFENSE', description: '提升防御相关属性' },
-            { name: '辅助魂核', type: 'UTILITY', description: '提升辅助相关属性' },
+            { name: '左魂核', slot: 0, description: '左侧魂核槽位，装备任意魂核提供被动加成' },
+            { name: '右魂核', slot: 1, description: '右侧魂核槽位，装备任意魂核提供被动加成' },
         ]
     },
     {
@@ -136,12 +135,7 @@ export default function WikiPage() {
                                             槽位 {item.slot + 1}
                                         </span>
                                     )}
-                                    {'type' in item && (
-                                        <span className="bg-green-600 px-2 py-1 rounded text-sm">
-                                            {item.type}
-                                        </span>
-                                    )}
-                                    {'id' in item && !('year' in item) && !('slot' in item) && !('type' in item) && (
+                                    {'id' in item && !('year' in item) && !('slot' in item) && (
                                         <span className="bg-gray-600 px-2 py-1 rounded text-sm">
                                             地图 {item.id + 1}
                                         </span>

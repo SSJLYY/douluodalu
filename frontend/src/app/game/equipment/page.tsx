@@ -1,33 +1,37 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import api, { GameState, EquippedRing, EquippedBone, EquippedCore, BackpackItem } from '@/lib/api';
+import { useState } from 'react';
+import api, { BackpackItem } from '@/lib/api';
+import { useGameData } from '@/lib/hooks';
 
 const YEAR_NAMES = ['百年', '千年', '万年', '十万年', '百万年'];
 const QUALITY_NAMES = ['劣等', '普通', '优秀', '精良', '完美'];
 const BONE_TYPE_NAMES = ['头骨', '左臂骨', '右臂骨', '躯干骨', '左腿骨', '右腿骨'];
+// 后端魂核槽位：slotIndex 0=LEFT(左) 1=RIGHT(右)
+const CORE_SLOTS = [
+    { slotIndex: 0, slotType: 'LEFT', name: '左魂核' },
+    { slotIndex: 1, slotType: 'RIGHT', name: '右魂核' },
+];
 
 export default function EquipmentPage() {
-    const [gameState, setGameState] = useState<GameState | null>(null);
+    const { gameState, message, setMessage, refresh } = useGameData();
     const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-    const [message, setMessage] = useState('');
 
-    async function loadGameState() {
-        try {
-            const state = await api.getGameState();
-            setGameState(state);
-        } catch (err) {
-            console.error('加载游戏状态失败:', err);
-        }
+    if (!gameState) {
+        return <div className="text-center py-8">加载中...</div>;
     }
-
-    useEffect(() => {
-        queueMicrotask(loadGameState);
-    }, []);
 
     function showMessage(text: string) {
         setMessage(text);
         setTimeout(() => setMessage(''), 3000);
+    }
+
+    /**
+     * 后端按「同类型子列表中的下标」定位背包物品（GameService 按创建时间排序），
+     * 因此这里以 /api/game/state 返回的 backpackItems 顺序为准计算索引。
+     */
+    function indexOfBackpackType(itemType: string, itemId: number): number {
+        return gameState!.backpackItems.filter((i) => i.itemType === itemType).findIndex((i) => i.id === itemId);
     }
 
     async function handleEquip(item: BackpackItem) {
@@ -35,7 +39,8 @@ export default function EquipmentPage() {
             showMessage('请先点击上方装备槽位选择目标位置');
             return;
         }
-        const slotType = selectedSlot.split('-')[0];
+        const [slotType, ...rest] = selectedSlot.split('-');
+        const slotValue = Number(rest.join('-'));
         if (slotType === 'ring' && item.itemType !== 'RING') {
             showMessage('该槽位只能装备魂环');
             return;
@@ -49,17 +54,16 @@ export default function EquipmentPage() {
             return;
         }
         try {
-            const slotValue = selectedSlot.split('-').slice(1).join('-');
             if (slotType === 'ring') {
-                await api.equipRing(item.id, Number(slotValue));
+                await api.equipRing(indexOfBackpackType('RING', item.id), slotValue);
             } else if (slotType === 'bone') {
-                await api.equipBone(item.id, Number(slotValue));
+                await api.equipBone(indexOfBackpackType('BONE', item.id), slotValue);
             } else {
-                await api.equipCore(item.id, slotValue);
+                await api.equipCore(indexOfBackpackType('CORE', item.id), slotValue);
             }
             showMessage('装备成功');
             setSelectedSlot(null);
-            await loadGameState();
+            await refresh();
         } catch (err: unknown) {
             showMessage(err instanceof Error ? err.message : '装备失败');
         }
@@ -67,18 +71,18 @@ export default function EquipmentPage() {
 
     async function handleUnequip(slotKey: string) {
         const [type, ...rest] = slotKey.split('-');
-        const slotValue = rest.join('-');
+        const slotValue = Number(rest.join('-'));
         try {
             if (type === 'ring') {
-                await api.unequipRing(Number(slotValue));
+                await api.unequipRing(slotValue);
             } else if (type === 'bone') {
-                await api.unequipBone(Number(slotValue));
+                await api.unequipBone(slotValue);
             } else if (type === 'core') {
                 await api.unequipCore(slotValue);
             }
             showMessage('已卸下装备，放回背包');
             setSelectedSlot(null);
-            await loadGameState();
+            await refresh();
         } catch (err: unknown) {
             showMessage(err instanceof Error ? err.message : '卸下失败');
         }
@@ -92,20 +96,16 @@ export default function EquipmentPage() {
         }
     }
 
-    if (!gameState) {
-        return <div className="text-center py-8">加载中...</div>;
-    }
-
-    const getRingInfo = (ring: EquippedRing) => {
+    const getRingInfo = (ring: { yearOrdinal: number; qualityOrdinal: number; percentage: number }) => {
         return `${YEAR_NAMES[ring.yearOrdinal] || '?'} ${QUALITY_NAMES[ring.qualityOrdinal] || '?'} (${ring.percentage}年)`;
     };
 
-    const getBoneInfo = (bone: EquippedBone) => {
+    const getBoneInfo = (bone: { yearOrdinal: number; enhanceLevel: number }) => {
         return `${YEAR_NAMES[bone.yearOrdinal] || '?'} +${bone.enhanceLevel}`;
     };
 
-    const getCoreInfo = (core: EquippedCore) => {
-        return `${core.coreName} Lv.${core.coreLevel}`;
+    const getCoreInfo = (core: { coreName: string; value: number; level: number }) => {
+        return `${core.coreName} +${core.value} Lv.${core.level}`;
     };
 
     return (
@@ -179,21 +179,20 @@ export default function EquipmentPage() {
                 </div>
 
                 <div className="bg-gray-800 rounded-lg p-4">
-                    <h2 className="text-lg font-semibold mb-4 text-green-400">魂核 (3槽位)</h2>
+                    <h2 className="text-lg font-semibold mb-4 text-green-400">魂核 (2槽位)</h2>
                     <div className="space-y-2">
-                        {['ATTACK', 'DEFENSE', 'UTILITY'].map((slotType) => {
-                            const core = gameState.equippedCores.find(c => c.slotType === slotType);
-                            const slotKey = `core-${slotType}`;
-                            const slotName = slotType === 'ATTACK' ? '攻击' : slotType === 'DEFENSE' ? '防御' : '辅助';
+                        {CORE_SLOTS.map((slot) => {
+                            const core = gameState.equippedCores.find(c => c.slotType === slot.slotType);
+                            const slotKey = `core-${slot.slotIndex}`;
                             return (
                                 <div
-                                    key={slotType}
+                                    key={slot.slotType}
                                     className={`p-3 rounded cursor-pointer ${
                                         core ? 'bg-green-900 border border-green-600' : 'bg-gray-700'
                                     } ${selectedSlot === slotKey ? 'ring-2 ring-yellow-400' : ''}`}
                                     onClick={() => handleSlotClick(slotKey, Boolean(core))}
                                 >
-                                    <div className="text-xs text-gray-400">{slotName}魂核</div>
+                                    <div className="text-xs text-gray-400">{slot.name}</div>
                                     {core ? (
                                         <div className="text-green-300">{getCoreInfo(core)}</div>
                                     ) : (

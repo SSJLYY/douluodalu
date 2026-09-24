@@ -1,24 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import api, { GameState, ShopItem, LimitedShopItem } from '@/lib/api';
+import api, { ShopItem } from '@/lib/api';
+import { useGameData } from '@/lib/hooks';
 
 export default function ShopPage() {
-    const [gameState, setGameState] = useState<GameState | null>(null);
+    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
     const [bossItems, setBossItems] = useState<ShopItem[]>([]);
-    const [limitedItems, setLimitedItems] = useState<LimitedShopItem[]>([]);
+    const [limitedItems, setLimitedItems] = useState<ShopItem[]>([]);
     const [activeTab, setActiveTab] = useState<'boss' | 'limited'>('boss');
-    const [message, setMessage] = useState('');
-    const [loading, setLoading] = useState(false);
-
-    async function loadGameState() {
-        try {
-            const state = await api.getGameState();
-            setGameState(state);
-        } catch (err) {
-            console.error('加载游戏状态失败:', err);
-        }
-    }
 
     async function loadShopItems() {
         try {
@@ -34,47 +24,30 @@ export default function ShopPage() {
     }
 
     useEffect(() => {
-        queueMicrotask(() => {
-            loadGameState();
-            loadShopItems();
-        });
+        queueMicrotask(loadShopItems);
     }, []);
 
-    const handleBuyBossItem = async (itemId: number) => {
-        setLoading(true);
-        try {
-            await api.buyBossShopItem(itemId);
-            setMessage('购买成功！');
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '购买失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+    const handleBuyBossItem = (itemId: number) => runAction(
+        () => api.buyBossShopItem(itemId),
+        () => setMessage('购买成功！'),
+        '购买失败',
+    );
 
-    const handleBuyLimitedItem = async (itemId: number) => {
-        setLoading(true);
-        try {
-            await api.buyLimitedShopItem(itemId);
-            setMessage('购买成功！');
-            await loadGameState();
-        } catch (err: unknown) {
-            setMessage(err instanceof Error ? err.message : '购买失败');
-        } finally {
-            setLoading(false);
-        }
-    };
+    const handleBuyLimitedItem = (itemId: number) => runAction(
+        () => api.buyLimitedShopItem(itemId),
+        (result) => setMessage(`${result.message}！`),
+        '购买失败',
+    );
 
     if (!gameState) {
         return <div className="text-center py-8">加载中...</div>;
     }
 
-    const canAfford = (item: ShopItem) => item.currency === 'GOLD'
+    const canAfford = (item: ShopItem) => item.currencyType === 'GOLD'
         ? gameState.profile.gold >= item.price
         : gameState.profile.bossCoin >= item.price;
 
-    const currencyLabel = (item: ShopItem) => item.currency === 'GOLD' ? '金币' : 'Boss币';
+    const currencyLabel = (item: ShopItem) => item.currencyType === 'GOLD' ? '金币' : 'Boss币';
 
     return (
         <div className="space-y-6">
@@ -164,7 +137,8 @@ export default function ShopPage() {
                                     <h3 className="font-semibold text-lg">{item.name}</h3>
                                     <p className="text-gray-400 text-sm mt-1">{item.description}</p>
                                     <div className="mt-2 text-xs text-gray-500">
-                                        刷新时间: {new Date(item.refreshTime).toLocaleString()}
+                                        {item.requiresLevel > 1 && <span className="mr-3">需 {item.requiresLevel} 级</span>}
+                                        {item.stock >= 0 ? `限购 ${item.stock} 件` : '不限购'}
                                     </div>
                                     <div className="mt-4 flex justify-between items-center">
                                         <div className="flex items-center gap-2">
@@ -197,7 +171,7 @@ export default function ShopPage() {
                 <h3 className="font-semibold mb-2">商店说明</h3>
                 <ul className="text-sm text-gray-300 space-y-1">
                     <li>• Boss商店：使用Boss币购买稀有物品</li>
-                    <li>• 限时珍品：定时刷新的稀有装备</li>
+                    <li>• 限时珍品：限量抢购的稀有装备，售完即止</li>
                     <li>• Boss币通过击败Boss获得</li>
                     <li>• 购买前请确认有足够的货币</li>
                 </ul>
