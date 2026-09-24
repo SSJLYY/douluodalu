@@ -124,7 +124,7 @@ object MartialSoulPool {
             }
         }
         val total = weights.sum()
-        var rand = Math.random() * total
+        var rand = Random.nextDouble() * total
         for (i in pool.indices) { rand -= weights[i]; if (rand <= 0) return pool[i] }
         return pool.first()
     }
@@ -140,7 +140,7 @@ object MartialSoulPool {
             }
         }
         val total = weights.sum()
-        var rand = Math.random() * total
+        var rand = Random.nextDouble() * total
         for (i in effectivePool.indices) { rand -= weights[i]; if (rand <= 0) return effectivePool[i] }
         return effectivePool.first()
     }

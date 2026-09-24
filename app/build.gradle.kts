@@ -67,6 +67,11 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+    // AGP 8.7.3 的 NonNullableMutableLiveData lint 检测器在本工程 Kotlin 2.1.20 下内部崩溃
+    // (IncompatibleClassChangeError)，仅关闭这一条检测（lint 官方建议的处置方式）
+    lint {
+        disable += "NullSafeMutableLiveData"
+    }
 }
 
 dependencies {

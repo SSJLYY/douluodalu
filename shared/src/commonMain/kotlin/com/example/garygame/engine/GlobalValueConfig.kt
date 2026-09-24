@@ -2,6 +2,8 @@ package com.example.garygame.engine
 
 import com.example.garygame.platform.GameJsonObject
 import com.example.garygame.platform.PlatformStorage
+import com.example.garygame.platform.PlatformTime
+import kotlin.math.pow
 
 /**
  * 《斗罗大陆·放置传说 V5》全局数值统筹配置库
@@ -244,7 +246,7 @@ object GlobalValueConfig {
             val startTime: Long,
             val durationMs: Long
         ) {
-            fun isActive(): Boolean = System.currentTimeMillis() < startTime + durationMs
+            fun isActive(): Boolean = PlatformTime.currentTimeMillis() < startTime + durationMs
             fun getCurrentMultiplier(): Float = if (isActive()) multiplier else 1.0f
         }
         
@@ -254,7 +256,7 @@ object GlobalValueConfig {
         fun activateEvent(mult: Float, durationDays: Int) {
             currentEvent = TemporaryBoost(
                 multiplier = mult,
-                startTime = System.currentTimeMillis(),
+                startTime = PlatformTime.currentTimeMillis(),
                 durationMs = durationDays * 24 * 3600 * 1000L
             )
         }
@@ -319,7 +321,7 @@ object GlobalValueConfig {
     
     /** 计算突破所需魂力 */
     fun getBreakthroughCost(level: Int): Long {
-        return (Realm.SOUL_POWER_BASE * Math.pow(level.toDouble(), Realm.SOUL_POWER_EXPONENT)).toLong()
+        return (Realm.SOUL_POWER_BASE * level.toDouble().pow(Realm.SOUL_POWER_EXPONENT)).toLong()
     }
     
     /** 获取地图难度系数 */

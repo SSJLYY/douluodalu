@@ -1,5 +1,8 @@
 package com.example.garygame.engine
 
+import kotlin.math.pow
+import kotlin.math.roundToInt
+
 /**
  * 资源消耗影响分析工具
  * 
@@ -14,7 +17,7 @@ object ResourceImpactAnalyzer {
         var totalCost = 0L
         for (level in 0 until targetLevel) {
             val cost = GlobalValueConfig.ResourceSink.BONE_ENHANCE_BASE_COST * 
-                      Math.pow((level + 1).toDouble(), GlobalValueConfig.ResourceSink.BONE_ENHANCE_EXPONENT.toDouble()).toLong()
+                      (level + 1).toDouble().pow(GlobalValueConfig.ResourceSink.BONE_ENHANCE_EXPONENT.toDouble()).toLong()
             totalCost += cost
         }
         return totalCost
@@ -25,7 +28,7 @@ object ResourceImpactAnalyzer {
      */
     fun calculateRingAbsorbCost(ringYear: Int, ringQuality: Int): Long {
         // 年份系数：百年=1, 千年=10, 万年=100, 十万年=1000, 百万年=10000
-        val yearMult = Math.pow(10.0, ringYear.toDouble()).toLong()
+        val yearMult = 10.0.pow(ringYear.toDouble()).toLong()
         
         // 品质系数：劣等=1, 普通=1.5, 精良=2, 优秀=3, 完美=5
         val qualityMult = when (ringQuality) {
@@ -119,7 +122,7 @@ data class ResourceImpactReport(
         println("  总收入: ${formatNumber(totalEarned)} 金币")
         println("  总支出: ${formatNumber(totalSpent)} 金币")
         println("  最终余额: ${formatNumber(finalBalance)} 金币")
-        println("  支出占比: ${String.format("%.1f", impactPercentage)}%")
+        println("  支出占比: ${oneDecimal(impactPercentage.toDouble())}%")
         
         println("\n【对游戏时间的影响】")
         if (impactPercentage < 50f) {
@@ -153,9 +156,15 @@ data class ResourceImpactReport(
     
     private fun formatNumber(num: Long): String {
         return when {
-            num >= 100000000 -> String.format("%.1f亿", num / 100000000.0)
-            num >= 10000 -> String.format("%.1f万", num / 10000.0)
+            num >= 100000000 -> oneDecimal(num / 100000000.0) + "亿"
+            num >= 10000 -> oneDecimal(num / 10000.0) + "万"
             else -> num.toString()
         }
+    }
+
+    /** common 无 String.format("%.1f")，此处为保留一位小数的等价实现 */
+    private fun oneDecimal(v: Double): String {
+        val scaled = (v * 10).roundToInt()
+        return "${scaled / 10}.${ kotlin.math.abs(scaled % 10) }"
     }
 }

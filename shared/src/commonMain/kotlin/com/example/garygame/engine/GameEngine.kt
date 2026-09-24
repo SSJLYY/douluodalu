@@ -424,11 +424,11 @@ object GameEngine {
         }
 
         // 卡级修炼凝练属性加成
-        val capHpLv = s.capStatLevels.getOrDefault("hp", 0)
-        val capAtkLv = s.capStatLevels.getOrDefault("atk", 0)
-        val capMatkLv = s.capStatLevels.getOrDefault("matk", 0)
-        val capPdefLv = s.capStatLevels.getOrDefault("pdef", 0)
-        val capMdefLv = s.capStatLevels.getOrDefault("mdef", 0)
+        val capHpLv = s.capStatLevels["hp"] ?: 0
+        val capAtkLv = s.capStatLevels["atk"] ?: 0
+        val capMatkLv = s.capStatLevels["matk"] ?: 0
+        val capPdefLv = s.capStatLevels["pdef"] ?: 0
+        val capMdefLv = s.capStatLevels["mdef"] ?: 0
         maxHp += capHpLv * 50L
         atk += capAtkLv * 10
         matk += capMatkLv * 8
@@ -1567,7 +1567,7 @@ object GameEngine {
         if (excess > 0) {
             val statGain = (excess / 2000).toInt().coerceIn(1, 10)
             for (key in listOf("hp", "atk", "matk", "pdef", "mdef")) {
-                state.capStatLevels[key] = state.capStatLevels.getOrDefault(key, 0) + statGain
+                state.capStatLevels[key] = (state.capStatLevels[key] ?: 0) + statGain
             }
             val goldRefund = (excess % 2000) * 10L
             state.gold += goldRefund; state.totalGoldEarned += goldRefund
@@ -1620,7 +1620,7 @@ object GameEngine {
         if (s.excessSoulPower < 100) {
             addLog("超额魂力不足，需要至少100超额魂力"); notifyUI(); return false
         }
-        val curLv = s.capStatLevels.getOrDefault(statKey, 0)
+        val curLv = s.capStatLevels[statKey] ?: 0
         val cost = (100L + curLv * 80L).coerceAtMost(50000L)
         if (s.excessSoulPower < cost) {
             addLog("超额魂力不足，${statDisplayName(statKey)}凝练 Lv.${curLv + 1} 需要 ${formatNum(cost)}")
@@ -1674,7 +1674,7 @@ object GameEngine {
     fun maxBatchForStat(statKey: String): Int {
         var count = 0
         var remaining = state.excessSoulPower
-        var curLv = state.capStatLevels.getOrDefault(statKey, 0)
+        var curLv = state.capStatLevels[statKey] ?: 0
         while (remaining >= 100) {
             val cost = (100L + curLv * 80L).coerceAtMost(50000L)
             if (remaining < cost) break
@@ -1693,7 +1693,7 @@ object GameEngine {
         var successCount = 0
         var totalCost = 0L
         for (i in 0 until times) {
-            val curLv = s.capStatLevels.getOrDefault(statKey, 0)
+            val curLv = s.capStatLevels[statKey] ?: 0
             val cost = (100L + curLv * 80L).coerceAtMost(50000L)
             if (s.excessSoulPower < cost) break
             s.excessSoulPower -= cost
@@ -3119,21 +3119,21 @@ object GameEngine {
                 s.backpackRings.clear()
                 s.backpackBones.clear()
                 s.backpackSoulCores.clear()
-                s.equippedSoulCores.replaceAll { _, _ -> null }
+                for (slot in s.equippedSoulCores.keys.toList()) s.equippedSoulCores[slot] = null
             }
             1 -> {
                 s.martialSoul = null
                 // chosenSchool 保留，转生后可重选流派
                 s.backpackBones.clear()
                 s.backpackSoulCores.clear()
-                s.equippedSoulCores.replaceAll { _, _ -> null }
+                for (slot in s.equippedSoulCores.keys.toList()) s.equippedSoulCores[slot] = null
                 // 背包魂环保留
             }
             2 -> {
                 s.martialSoul = null
                 // chosenSchool 保留
                 s.backpackSoulCores.clear()
-                s.equippedSoulCores.replaceAll { _, _ -> null }
+                for (slot in s.equippedSoulCores.keys.toList()) s.equippedSoulCores[slot] = null
                 // 背包魂环+魂骨保留
             }
             3 -> { /* 全部保留 */ }
