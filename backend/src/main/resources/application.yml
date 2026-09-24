@@ -69,10 +69,33 @@ logging:
     org.hibernate.SQL: ${HIBERNATE_SQL_LOG:WARN}
 
 # ==================== Springdoc OpenAPI ====================
+# 默认（dev/联调）开启并匿名可访问；生产由 application-prod.yml 关闭
+# （SecurityConfig 中文档路径的放行与本开关联动）
 springdoc:
   api-docs:
     path: /v3/api-docs
+    enabled: ${SPRINGDOC_ENABLED:true}
   swagger-ui:
     path: /swagger-ui.html
     tags-sorter: alpha
     operations-sorter: alpha
+
+# ==================== Actuator 监控端点 ====================
+# 显式暴露清单：Web 层仅开放 health（存活探针，SecurityConfig 已放行）与 info；
+# env/beans/configprops/mappings/heapdump/threats 等敏感端点一律不暴露
+# （Spring Boot 3 默认也仅暴露 health，此处写明以防升级后默认值变化）。
+# health 详情默认不脱敏展示给未认证请求（when_authorized：仅认证后可见 db 明细）。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when_authorized
+      show-components: when_authorized
+  info:
+    env:
+      enabled: false

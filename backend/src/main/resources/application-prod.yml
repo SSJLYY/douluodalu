@@ -1,0 +1,24 @@
+# ==================== 生产环境 profile（SPRING_PROFILES_ACTIVE=prod）====================
+# 与 application.yml 叠加，仅覆盖生产加固项。
+
+# 1) 彻底关闭 API 文档：/v3/api-docs、/swagger-ui.html 返回 404；
+#    SecurityConfig 检测到 springdoc.api-docs.enabled=false 后不再匿名放行文档路径
+#    （即使有人再手工开启，路径也落在 anyRequest().authenticated() 之内）。
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+# 2) Actuator 生产暴露清单：仅 health（存活探针，供负载均衡/容器探活）。
+#    info 也不暴露；metrics/env/beans/configprops 等保持默认关闭。
+#    health 对外仅返回 {"status":"UP"} 级别信息，不泄露 DB/组件明细。
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
