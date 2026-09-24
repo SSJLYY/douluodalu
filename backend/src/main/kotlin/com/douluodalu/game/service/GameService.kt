@@ -123,7 +123,9 @@ class GameService(
             achievements = emptyList(),
             power = EquipmentPowerService.powerOf(profile.level, bonus),
             ringLoad = RingLoadCalculator.totalRingLoad(rings),
-            capacity = absorptionCapacityFor(profile, bonus)
+            capacity = absorptionCapacityFor(profile, bonus),
+            // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库）
+            powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores)
         )
     }
 
@@ -329,7 +331,10 @@ class GameService(
             else -> "RING"
         }
         val qualityOrdinal = min(4, level / 8 + Random.nextInt(3))
-        val yearOrdinal = min(4, level / 12 + Random.nextInt(2))
+        // 任务#22：魂环年份封顶 TOWER_RING_DROP_YEAR_CAP（塔环死掉落治理，见 GameBalance 注释）；
+        // 魂骨/魂核不占负荷、战力档位保留原曲线。RNG 消耗次序与原实现一致（先抽后截断）。
+        val yearRoll = level / 12 + Random.nextInt(2)
+        val yearOrdinal = if (itemType == "RING") min(GameBalance.TOWER_RING_DROP_YEAR_CAP, yearRoll) else min(4, yearRoll)
         val item = BackpackItemEntity(
             userId = userId,
             itemType = itemType,
@@ -427,7 +432,7 @@ class GameService(
         load = if (e.itemType == "RING") RingLoadCalculator.ringLoad(e.yearOrdinal, e.qualityOrdinal, e.percentage) else 0
     )
 
-    /** 玩家魂环吸收容量：根骨×6。攻击/生命与战斗结算同源（含装备加成），matk/pdef/mdef 后端未建模取 0 */
+    /** 玩家魂环吸收容量：根骨×GameBalance.RING_CAPACITY_ROOT_MULT。攻击/生命与战斗结算同源（含装备加成），matk/pdef/mdef 后端未建模取 0 */
     private fun absorptionCapacityFor(profile: PlayerProfileEntity, bonus: EquipmentBonus): Long =
         RingLoadCalculator.absorptionCapacity(
             RingLoadCalculator.calcRootBone(

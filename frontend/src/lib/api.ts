@@ -324,6 +324,28 @@ export interface GameState {
     ringLoad: number;
     /** 魂环吸收容量（=根骨×6）；装环超容量后端返回 400 */
     capacity: number;
+    /** 任务#23：战力明细（来源拆分；basePower+ringPower+bonePower+corePower == power） */
+    powerDetail: PowerDetail;
+}
+
+/**
+ * 对应后端 PowerDetailDto（任务#23）。
+ * 后端保证：ringAtk+boneAtk+coreAtk == 攻击加成总值、ringHp+boneHp == 生命加成总值、
+ * 四行 power* 求和 == power。魂核只加攻击（coreHp=0），玩家模型无基础生命（baseHp=0）。
+ */
+export interface PowerDetail {
+    baseAtk: number;
+    baseHp: number;
+    basePower: number;
+    ringAtk: number;
+    ringHp: number;
+    ringPower: number;
+    boneAtk: number;
+    boneHp: number;
+    bonePower: number;
+    coreAtk: number;
+    coreHp: number;
+    corePower: number;
 }
 
 export interface Profile {

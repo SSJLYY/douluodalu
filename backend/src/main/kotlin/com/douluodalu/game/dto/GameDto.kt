@@ -15,7 +15,35 @@ data class GameStateResponse(
     /** 当前已装备魂环总负荷（shared SoulRingSystem.calcRingLoad 逐件求和） */
     val ringLoad: Long = 0,
     /** 魂环吸收容量 = 根骨×6（超负荷装环会被 400 拒绝） */
-    val capacity: Long = 0
+    val capacity: Long = 0,
+    /** 任务#23：战力明细分解（攻击/生命按来源拆分，拆分求和与 power 严格一致） */
+    val powerDetail: PowerDetailDto = PowerDetailDto()
+)
+
+/**
+ * 战力明细（任务#23）。全部字段带默认值 0，向后兼容。
+ * 拆分不变量（EquipmentPowerService.detail 保证，测试断言）：
+ *  - ringAtk + boneAtk + coreAtk == EquipmentBonus.atkBonus
+ *  - ringHp + boneHp == EquipmentBonus.hpBonus（魂核只加攻击百分比，coreHp 恒为 0；
+ *    玩家模型无基础生命维度，baseHp 恒为 0，均为真实来源语义）
+ *  - basePower + ringPower + bonePower + corePower == power（powerOf 同式）
+ */
+data class PowerDetailDto(
+    /** 基础攻击 = PLAYER_ATK_BASE + level × PLAYER_ATK_PER_LEVEL */
+    val baseAtk: Long = 0,
+    val baseHp: Long = 0,
+    /** 基础行战力 = POWER_BASE + POWER_LEVEL_WEIGHT × level + baseAtk */
+    val basePower: Long = 0,
+    val ringAtk: Long = 0,
+    val ringHp: Long = 0,
+    /** 魂环战力贡献 = ringAtk + 魂环生命折算（余数按最大余数法分配，保证四行求和==power） */
+    val ringPower: Long = 0,
+    val boneAtk: Long = 0,
+    val boneHp: Long = 0,
+    val bonePower: Long = 0,
+    val coreAtk: Long = 0,
+    val coreHp: Long = 0,
+    val corePower: Long = 0
 )
 
 data class ProfileDto(

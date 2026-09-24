@@ -89,6 +89,72 @@ class EquipmentPowerServiceTest {
         assertTrue(strongOutcome.playerHpLeft > weakOutcome.playerHpLeft)
     }
 
+    // ======== 任务#23：战力明细拆分（拆分求和 == bonus/power 总值） ========
+
+    @Test
+    fun `power detail with empty equipment only has base row`() {
+        val d = EquipmentPowerService.detail(30, emptyList(), emptyList(), emptyList())
+        assertEquals(GameBalance.PLAYER_ATK_BASE + 30 * GameBalance.PLAYER_ATK_PER_LEVEL, d.baseAtk)
+        assertEquals(0L, d.baseHp)
+        assertEquals(0L, d.ringAtk); assertEquals(0L, d.ringHp); assertEquals(0L, d.ringPower)
+        assertEquals(0L, d.boneAtk); assertEquals(0L, d.boneHp); assertEquals(0L, d.bonePower)
+        assertEquals(0L, d.coreAtk); assertEquals(0L, d.coreHp); assertEquals(0L, d.corePower)
+        val power = EquipmentPowerService.powerOf(30, EquipmentBonus(0, 0))
+        assertEquals(power, d.basePower)
+    }
+
+    @Test
+    fun `power detail splits sum exactly to bonus and total power`() {
+        val level = 47
+        val rings = listOf(ring(year = 1, quality = 2, percentage = 137), ring(year = 3, quality = 1, percentage = 903), ring(year = 0, quality = 4, percentage = 47))
+        val bones = listOf(bone(year = 2, quality = 3, enhance = 5), bone(year = 4, quality = 0, enhance = 11))
+        val cores = listOf(core(rarity = 3, value = 173), core(rarity = 1, value = 61))
+        val b = EquipmentPowerService.bonus(level, rings, bones, cores)
+        val d = EquipmentPowerService.detail(level, rings, bones, cores)
+
+        // 攻击/生命拆分求和 == bonus 总值（含取整余数）
+        assertEquals(b.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "攻击拆分求和必须等于 atkBonus")
+        assertEquals(b.hpBonus, d.ringHp + d.boneHp, "生命拆分求和必须等于 hpBonus")
+        // 四行战力求和 == powerOf 总值
+        val power = EquipmentPowerService.powerOf(level, b)
+        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower, "战力明细四行求和必须等于总战力")
+        // 来源语义：魂核只加攻击、玩家模型无基础生命
+        assertEquals(0L, d.coreHp)
+        assertEquals(0L, d.baseHp)
+        assertEquals(d.coreAtk, d.corePower)
+        // 每行内部：战力贡献 = 攻击 + 生命折算（±1 内，折算余数按最大余数法归行）
+        assertTrue(d.ringPower in (d.ringAtk + d.ringHp / GameBalance.POWER_HP_DIVISOR).toLong()..(d.ringAtk + d.ringHp / GameBalance.POWER_HP_DIVISOR).toLong() + 1)
+        assertTrue(d.bonePower in (d.boneAtk + d.boneHp / GameBalance.POWER_HP_DIVISOR).toLong()..(d.boneAtk + d.boneHp / GameBalance.POWER_HP_DIVISOR).toLong() + 1)
+        // 基础行与 powerOf 常数项同式
+        assertEquals(GameBalance.POWER_BASE + GameBalance.POWER_LEVEL_WEIGHT * level + d.baseAtk, d.basePower)
+    }
+
+    @Test
+    fun `power detail split invariants hold across randomized equipment`() {
+        val rng = Random(20260923)
+        repeat(200) {
+            val level = rng.nextInt(1, 121)
+            val rings = List(rng.nextInt(0, 7)) {
+                ring(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), percentage = rng.nextInt(0, 1000))
+            }
+            val bones = List(rng.nextInt(0, 5)) {
+                bone(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), enhance = rng.nextInt(0, 13))
+            }
+            val cores = List(rng.nextInt(0, 3)) {
+                core(rarity = rng.nextInt(0, 5), value = rng.nextInt(1, 300))
+            }
+            val b = EquipmentPowerService.bonus(level, rings, bones, cores)
+            val d = EquipmentPowerService.detail(level, rings, bones, cores)
+            assertEquals(b.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "atk 拆分失衡: level=$level $rings $bones $cores")
+            assertEquals(b.hpBonus, d.ringHp + d.boneHp, "hp 拆分失衡: level=$level $rings $bones $cores")
+            assertEquals(
+                EquipmentPowerService.powerOf(level, b),
+                d.basePower + d.ringPower + d.bonePower + d.corePower,
+                "战力拆分失衡: level=$level $rings $bones $cores"
+            )
+        }
+    }
+
     // ======== P2：塔胜率修复 ========
 
     @Test
