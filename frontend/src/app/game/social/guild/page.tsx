@@ -1,11 +1,21 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import api, { GuildBossResult, GuildSummary, ShopItem } from '@/lib/api';
+import api, { GuildBossResult, GuildMemberInfo, GuildSummary, ShopItem } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
+import { useAuth } from '@/contexts/AuthContext';
 import { BootState, ErrorPanel, EmptyPanel } from '@/components/StateViews';
 
+/** ISO-8601 → 本地化「月-日 时:分」；解析失败原样截断，不让坏数据炸渲染 */
+function formatJoinedAt(iso: string): string {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return iso.slice(0, 16).replace('T', ' ');
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export default function GuildPage() {
+    const { user } = useAuth();
     const { gameState, message, setMessage, actionLoading: loading, loadError, refresh, runAction } = useGameData();
     const [guilds, setGuilds] = useState<GuildSummary[]>([]);
     const [myGuild, setMyGuild] = useState<GuildSummary | null>(null);
@@ -19,6 +29,25 @@ export default function GuildPage() {
     const [listError, setListError] = useState('');
     const [shopLoading, setShopLoading] = useState(true);
     const [shopError, setShopError] = useState('');
+    // 任务#28：成员列表（已加入视图）。membersError 与 listError 分开——成员查失败
+    // 不应把整个「我的宗门」卡打成错误态，降级为卡内错误+重试即可
+    const [members, setMembers] = useState<GuildMemberInfo[]>([]);
+    const [membersError, setMembersError] = useState('');
+
+    const loadMembers = useCallback(async (joined: boolean) => {
+        if (!joined) {
+            setMembers([]);
+            setMembersError('');
+            return;
+        }
+        try {
+            setMembers(await api.getGuildMembers());
+            setMembersError('');
+        } catch (err) {
+            setMembers([]);
+            setMembersError(err instanceof Error && err.message ? err.message : '加载成员列表失败');
+        }
+    }, []);
 
     const loadGuilds = useCallback(async () => {
         setListLoading(true);
@@ -32,12 +61,13 @@ export default function GuildPage() {
             // 后端 /guild/my 返回 {joined, guild}，未加入时 guild 为 null
             const res = await api.getMyGuild();
             setMyGuild(res.joined ? res.guild : null);
+            await loadMembers(res.joined && Boolean(res.guild));
         } catch (err) {
             setListError(err instanceof Error && err.message ? err.message : '加载我的宗门失败');
             setMyGuild(null);
         }
         setListLoading(false);
-    }, []);
+    }, [loadMembers]);
 
     const loadGuildShop = useCallback(async () => {
         setShopLoading(true);
@@ -88,6 +118,31 @@ export default function GuildPage() {
             setMyGuild(null);
         },
         '退出失败',
+    ).then(loadGuilds);
+
+    // 任务#28：管理按钮权限完全以服务端 members 行推导——
+    // isLeader 取 guild.leader_id 事实源；user.userId 未就绪时按钮一律不渲染（安全缺省）
+    const currentMember = members.find((m) => m.userId === user?.userId) ?? null;
+    const isLeader = Boolean(currentMember?.isLeader);
+    // 解散仅宗主且只剩自己时可用（与服务端 disband 校验同口径），否则禁用态给 title 说明
+    const canDisband = isLeader && members.length === 1;
+
+    const handleKickMember = (targetUserId: number) => runAction(
+        () => api.kickGuildMember(targetUserId),
+        (result) => setMessage(result.message),
+        '踢出失败',
+    ).then(loadGuilds);
+
+    const handleTransferLeader = (targetUserId: number) => runAction(
+        () => api.transferGuildLeader(targetUserId),
+        (result) => setMessage(result.message),
+        '转让失败',
+    ).then(loadGuilds);
+
+    const handleDisbandGuild = () => runAction(
+        () => api.disbandGuild(),
+        (result) => setMessage(result.message),
+        '解散失败',
     ).then(loadGuilds);
 
     const handleDonate = () => runAction(
@@ -152,6 +207,19 @@ export default function GuildPage() {
                         >
                             退出宗门
                         </button>
+                        {/* 任务#28：解散入口仅宗主可见；启用条件与服务端一致（只剩自己），
+                            禁用态用 title 说明原因（hover/长按可读到），避免用户盲点报错 */}
+                        {isLeader && (
+                            <button
+                                type="button"
+                                onClick={handleDisbandGuild}
+                                disabled={loading || !canDisband}
+                                title={canDisband ? '解散后宗门与成员记录将被清除' : '仅宗主可解散，且需宗门内只剩自己'}
+                                className="ml-2 mt-4 px-4 min-h-11 bg-gray-700 hover:bg-red-900/60 disabled:bg-gray-600 disabled:text-gray-300 disabled:hover:bg-gray-600 border border-red-800 disabled:border-gray-500 rounded text-sm font-medium"
+                            >
+                                解散宗门
+                            </button>
+                        )}
                     </div>
                 ) : listLoading ? (
                     <div aria-hidden data-testid="guild-my-skeleton" className="space-y-3">
@@ -171,6 +239,85 @@ export default function GuildPage() {
                     </div>
                 )}
             </div>
+
+            {/* 任务#28：成员列表卡（仅已加入时展示）。行内容 = 昵称/加入时间/贡献 + 宗主徽章；
+                宗主视角下其他成员行带「踢出/转让」，自己的行无管理按钮 */}
+            {myGuild && (
+                <div data-testid="guild-members-card" className="bg-gray-800 rounded-lg p-6 border border-gray-600">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-4">
+                        <h2 className="text-lg font-semibold">成员列表</h2>
+                        <span className="text-sm text-gray-200 tabular-nums">共 {members.length} 人</span>
+                    </div>
+                    {listLoading && members.length === 0 ? (
+                        <div aria-hidden data-testid="guild-members-skeleton" className="space-y-3">
+                            {Array.from({ length: Math.min(Math.max(myGuild.memberCount, 1), 5) }, (_, i) => (
+                                <div key={i} className="bg-gray-700 rounded-lg p-4 border border-gray-600">
+                                    <div className="dl-skeleton w-24 h-4" />
+                                    <div className="dl-skeleton w-40 h-3 mt-2" />
+                                </div>
+                            ))}
+                        </div>
+                    ) : membersError ? (
+                        <ErrorPanel message={membersError} onRetry={loadGuilds} testId="guild-members-error" />
+                    ) : members.length === 0 ? (
+                        <EmptyPanel message="暂无成员数据" testId="guild-members-empty" />
+                    ) : (
+                        <ul className="space-y-3">
+                            {members.map((member) => {
+                                const isSelf = member.userId === user?.userId;
+                                return (
+                                    <li
+                                        key={member.userId}
+                                        data-testid={`guild-member-row-${member.userId}`}
+                                        className={`bg-gray-700 rounded-lg p-4 border ${isSelf ? 'border-yellow-600' : 'border-gray-600'}`}
+                                    >
+                                        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="font-semibold break-words">{member.nickname}</span>
+                                                    {member.isLeader && (
+                                                        <span className="px-2 py-0.5 rounded bg-yellow-600/20 border border-yellow-600 text-yellow-400 text-xs shrink-0">
+                                                            宗主
+                                                        </span>
+                                                    )}
+                                                    {isSelf && (
+                                                        <span className="px-2 py-0.5 rounded bg-gray-600/40 border border-gray-500 text-gray-200 text-xs shrink-0">
+                                                            我
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-gray-200 text-sm mt-1 tabular-nums break-words">
+                                                    加入 {formatJoinedAt(member.joinedAt)} | 贡献 {member.contribution}
+                                                </p>
+                                            </div>
+                                            {isLeader && !isSelf && (
+                                                <div className="flex gap-2 shrink-0">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleTransferLeader(member.userId)}
+                                                        disabled={loading}
+                                                        className="px-3 min-h-11 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-600 rounded text-sm font-medium"
+                                                    >
+                                                        转让
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleKickMember(member.userId)}
+                                                        disabled={loading}
+                                                        className="px-3 min-h-11 bg-red-700 hover:bg-red-600 disabled:bg-gray-600 rounded text-sm font-medium"
+                                                    >
+                                                        踢出
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </div>
+            )}
 
             {/* 创建宗门表单 */}
             {showCreateForm && (
@@ -380,6 +527,7 @@ export default function GuildPage() {
                     <li>• 宗门成员可以一起参与宗门活动</li>
                     <li>• 宗门等级越高，可容纳成员越多</li>
                     <li>• 宗门捐献可提升宗门等级</li>
+                    <li>• 宗主可踢出成员或转让宗主；宗门内只剩自己时可解散（创建费不退还）</li>
                 </ul>
             </div>
         </div>

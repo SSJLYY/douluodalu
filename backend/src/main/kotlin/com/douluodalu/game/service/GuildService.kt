@@ -1,6 +1,7 @@
 package com.douluodalu.game.service
 
 import com.douluodalu.game.dto.GuildBossResponse
+import com.douluodalu.game.dto.GuildMemberResponse
 import com.douluodalu.game.entity.Guild
 import com.douluodalu.game.entity.GuildMember
 import com.douluodalu.game.entity.PlayerProfileEntity
@@ -30,6 +31,35 @@ class GuildService(
         val player = user.player ?: return null
         val guildId = player.guildId ?: return null
         return guildRepository.findById(guildId).orElse(null)
+    }
+
+    /**
+     * 本会成员列表（按 joinedAt 升序，供宗主踢人/转让选人）。非成员（未登录外的
+     * 业务态：无宗门）返回 null，由 Controller 统一转 400。
+     * 昵称必须走 findAllById 批查：逐条 findById 会随成员数线性放大成 N+1 查询。
+     */
+    fun getGuildMembers(userId: Long): List<GuildMemberResponse>? {
+        val user = userRepository.findById(userId).orElse(null) ?: return null
+        val guildId = user.player?.guildId ?: return null
+        val guild = guildRepository.findById(guildId).orElse(null) ?: return null
+
+        val members = guildMemberRepository.findByGuildId(guildId)
+            // joinedAt 相同（同一秒批量造数）时以 userId 兜底，保证分页/断言稳定
+            .sortedWith(compareBy({ it.joinedAt }, { it.userId }))
+
+        val nicknames = userRepository.findAllById(members.map { it.userId })
+            .associate { it.id to it.nickname }
+
+        // 宗主以 guild.leader_id 为唯一事实源（成员行 role 是并发转让后的冗余副本，可能漂移）
+        return members.map {
+            GuildMemberResponse(
+                userId = it.userId,
+                nickname = nicknames[it.userId] ?: "未知用户",
+                joinedAt = it.joinedAt,
+                contribution = it.contribution,
+                isLeader = it.userId == guild.leaderId
+            )
+        }
     }
 
     @Transactional

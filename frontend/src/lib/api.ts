@@ -173,6 +173,29 @@ class ApiClient {
         return this.request<GuildMyResponse>('/api/guild/my');
     }
 
+    /** 本会成员列表（后端按 joinedAt 升序）；未入宗门 400 → request 统一抛错 */
+    async getGuildMembers() {
+        return this.request<GuildMemberInfo[]>('/api/guild/members');
+    }
+
+    async kickGuildMember(targetUserId: number) {
+        return this.request<{ message: string }>('/api/guild/kick', {
+            method: 'POST',
+            body: JSON.stringify({ targetUserId }),
+        });
+    }
+
+    async transferGuildLeader(targetUserId: number) {
+        return this.request<{ message: string }>('/api/guild/transfer', {
+            method: 'POST',
+            body: JSON.stringify({ targetUserId }),
+        });
+    }
+
+    async disbandGuild() {
+        return this.request<{ message: string }>('/api/guild/disband', { method: 'POST' });
+    }
+
     async createGuild(name: string) {
         return this.request<{ message: string; guild: GuildSummary }>('/api/guild/create', {
             method: 'POST',
@@ -511,6 +534,15 @@ export interface GuildSummary {
 export interface GuildMyResponse {
     joined: boolean;
     guild: GuildSummary | null;
+}
+
+/** GET /api/guild/members 行：joinedAt 为后端 Jackson 默认 ISO-8601 字符串 */
+export interface GuildMemberInfo {
+    userId: number;
+    nickname: string;
+    joinedAt: string;
+    contribution: number;
+    isLeader: boolean;
 }
 
 export interface GuildBossResult {

@@ -18,6 +18,21 @@ data class GuildMyResponse(
     val guild: GuildListResponse? = null
 )
 
+/**
+ * 宗门成员行（GET /api/guild/members）。joinedAt 走 Spring Boot 默认 Jackson 配置
+ * 输出 ISO-8601 字符串（write-dates-as-timestamps 默认关闭）。
+ * isLeader 必须显式钉 JSON 字段名：Kotlin 的 isXxx 属性 getter 会被 Jackson
+ * 传统命名规则剥成 "leader"，与前端契约不符。
+ */
+data class GuildMemberResponse(
+    val userId: Long,
+    val nickname: String,
+    val joinedAt: java.time.LocalDateTime,
+    val contribution: Long,
+    @get:com.fasterxml.jackson.annotation.JsonProperty("isLeader")
+    val isLeader: Boolean
+)
+
 data class GuildBossResponse(
     val won: Boolean,
     val damage: Long,

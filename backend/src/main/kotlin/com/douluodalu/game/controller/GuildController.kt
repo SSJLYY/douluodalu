@@ -45,6 +45,15 @@ class GuildController(
         )
     }
 
+    /** 本会成员列表（按加入时间升序）：仅成员可查，未入宗门返回 400 {error} */
+    @GetMapping("/members")
+    fun getGuildMembers(auth: Authentication): ResponseEntity<Any> {
+        val userId = auth.principal as Long
+        val members = guildService.getGuildMembers(userId)
+            ?: return ResponseEntity.badRequest().body(mapOf("error" to "请先加入宗门"))
+        return ResponseEntity.ok(members)
+    }
+
     @PostMapping("/create")
     fun createGuild(
         auth: Authentication,

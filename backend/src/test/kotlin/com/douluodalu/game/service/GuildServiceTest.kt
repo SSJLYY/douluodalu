@@ -632,4 +632,105 @@ class GuildServiceTest {
         assertEquals(resp!!.damage / GuildBossBalance.CONTRIBUTION_PER_DAMAGE, member.contribution)
         verify(guildMemberRepository).save(member)
     }
+
+    // ==================== 任务#28 getGuildMembers ====================
+
+    private fun stubBatchUsers(vararg users: UserEntity) {
+        doReturn(users.toList()).whenever(userRepository).findAllById(any())
+    }
+
+    @Test
+    fun `getGuildMembers should return null for player without guild`() {
+        userWith(gold = 100, guildId = null)
+
+        assertNull(guildService.getGuildMembers(1L))
+
+        // 无宗门是业务拒绝而非查询：不应触达 guild/member 表
+        verify(guildRepository, never()).findById(any())
+        verify(guildMemberRepository, never()).findByGuildId(any())
+    }
+
+    @Test
+    fun `getGuildMembers should sort members by joinedAt ascending`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild()
+        val leader = GuildMember(guildId = 9L, userId = 1L, role = "LEADER", joinedAt = LocalDateTime.of(2026, 1, 1, 0, 0))
+        val early = GuildMember(guildId = 9L, userId = 2L, joinedAt = LocalDateTime.of(2026, 3, 1, 0, 0), contribution = 5L)
+        val late = GuildMember(guildId = 9L, userId = 3L, joinedAt = LocalDateTime.of(2026, 2, 1, 0, 0), contribution = 7L)
+        // 乱序返回，验证服务端排序而非依赖 DB 顺序
+        doReturn(listOf(late, early, leader)).whenever(guildMemberRepository).findByGuildId(9L)
+        doReturn(listOf(
+            UserEntity(id = 1L, username = "a", nickname = "宗主甲", passwordHash = "h"),
+            UserEntity(id = 2L, username = "b", nickname = "乙", passwordHash = "h"),
+            UserEntity(id = 3L, username = "c", nickname = "丙", passwordHash = "h")
+        )).whenever(userRepository).findAllById(any())
+
+        val members = guildService.getGuildMembers(1L)
+
+        assertNotNull(members)
+        assertEquals(listOf(1L, 3L, 2L), members!!.map { it.userId })
+        assertEquals(listOf("宗主甲", "丙", "乙"), members.map { it.nickname })
+        assertEquals(listOf(0L, 7L, 5L), members.map { it.contribution })
+    }
+
+    @Test
+    fun `getGuildMembers should mark isLeader from guild leaderId even if member role row is stale`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild(leaderId = 2L) // 宗主是 2 号，操作者 1 号只是成员
+        val staleLeaderRole = GuildMember(guildId = 9L, userId = 1L, role = "LEADER") // 转让后 role 副本漂移
+        val realLeader = GuildMember(guildId = 9L, userId = 2L, role = "MEMBER")
+        doReturn(listOf(staleLeaderRole, realLeader)).whenever(guildMemberRepository).findByGuildId(9L)
+        doReturn(listOf(
+            UserEntity(id = 1L, username = "a", nickname = "甲", passwordHash = "h"),
+            UserEntity(id = 2L, username = "b", nickname = "乙", passwordHash = "h")
+        )).whenever(userRepository).findAllById(any())
+
+        val members = guildService.getGuildMembers(1L)
+
+        assertNotNull(members)
+        // isLeader 以 guild.leader_id 为唯一事实源，不信任成员行 role 副本
+        assertEquals(listOf(false, true), members!!.map { it.isLeader })
+    }
+
+    @Test
+    fun `getGuildMembers should batch-fetch nicknames with one findAllById instead of per-row findById`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild(members = 4)
+        doReturn(listOf(
+            GuildMember(guildId = 9L, userId = 1L, role = "LEADER"),
+            GuildMember(guildId = 9L, userId = 2L),
+            GuildMember(guildId = 9L, userId = 3L),
+            GuildMember(guildId = 9L, userId = 4L)
+        )).whenever(guildMemberRepository).findByGuildId(9L)
+        stubBatchUsers(
+            UserEntity(id = 1L, username = "a", nickname = "甲", passwordHash = "h"),
+            UserEntity(id = 2L, username = "b", nickname = "乙", passwordHash = "h"),
+            UserEntity(id = 3L, username = "c", nickname = "丙", passwordHash = "h"),
+            UserEntity(id = 4L, username = "d", nickname = "丁", passwordHash = "h")
+        )
+
+        val members = guildService.getGuildMembers(1L)
+
+        assertEquals(4, members!!.size)
+        // 4 名成员昵称 = 恰好 1 次 findAllById；findById 全链只允许查操作者这 1 次
+        verify(userRepository, times(1)).findAllById(any())
+        verify(userRepository, times(1)).findById(any())
+    }
+
+    @Test
+    fun `getGuildMembers should degrade to placeholder nickname when a user row is missing`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild(members = 2)
+        doReturn(listOf(
+            GuildMember(guildId = 9L, userId = 1L, role = "LEADER"),
+            GuildMember(guildId = 9L, userId = 2L)
+        )).whenever(guildMemberRepository).findByGuildId(9L)
+        // users 表缺 2 号行（数据漂移）：列表接口不应整页 500，降级为占位昵称
+        doReturn(listOf(UserEntity(id = 1L, username = "a", nickname = "甲", passwordHash = "h")))
+            .whenever(userRepository).findAllById(any())
+
+        val members = guildService.getGuildMembers(1L)
+
+        assertEquals(listOf("甲", "未知用户"), members!!.map { it.nickname })
+    }
 }
