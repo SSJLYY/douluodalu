@@ -159,6 +159,15 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 
 ---
 
+## 🐳 第五轮：CI 冷启动实证 + 生产加固 + Docker 化（2026-09-24）
+
+1. **CI 冷启动全绿**：干净副本 `npm ci → lint → build` 一次通过（lockfile 无漂移），前端启用 Next standalone 输出（`node server.js` 冒烟 200）。
+2. **数据库索引**：真库 SHOW INDEX 核查显示唯一缺口在 audit_log，新增 V5 迁移两条索引；影子库灌 V1→V5 验证 + EXPLAIN 确认走索引（filesort 消除）。
+3. **生产遮蔽**：Swagger 文档端点仅非 prod 放行（prod 双保险关闭）；Actuator 显式白名单 health,info，prod 收紧至仅 health。
+4. **Docker 化**：前后端多阶段 Dockerfile（非 root + HEALTHCHECK）+ docker-compose（MySQL 健康串联、`JWT_SECRET:?` 强制）；本机无 Docker 引擎，未实跑，DEPLOY.md 第 13 节已如实标注。
+
+---
+
 ## 🔮 后续建议
 
 1. **前端优化**
