@@ -189,13 +189,22 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 
 ---
 
+## 📊 第九轮：负荷回路仿真治理 + 战力明细面板（2026-09-24）
+
+1. **负荷回路专项仿真**（隔离 worktree 并行）：镜像"装备加成→根骨→容量"反馈回路，证实原参数**恒卡** —— 后期容量利用率 97.2% 贴墙、30 天后魂环死掉落率≈100%、90 天背包 22 件永不可装环。修复：容量乘数 根骨×6→×24（`RING_CAPACITY_ROOT_MULT`）、塔顶魂环掉落年份封顶（`TOWER_RING_DROP_YEAR_CAP=2`，RNG 次序不变）。调参后 10 种子×90 天全通过（利用率 69.5%、死环率 0%、9/9 满槽），仿真内置收敛锁防回归。
+2. **战力明细面板**：`EquipmentPowerService.detail()` 最大余数法拆分（基础/魂环/魂核/魂骨四行求和恒等于 power 总值，含 200 组随机装备不变量回归）；`GameStateResponse.powerDetail` 向后兼容；主页新增可折叠明细面板（亮暗主题、纯色进度条、aria-expanded）。
+3. **真库验证**：8090 curl `power=221 = basePower 115 + ringPower 106` ✓；浏览器 evaluate_script 断言面板文本与 API 逐字一致、无 console error。
+4. 遗留：魂骨/魂核不吃负荷但全额计入根骨容量（设计文档 V2.1 待定项）；本地 MySQL8 起 dev 库需 JDBC `allowPublicKeyRetrieval=true`（暂未改默认 URL）。测试基线 53→58 全绿。
+
+---
+
 ## 🔮 后续建议
 
 1. **前端优化**
    - ~~Tailwind v4 主题切换（light/dark）~~ ✅ 已完成（第三/四轮，含 WCAG AA 亮色打磨）
    - 登录注册页动画 + 玻璃态效果
    - Next.js ISR（排行榜缓存）
-   - 战力明细面板（攻击/生命/各装备件拆分）
+   - ~~战力明细面板（攻击/生命/各装备件拆分）~~ ✅ 已完成（第九轮）
 
 2. **运维**
    - Docker 化（后端 Dockerfile + docker-compose）— 未完成
