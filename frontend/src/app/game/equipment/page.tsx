@@ -130,6 +130,26 @@ export default function EquipmentPage() {
         return `${core.coreName} +${core.value} Lv.${core.level}`;
     };
 
+    // ======== 任务#21：魂环负荷 ========
+    const ringLoad = gameState.ringLoad;
+    const capacity = gameState.capacity;
+    const loadRatio = capacity > 0 ? ringLoad / capacity : 0;
+    const loadWarn = loadRatio > 0.8;
+
+    /**
+     * 背包装配「装上后」的负荷预览：
+     * 已选中魂环槽位时按「替换该槽旧环（先卸后装）」折算，否则按纯追加折算。
+     * 与后端 GameService.equipRing 的校验口径一致（currentLoad − 旧环负荷 + 新环负荷 ≤ 容量）。
+     */
+    function ringLoadPreview(item: BackpackItem): { projected: number; fits: boolean } {
+        const released =
+            selectedSlot && selectedSlot.startsWith('ring-')
+                ? gameState!.equippedRings.find((r) => r.slotIndex === Number(selectedSlot.slice(5)))?.load ?? 0
+                : 0;
+        const projected = ringLoad - released + item.load;
+        return { projected, fits: projected <= capacity };
+    }
+
     return (
         <div className="space-y-6">
             <h1 className="text-2xl font-bold text-yellow-400">装备</h1>
@@ -149,7 +169,26 @@ export default function EquipmentPage() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="bg-gray-800 rounded-lg p-4">
-                    <h2 className="text-lg font-semibold mb-4 text-purple-400">魂环 (9槽位)</h2>
+                    <h2 className="text-lg font-semibold mb-2 text-purple-400">魂环 (9槽位)</h2>
+                    {/* 负荷进度条：超 80% 变黄红警示（亮暗主题均走调色板变量） */}
+                    <div className="mb-3">
+                        <div className="flex justify-between text-xs mb-1">
+                            <span className="text-gray-400">负荷</span>
+                            <span className={loadWarn ? 'text-red-400 font-semibold' : 'text-gray-300'}>
+                                {ringLoad.toLocaleString()}/{capacity.toLocaleString()}（{Math.round(loadRatio * 100)}%）
+                            </span>
+                        </div>
+                        <div className="h-2 bg-gray-700 rounded-full overflow-hidden" role="progressbar"
+                             aria-valuemin={0} aria-valuemax={capacity} aria-valuenow={ringLoad}
+                             title={loadWarn ? '负荷接近上限：提升等级/装备可增根骨→扩容吸收容量' : undefined}>
+                            <div
+                                className={`h-full rounded-full transition-all duration-700 ease-out ${
+                                    loadWarn ? 'bg-red-500' : loadRatio > 0.5 ? 'bg-yellow-500' : 'bg-purple-500'
+                                }`}
+                                style={{ width: `${Math.min(100, Math.round(loadRatio * 100))}%` }}
+                            />
+                        </div>
+                    </div>
                     <div className="grid grid-cols-3 gap-2">
                         {Array.from({ length: 9 }).map((_, i) => {
                             const ring = gameState.equippedRings.find(r => r.slotIndex === i);
@@ -164,7 +203,10 @@ export default function EquipmentPage() {
                                 >
                                     <div className="text-xs text-gray-400">槽位 {i + 1}</div>
                                     {ring ? (
-                                        <div className="text-purple-300">{getRingInfo(ring)}</div>
+                                        <>
+                                            <div className="text-purple-300">{getRingInfo(ring)}</div>
+                                            <div className="text-xs text-gray-400">负荷 {(ring.load ?? 0).toLocaleString()}</div>
+                                        </>
                                     ) : (
                                         <div className="text-gray-500">空</div>
                                     )}
@@ -241,33 +283,61 @@ export default function EquipmentPage() {
                     <div className="text-gray-500 text-center py-4">背包为空</div>
                 ) : (
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                        {gameState.backpackItems.map((item) => (
-                            <div
-                                key={item.id}
-                                onClick={() => handleEquip(item)}
-                                className={`p-2 rounded text-sm cursor-pointer hover:brightness-110 ${
-                                    item.itemType === 'RING' ? 'bg-purple-900' :
-                                    item.itemType === 'BONE' ? 'bg-blue-900' : 'bg-green-900'
-                                } ${item.locked ? 'opacity-50' : ''}`}
-                            >
-                                <div className="text-xs text-gray-400">
-                                    {item.itemType === 'RING' ? '魂环' :
-                                     item.itemType === 'BONE' ? '魂骨' : '魂核'}
-                                </div>
-                                <div className="font-semibold">
-                                    {item.itemType === 'RING' && `${YEAR_NAMES[item.yearOrdinal]} ${QUALITY_NAMES[item.qualityOrdinal]}`}
-                                    {item.itemType === 'BONE' && `${YEAR_NAMES[item.yearOrdinal]} ${BONE_TYPE_NAMES[item.boneTypeOrdinal || 0]}`}
-                                    {item.itemType === 'CORE' && item.coreName}
-                                </div>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); if (!item.locked) handleSell(item); }}
-                                    disabled={item.locked}
-                                    className="mt-1 w-full px-2 py-0.5 text-xs bg-red-900/60 hover:bg-red-800 disabled:opacity-40 border border-red-700 rounded"
+                        {gameState.backpackItems.map((item) => {
+                            const isRing = item.itemType === 'RING';
+                            // hover(title)/选中时可见的负荷预览：装上后 X/Y（装得下/装不下）
+                            const preview = isRing ? ringLoadPreview(item) : null;
+                            const cannotFit = preview != null && !preview.fits;
+                            return (
+                                <div
+                                    key={item.id}
+                                    onClick={() => handleEquip(item)}
+                                    title={preview
+                                        ? `装上后负荷 +${item.load.toLocaleString()} → ${preview.projected.toLocaleString()}/${capacity.toLocaleString()}（${preview.fits ? '装得下' : '装不下'}）`
+                                        : undefined}
+                                    className={`p-2 rounded text-sm cursor-pointer hover:brightness-110 ${
+                                        item.itemType === 'RING' ? 'bg-purple-900' :
+                                        item.itemType === 'BONE' ? 'bg-blue-900' : 'bg-green-900'
+                                    } ${item.locked ? 'opacity-50' : ''}`}
                                 >
-                                    出售
-                                </button>
-                            </div>
-                        ))}
+                                    <div className="text-xs text-gray-400">
+                                        {item.itemType === 'RING' ? '魂环' :
+                                         item.itemType === 'BONE' ? '魂骨' : '魂核'}
+                                    </div>
+                                    <div className="font-semibold">
+                                        {item.itemType === 'RING' && `${YEAR_NAMES[item.yearOrdinal]} ${QUALITY_NAMES[item.qualityOrdinal]}`}
+                                        {item.itemType === 'BONE' && `${YEAR_NAMES[item.yearOrdinal]} ${BONE_TYPE_NAMES[item.boneTypeOrdinal || 0]}`}
+                                        {item.itemType === 'CORE' && item.coreName}
+                                    </div>
+                                    {preview && (
+                                        <div className={`text-xs ${cannotFit ? 'text-red-400 font-semibold' : 'text-gray-300'}`}>
+                                            负荷 +{item.load.toLocaleString()} → {preview.projected.toLocaleString()}/{capacity.toLocaleString()}
+                                            <span className="ml-1">{cannotFit ? '装不下' : '装得下'}</span>
+                                        </div>
+                                    )}
+                                    <div className="mt-1 flex gap-1">
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); void handleEquip(item); }}
+                                            aria-disabled={cannotFit || item.locked}
+                                            className={`flex-1 px-2 py-0.5 text-xs rounded border transition ${
+                                                cannotFit
+                                                    ? 'bg-gray-700 border-gray-600 text-gray-500 opacity-50 cursor-not-allowed'
+                                                    : 'bg-purple-600 hover:bg-purple-500 border-purple-500'
+                                            }`}
+                                        >
+                                            装备
+                                        </button>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); if (!item.locked) handleSell(item); }}
+                                            disabled={item.locked}
+                                            className="flex-1 px-2 py-0.5 text-xs bg-red-900/60 hover:bg-red-800 disabled:opacity-40 border border-red-700 rounded"
+                                        >
+                                            出售
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
             </div>
@@ -278,8 +348,10 @@ export default function EquipmentPage() {
                     <li>点击空槽位选中它，再点击背包物品即可装备</li>
                     <li>点击已装备的槽位可卸下装备放回背包</li>
                     <li>魂环：通过战斗掉落，提升攻击属性</li>
-                    <li>魂骨：稀有掉落，可强化升级</li>
-                    <li>魂核：特殊装备，提供被动技能</li>
+                    <li>魂环负荷 = 等效年份（品质越高、成熟度越高负荷越大），总负荷不能超过吸收容量（=根骨×6）</li>
+                    <li>吸收容量不足时无法装环：先提升等级/换装增根骨，再吸收更高年份魂环</li>
+                    <li>魂骨：稀有掉落，可强化升级（不占负荷）</li>
+                    <li>魂核：特殊装备，提供被动技能（不占负荷）</li>
                 </ul>
             </div>
         </div>

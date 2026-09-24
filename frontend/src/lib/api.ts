@@ -318,6 +318,12 @@ export interface GameState {
     backpackItems: BackpackItem[];
     talents: Record<string, number>;
     achievements: string[];
+    /** 任务#21：总战斗力（含装备加成，与战斗/爬塔响应同源） */
+    power: number;
+    /** 当前已装备魂环总负荷 */
+    ringLoad: number;
+    /** 魂环吸收容量（=根骨×6）；装环超容量后端返回 400 */
+    capacity: number;
 }
 
 export interface Profile {
@@ -351,6 +357,8 @@ export interface EquippedRing {
     percentage: number;
     affixesJson: string | null;
     skillName: string | null;
+    /** 该魂环负荷（后端按 shared SoulRingSystem 计算，=等效年份） */
+    load: number;
 }
 
 export interface EquippedBone {
@@ -387,6 +395,8 @@ export interface BackpackItem {
     coreName: string | null;
     coreValue: number | null;
     coreLevel: number;
+    /** 若为魂环：该环负荷（装得下/装不下预览用）；其他类型为 0 */
+    load: number;
 }
 
 export interface BattleRound {

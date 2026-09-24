@@ -70,6 +70,12 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
                                 <span className="text-blue-500">💎</span>
                                 <span key={gameState.profile.bossCoin} className="dl-value-flash">{gameState.profile.bossCoin.toLocaleString()}</span>
                             </div>
+                            {/* 任务#21：总战力（GameState.power），变化沿用 flash 动画 */}
+                            <div className="flex items-center gap-2" title="战斗力（含装备加成）">
+                                <span className="text-orange-500">⚔️</span>
+                                <span key={gameState.power} className="dl-value-flash font-semibold text-orange-300">{gameState.power.toLocaleString()}</span>
+                                <span className="text-xs text-gray-400">战力</span>
+                            </div>
                         </div>
                     )}
 

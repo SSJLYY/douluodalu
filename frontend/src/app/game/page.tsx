@@ -94,6 +94,10 @@ export default function GamePage() {
                             <span className="text-yellow-400 font-bold text-lg">{realmName}</span>
                             <span className="text-gray-400 ml-2">Lv.{p.level}</span>
                             {p.prestigeCount > 0 && <span className="text-purple-400 ml-2">{p.prestigeCount}转</span>}
+                            {/* 任务#21：主页头部战力（变化时重挂载触发 flash 动画） */}
+                            <span className="ml-2 text-sm font-semibold text-orange-400">
+                                ⚔️ 战力 <span key={gameState.power} className="dl-value-flash inline-block">{gameState.power.toLocaleString()}</span>
+                            </span>
                         </div>
                         <div className="text-sm text-gray-400">
                             {p.martialSoulName ? `武魂: ${p.martialSoulName}` : '未觉醒武魂'}
