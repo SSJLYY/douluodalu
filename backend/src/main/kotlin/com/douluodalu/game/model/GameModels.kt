@@ -222,10 +222,14 @@ object BossShopData {
 }
 
 object LimitedShopData {
+    // id 必须与其他商店（Normal 2xx / Boss 1-10 / Guild 3xx）全局不冲突：
+    // shop_purchase_record 只按 (user_id, item_id) 记账，撞 id 会互相串用限购计数
+    // （历史 bug：此处 1/2/3 与 BossShopData 前三项相同，买过"万年魂环箱"即误判限量魂核"已售罄"）。
+    // 旧库里挂在 itemId 1-3 的记录归属 Boss 商店，改名后限量额度自然重置，属一次性可接受偏差。
     val items = listOf(
-        ShopItem(1, "传说魂核", "必得一个传说级魂核", 2000, "BOSS_COIN", "CORE_BOX", "MYTHIC", stock = 1),
-        ShopItem(2, "百万年魂骨箱", "随机获得一个百万年魂骨", 1500, "BOSS_COIN", "BONE_BOX", "MILLION", stock = 3),
-        ShopItem(3, "神赐礼包", "包含大量稀有材料", 3000, "BOSS_COIN", "GIFT_PACK", "DIVINE", stock = 1, requiresLevel = 100)
+        ShopItem(901, "传说魂核", "必得一个传说级魂核", 2000, "BOSS_COIN", "CORE_BOX", "MYTHIC", stock = 1),
+        ShopItem(902, "百万年魂骨箱", "随机获得一个百万年魂骨", 1500, "BOSS_COIN", "BONE_BOX", "MILLION", stock = 3),
+        ShopItem(903, "神赐礼包", "包含大量稀有材料", 3000, "BOSS_COIN", "GIFT_PACK", "DIVINE", stock = 1, requiresLevel = 100)
     )
 }
 

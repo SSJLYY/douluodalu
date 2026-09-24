@@ -38,6 +38,10 @@ class GuildService(
         // 检查是否已在宗门
         if (player.guildId != null) return null
 
+        // 名称校验：guild.name 带 UNIQUE 约束，重名直接落库会抛
+        // DataIntegrityViolationException（500 + 泄漏 DB 细节），须提前拒绝
+        if (name.isBlank() || guildRepository.existsByName(name)) return null
+
         // 检查等级
         if (player.level < 30) return null
 
@@ -84,12 +88,18 @@ class GuildService(
         // 检查宗门是否存在
         val guild = guildRepository.findById(guildId).orElse(null) ?: return false
 
-        // 检查宗门人数
+        // 检查宗门人数（快速失败路径；真正占名额走下方条件原子 UPDATE）
         if (guild.currentMembers >= guild.maxMembers) return false
+
+        // 防"幽灵成员"：player.guildId 为空但成员表已有行（历史并发双加入残留）时拒绝，
+        // DB 层另有 V6 唯一索引 uk_member_user 兜底
+        if (guildMemberRepository.findByUserId(userId) != null) return false
+
+        // 名额占用必须用带条件的原子自增：读-改-写在并发下会突破人数上限
+        if (guildRepository.tryJoinMemberCount(guildId) == 0) return false
 
         // 加入宗门（同步维护 guild_member 表）
         player.guildId = guildId
-        guild.currentMembers += 1
         guildMemberRepository.save(
             GuildMember(
                 guildId = guildId,
@@ -98,7 +108,6 @@ class GuildService(
                 joinedAt = LocalDateTime.now()
             )
         )
-        guildRepository.save(guild)
         userRepository.save(user)
 
         return true
@@ -115,11 +124,10 @@ class GuildService(
         // 如果是宗主，不能退出
         if (guild.leaderId == userId) return false
 
-        // 退出宗门（同步维护 guild_member 表）
+        // 退出宗门（同步维护 guild_member 表；计数走条件原子递减，防并发减成负数）
         player.guildId = null
-        guild.currentMembers -= 1
         guildMemberRepository.deleteByUserId(userId)
-        guildRepository.save(guild)
+        guildRepository.tryLeaveMemberCount(guildId)
         userRepository.save(user)
 
         return true
@@ -131,26 +139,35 @@ class GuildService(
         val player = user.player ?: return false
         val guildId = player.guildId ?: return false
 
+        // 金额必须为正：负数会让 gold -= amount 凭空造币、exp 被扣成负数
+        if (amount <= 0) return false
+
         if (player.gold < amount) return false
 
         val guild = guildRepository.findById(guildId).orElse(null) ?: return false
 
         // 捐献
         player.gold -= amount
-        guild.exp += (amount / 100).toInt()
-
-        // 升级检查
-        val expNeeded = guild.level * 1000
-        if (guild.exp >= expNeeded) {
-            guild.level += 1
-            guild.exp -= expNeeded
-            guild.maxMembers += 5
-        }
+        guild.exp += amount / 100
+        applyGuildLevelUps(guild)
 
         guildRepository.save(guild)
         userRepository.save(user)
 
         return true
+    }
+
+    /**
+     * 按 等级*1000 的经验门槛连续升级（while 而非 if：一笔大额捐献
+     * 可能一次跨过多个门槛，用 if 会只升 1 级并让余量经验卡在门槛上）。
+     * donate 与 challengeBoss 的宗门经验共用此判定，保证口径一致。
+     */
+    private fun applyGuildLevelUps(guild: Guild) {
+        while (guild.exp >= guild.level * 1000L) {
+            guild.exp -= guild.level * 1000L
+            guild.level += 1
+            guild.maxMembers += 5
+        }
     }
 
     /**
@@ -177,6 +194,8 @@ class GuildService(
         player.bossCoin += bossCoinGained
         player.updatedAt = LocalDateTime.now()
         guild.exp += if (won) GuildBossBalance.WIN_GUILD_EXP else GuildBossBalance.LOSE_GUILD_EXP
+        // Boss 战获得的宗门经验同样要触发升级（此前只有 donate 会升级，口径不一致）
+        applyGuildLevelUps(guild)
 
         guildRepository.save(guild)
         userRepository.save(user)

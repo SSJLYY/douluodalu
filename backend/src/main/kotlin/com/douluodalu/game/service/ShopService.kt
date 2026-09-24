@@ -20,6 +20,28 @@ class ShopService(
     companion object {
         /** 会发放新背包物品的商品类型，购买/掉落前需校验背包容量 */
         val BACKPACK_GRANT_TYPES = setOf("RING_BOX", "BONE_BOX", "CORE_BOX")
+
+        /** grantRingBox / grantBoneBox 支持的年份档位 */
+        val BOX_TIERS = setOf("HUNDRED", "THOUSAND", "TEN_THOUSAND", "HUNDRED_THOUSAND", "MILLION")
+
+        /**
+         * 奖励能否真正发放的预检（扣款前调用）。
+         * 历史上校验发生在扣款之后：未实现的 itemType（如限量商店在售的
+         * GIFT_PACK"神赐礼包"）、未知箱类档位、非法/负数 itemData 都会走
+         * `return ShopResult(false)` 早退——但托管实体的扣款没有异常触发
+         * 回滚，照样随事务提交，造成"扣钱不发货"甚至"扣钱报成功"。
+         */
+        fun rewardValidationError(item: ShopItem): String? = when (item.itemType) {
+            "RING_BOX", "BONE_BOX" ->
+                if (item.itemData in BOX_TIERS) null else "商品数据格式错误"
+            "CORE_BOX" ->
+                if (SoulCoreTier.entries.any { it.name == item.itemData }) null else "商品数据格式错误"
+            "GOLD_BAG", "SOUL_POWER" ->
+                if ((item.itemData.toLongOrNull() ?: -1L) >= 0L) null else "商品数据格式错误"
+            "BACKPACK_EXPAND" ->
+                if ((item.itemData.toIntOrNull() ?: -1) >= 0) null else "商品数据格式错误"
+            else -> "商品暂不可用：${item.itemType} 奖励尚未实现"
+        }
     }
 
     @Transactional
@@ -33,6 +55,11 @@ class ShopService(
         // 先检查等级，避免等级不足时已扣款（早退不触发回滚，托管实体的扣款会被提交）
         if (player.level < item.requiresLevel) {
             return ShopResult(false, error = "等级不足，需要${item.requiresLevel}级", item = mapOf("id" to item.id, "name" to item.name))
+        }
+
+        // 奖励可发放性同样必须在扣款前预检（同"先扣钱后校验"历史教训）
+        rewardValidationError(item)?.let { err ->
+            return ShopResult(false, error = err, item = mapOf("id" to item.id, "name" to item.name))
         }
 
         // 开箱类商品会发放背包物品：在扣款前校验背包容量，满包整单失败（不扣款、无需退款）
@@ -89,6 +116,7 @@ class ShopService(
         val existingRecord = purchaseRecordRepository.findByUserIdAndItemId(userId, item.id)
         if (existingRecord != null) {
             existingRecord.purchaseCount += 1
+            existingRecord.lastPurchaseAt = java.time.LocalDateTime.now()
             purchaseRecordRepository.save(existingRecord)
         } else {
             val newRecord = com.douluodalu.game.entity.ShopPurchaseRecord()

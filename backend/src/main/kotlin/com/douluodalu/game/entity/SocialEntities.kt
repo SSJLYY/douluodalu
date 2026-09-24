@@ -40,7 +40,12 @@ data class GuildMemberId(
 
 @Entity
 @IdClass(GuildMemberId::class)
-@Table(name = "guild_member")
+@Table(
+    name = "guild_member",
+    // 复合主键 (guild_id, user_id) 拦不住"同一人并发加入两个不同宗门"（两行主键互不冲突），
+    // 唯一索引由 DB 兜底：并发双加入时后提交者触发约束冲突整单回滚（见 V6 迁移）
+    uniqueConstraints = [UniqueConstraint(name = "uk_member_user", columnNames = ["user_id"])]
+)
 class GuildMember(
     @Id
     @Column(name = "guild_id")

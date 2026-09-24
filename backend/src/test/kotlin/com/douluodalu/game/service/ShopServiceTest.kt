@@ -4,7 +4,7 @@ import com.douluodalu.game.controller.ShopResult
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.ShopPurchaseRecord
 import com.douluodalu.game.entity.UserEntity
-import com.douluodalu.game.model.ShopItem
+import com.douluodalu.game.model.*
 import com.douluodalu.game.repository.BackpackItemRepository
 import com.douluodalu.game.repository.ShopPurchaseRecordRepository
 import com.douluodalu.game.repository.UserRepository
@@ -202,5 +202,99 @@ class ShopServiceTest {
         verify(backpackItemRepository, never()).save(any())
         // 售罄路径连余额都不该去查（未进入 buyItem 的扣款逻辑）
         assertEquals(1, record.purchaseCount)
+    }
+
+    // ==================== 任务#24 补盲 ====================
+
+    @Test
+    fun `buyItem should reject unsupported reward type BEFORE deducting currency (神赐礼包 GIFT_PACK)`() {
+        val (user, profile) = userWith(bossCoin = 3000, level = 100)
+
+        // LimitedShopData 在售的 3000 Boss 币"神赐礼包"：itemType=GIFT_PACK 在发放分支里根本未实现。
+        // 若扣款后才落到 else 早退，@Transactional 托管实体的扣款照样提交 → 钱货两空。
+        val result = shopService.buyItem(
+            1L, ShopItem(903, "神赐礼包", "包含大量稀有材料", 3000, "BOSS_COIN", "GIFT_PACK", "DIVINE", stock = 1, requiresLevel = 100)
+        )
+
+        assertFalse(result.success)
+        assertEquals(3000L, profile.bossCoin)
+        verify(userRepository, never()).save(any())
+        verify(purchaseRecordRepository, never()).save(any())
+        verify(backpackItemRepository, never()).save(any())
+    }
+
+    @Test
+    fun `buyItem should reject box with unknown tier before deduction instead of reporting fake success`() {
+        val (user, profile) = userWith(bossCoin = 100)
+
+        // 未知档位当前会走 grantXxxBox 的 else：钱已扣、背包不落物品，却返回 success=true "异常数据"
+        val result = shopService.buyItem(1L, ShopItem(1, "异常魂环箱", "", 50, "BOSS_COIN", "RING_BOX", "BILLION"))
+
+        assertFalse(result.success)
+        assertEquals(100L, profile.bossCoin)
+        verify(backpackItemRepository, never()).save(any())
+        verify(userRepository, never()).save(any())
+        verify(purchaseRecordRepository, never()).save(any())
+    }
+
+    @Test
+    fun `buyItem should reject malformed or negative GOLD_BAG itemData without deducting`() {
+        val (user, profile) = userWith(bossCoin = 30, gold = 5000)
+
+        val malformed = shopService.buyItem(1L, ShopItem(8, "坏金币袋", "", 30, "BOSS_COIN", "GOLD_BAG", "abc"))
+        assertFalse(malformed.success)
+        assertEquals(30L, profile.bossCoin)
+        assertEquals(5000L, profile.gold)
+
+        // 负数额若放行：gold += (-10000) 反向吞金 / 配合低价还能套取
+        val negative = shopService.buyItem(1L, ShopItem(8, "倒贴金币袋", "", 1, "BOSS_COIN", "GOLD_BAG", "-10000"))
+        assertFalse(negative.success)
+        assertEquals(30L, profile.bossCoin)
+        assertEquals(5000L, profile.gold)
+        verify(userRepository, never()).save(any())
+    }
+
+    @Test
+    fun `all shop catalogs must use globally unique item ids because purchase records key on itemId only`() {
+        // shop_purchase_record 唯一键是 (user_id, item_id)，不带商店来源。
+        // 任何两个商店间复用同一 id，购买记录就会互相串用限购计数。
+        val ids = (NormalShopData.items + BossShopData.items + LimitedShopData.items + GuildShopData.items).map { it.id }
+
+        assertEquals(ids.size, ids.toSet().size, "跨商店商品 id 冲突：$ids")
+    }
+
+    @Test
+    fun `buying boss shop ring box must not consume limited shop 传说魂核 allowance`() {
+        // 现实场景复现：玩家先买了 Boss 商店"万年魂环箱"(id=1)，记录已存在 (userId=1,itemId=1)。
+        // 若限量商店的"传说魂核"与之 id 冲突，会被这条记录误判"已售罄"。
+        val (user, profile) = userWith(bossCoin = 5000, level = 100)
+        val limitedLegendCore = LimitedShopData.items.first { it.name == "传说魂核" }
+        val bossRecord = ShopPurchaseRecord(userId = 1L, itemId = 1L, purchaseCount = 1)
+        // 精确 stub：历史购买记录只挂在 Boss 商店的 itemId=1 上
+        doAnswer { inv ->
+            val args = inv.arguments
+            if (args[0] as Long == 1L && args[1] as Long == 1L) bossRecord else null
+        }.whenever(purchaseRecordRepository).findByUserIdAndItemId(any(), any())
+
+        val result = shopService.buyLimitedItem(1L, limitedLegendCore)
+
+        assertTrue(result.success, "传说魂核购买被 Boss 商店记录误拦：${result.error}")
+        assertEquals(3000L, profile.bossCoin)
+        verify(backpackItemRepository).save(any())
+    }
+
+    @Test
+    fun `purchase record increment should refresh lastPurchaseAt`() {
+        val (user, profile) = userWith(gold = 1000)
+        val existing = ShopPurchaseRecord(userId = 1L, itemId = 204L, purchaseCount = 3)
+        existing.lastPurchaseAt = java.time.LocalDateTime.now().minusDays(7)
+        val before = existing.lastPurchaseAt
+        doReturn(existing).whenever(purchaseRecordRepository).findByUserIdAndItemId(1L, 204L)
+
+        val result = shopService.buyItem(1L, ShopItem(204, "魂力精华(小)", "", 300, "GOLD", "SOUL_POWER", "500"))
+
+        assertTrue(result.success)
+        assertEquals(4, existing.purchaseCount)
+        assertTrue(existing.lastPurchaseAt.isAfter(before), "lastPurchaseAt 应随本次购买刷新")
     }
 }
