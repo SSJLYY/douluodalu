@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler
 import org.springframework.web.bind.annotation.RestControllerAdvice
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException
 import org.springframework.web.servlet.NoHandlerFoundException
+import org.springframework.web.servlet.resource.NoResourceFoundException
 
 @RestControllerAdvice
 class GlobalExceptionHandler {
@@ -104,6 +105,17 @@ class GlobalExceptionHandler {
     fun handleNotFound(e: NoHandlerFoundException) =
         ResponseEntity.status(HttpStatus.NOT_FOUND)
             .body(ErrorResponse("NOT_FOUND", "接口不存在：${e.requestURL}"))
+
+    /**
+     * Spring Boot 3.2 默认静态资源映射（classpath:/static 等）注册了通配兜底 handler：
+     * 打错 URL 的 API 请求不会走 NoHandlerFoundException，而是被 ResourceHttpRequestHandler
+     * 抛 NoResourceFoundException。它此前只被下方 Exception 兜底捕获 → 500 UNKNOWN_ERROR，
+     * 语义错误（应为 404）。响应体沿用 ErrorResponse 白名单字段，不含堆栈/DB 细节。
+     */
+    @ExceptionHandler(NoResourceFoundException::class)
+    fun handleNoResource(e: NoResourceFoundException) =
+        ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(ErrorResponse("NOT_FOUND", "接口不存在：/${e.resourcePath}"))
 
     @ExceptionHandler(Exception::class)
     fun handleGeneral(e: Exception): ResponseEntity<ErrorResponse> {

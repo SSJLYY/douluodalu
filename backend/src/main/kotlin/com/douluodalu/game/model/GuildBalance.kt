@@ -15,6 +15,9 @@ object GuildBossBalance {
     const val LOSE_BOSS_COIN = 2L
     const val WIN_GUILD_EXP = 30L
     const val LOSE_GUILD_EXP = 12L
+
+    /** 挑战 Boss 的贡献口径：每 CONTRIBUTION_PER_DAMAGE 点伤害记 1 点贡献（与金币奖励同为"按伤害"） */
+    const val CONTRIBUTION_PER_DAMAGE = 1000L
 }
 
 /**

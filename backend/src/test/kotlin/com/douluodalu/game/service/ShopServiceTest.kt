@@ -210,8 +210,10 @@ class ShopServiceTest {
     fun `buyItem should reject unsupported reward type BEFORE deducting currency (神赐礼包 GIFT_PACK)`() {
         val (user, profile) = userWith(bossCoin = 3000, level = 100)
 
-        // LimitedShopData 在售的 3000 Boss 币"神赐礼包"：itemType=GIFT_PACK 在发放分支里根本未实现。
+        // 3000 Boss 币"神赐礼包"：itemType=GIFT_PACK 在发放分支里根本未实现。
         // 若扣款后才落到 else 早退，@Transactional 托管实体的扣款照样提交 → 钱货两空。
+        // （任务#26 已把该商品从 LimitedShopData 下架，此处保留同一定义的实例继续锁住预检行为，
+        //  防止未来把 GIFT_PACK 挂回商店时回归。）
         val result = shopService.buyItem(
             1L, ShopItem(903, "神赐礼包", "包含大量稀有材料", 3000, "BOSS_COIN", "GIFT_PACK", "DIVINE", stock = 1, requiresLevel = 100)
         )
@@ -221,6 +223,16 @@ class ShopServiceTest {
         verify(userRepository, never()).save(any())
         verify(purchaseRecordRepository, never()).save(any())
         verify(backpackItemRepository, never()).save(any())
+    }
+
+    @Test
+    fun `GIFT_PACK divine gift pack should be delisted from LimitedShopData until grant is implemented`() {
+        // 预检只能"干净拒绝"，但商品仍展示 = 用户看得见买不了；下架才是最小合理方案。
+        // 恢复上架的前提：ShopService 实现 GIFT_PACK 发放分支（见 LimitedShopData 注释）。
+        assertTrue(LimitedShopData.items.none { it.itemType == "GIFT_PACK" })
+        assertNotNull(ShopService.rewardValidationError(
+            ShopItem(903, "神赐礼包", "", 3000, "BOSS_COIN", "GIFT_PACK", "DIVINE")
+        ), "rewardValidationError 须继续拒绝 GIFT_PACK，防止未实现发放就重新上架")
     }
 
     @Test

@@ -1,37 +1,8 @@
 package com.douluodalu.game.dto
 
-data class GuildCreateRequest(
-    val name: String,
-    val notice: String = ""
-)
-
-data class GuildJoinRequest(
-    val guildId: Long
-)
-
-data class GuildDonateRequest(
-    val gold: Long
-)
-
-data class GuildInfoResponse(
-    val id: Long,
-    val name: String,
-    val leaderName: String,
-    val level: Int,
-    val exp: Long,
-    val memberCount: Int,
-    val maxMembers: Int,
-    val notice: String?,
-    val members: List<GuildMemberDto>
-)
-
-data class GuildMemberDto(
-    val userId: Long,
-    val nickname: String,
-    val role: String,
-    val contribution: Long,
-    val level: Int
-)
+// 注：旧 GuildCreateRequest / GuildJoinRequest / GuildDonateRequest / GuildInfoResponse /
+// GuildMemberDto 已删除——Controller 实际使用文件底部的内联请求类与下方裁剪 DTO，
+// 旧定义零引用属死代码（任务#26 收敛）。
 
 data class GuildListResponse(
     val id: Long,

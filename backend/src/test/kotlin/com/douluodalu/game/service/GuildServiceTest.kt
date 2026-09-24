@@ -16,6 +16,7 @@ import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.*
 import com.douluodalu.game.model.GuildBossBalance
+import java.time.LocalDateTime
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -347,5 +348,288 @@ class GuildServiceTest {
         verify(guildRepository, never()).save(any())
         verify(guildMemberRepository, never()).save(any())
         verify(userRepository, never()).save(any())
+    }
+
+    // ==================== 任务#26 公会管理玩法 ====================
+
+    private fun stubOtherUser(id: Long, guildId: Long?): UserEntity {
+        val profile = PlayerProfileEntity(userId = id, level = 20)
+        profile.guildId = guildId
+        profile.gold = 1000
+        val user = UserEntity(id = id, username = "u$id", nickname = "n$id", passwordHash = "h")
+        user.player = profile
+        doReturn(Optional.of(user)).whenever(userRepository).findById(id)
+        return user
+    }
+
+    private fun leaderGuild(guildId: Long = 9L, leaderId: Long = 1L, members: Int = 3): Guild {
+        val guild = Guild(id = guildId, name = "唐门", level = 1, currentMembers = members, maxMembers = 20, leaderId = leaderId)
+        doReturn(Optional.of(guild)).whenever(guildRepository).findById(guildId)
+        return guild
+    }
+
+    // ---- kickMember 权限矩阵 ----
+
+    @Test
+    fun `kickMember by leader should remove row, clear target guildId and release slot atomically`() {
+        userWith(gold = 100, guildId = 9L) // 操作者 = 宗主 userId 1
+        val target = stubOtherUser(2L, guildId = 9L)
+        val guild = leaderGuild()
+        val targetMember = GuildMember(guildId = 9L, userId = 2L, role = "MEMBER")
+        doReturn(targetMember).whenever(guildMemberRepository).findByUserId(2L)
+        doAnswer { guild.currentMembers -= 1; 1 }.whenever(guildRepository).tryLeaveMemberCount(9L)
+
+        assertTrue(guildService.kickMember(1L, 2L))
+
+        assertNull(target.player?.guildId)
+        verify(guildMemberRepository).delete(targetMember)
+        verify(guildRepository).tryLeaveMemberCount(9L)
+        assertEquals(2, guild.currentMembers)
+        // 计数走原子 UPDATE，不整行 save 回写
+        verify(guildRepository, never()).save(any())
+    }
+
+    @Test
+    fun `kickMember should be rejected for non-leader operator`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild(leaderId = 99L) // 宗主是别人
+
+        assertFalse(guildService.kickMember(1L, 2L))
+
+        verify(guildMemberRepository, never()).delete(any())
+        verify(guildRepository, never()).tryLeaveMemberCount(any())
+        verify(userRepository, never()).save(any())
+    }
+
+    @Test
+    fun `kickMember should refuse self-kick`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild()
+
+        assertFalse(guildService.kickMember(1L, 1L))
+
+        verify(guildMemberRepository, never()).delete(any())
+        verify(guildRepository, never()).tryLeaveMemberCount(any())
+    }
+
+    @Test
+    fun `kickMember should reject target outside own guild without touching counts`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild()
+        // 目标在别的宗门（甚至无宗门）：成员行 guildId 不匹配
+        doReturn(GuildMember(guildId = 5L, userId = 2L, role = "MEMBER"))
+            .whenever(guildMemberRepository).findByUserId(2L)
+        assertFalse(guildService.kickMember(1L, 2L))
+
+        // 目标完全不在成员表
+        doReturn(null).whenever(guildMemberRepository).findByUserId(3L)
+        assertFalse(guildService.kickMember(1L, 3L))
+
+        verify(guildMemberRepository, never()).delete(any())
+        verify(guildRepository, never()).tryLeaveMemberCount(any())
+        verify(userRepository, never()).save(any())
+    }
+
+    @Test
+    fun `kickMember should abort without half-applied writes when target user row is missing`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild()
+        doReturn(GuildMember(guildId = 9L, userId = 2L, role = "MEMBER"))
+            .whenever(guildMemberRepository).findByUserId(2L)
+        // userRepository.findById(2L) 未打桩 → Optional.empty()：成员行成孤儿前的三处一致要求
+
+        assertFalse(guildService.kickMember(1L, 2L))
+
+        verify(guildMemberRepository, never()).delete(any())
+        verify(guildRepository, never()).tryLeaveMemberCount(any())
+    }
+
+    // ---- transferLeadership 权限矩阵 ----
+
+    @Test
+    fun `transferLeadership should CAS leaderId and swap member roles without whole-row save`() {
+        userWith(gold = 100, guildId = 9L)
+        val guild = leaderGuild()
+        val leaderRow = GuildMember(guildId = 9L, userId = 1L, role = "LEADER")
+        val targetRow = GuildMember(guildId = 9L, userId = 2L, role = "MEMBER")
+        doReturn(listOf(leaderRow, targetRow)).whenever(guildMemberRepository).findByGuildId(9L)
+        doReturn(1).whenever(guildRepository).transferLeaderId(9L, 2L, 1L)
+
+        assertTrue(guildService.transferLeadership(1L, 2L))
+
+        // leaderId 更新走条件原子 UPDATE（compare-and-set），不整行 save 覆盖并发计数
+        verify(guildRepository).transferLeaderId(9L, 2L, 1L)
+        verify(guildRepository, never()).save(any())
+        assertEquals("LEADER", targetRow.role)
+        assertEquals("MEMBER", leaderRow.role)
+        verify(guildMemberRepository).save(targetRow)
+        verify(guildMemberRepository).save(leaderRow)
+        assertEquals(9L, guild.id)
+    }
+
+    @Test
+    fun `transferLeadership should be rejected for non-leader and for unknown target`() {
+        // 非宗主
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild(leaderId = 99L)
+        assertFalse(guildService.transferLeadership(1L, 2L))
+
+        // 宗主但目标不在成员表
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild(leaderId = 1L)
+        doReturn(listOf(GuildMember(guildId = 9L, userId = 1L, role = "LEADER")))
+            .whenever(guildMemberRepository).findByGuildId(9L)
+        assertFalse(guildService.transferLeadership(1L, 77L))
+
+        verify(guildRepository, never()).transferLeaderId(any(), any(), any())
+    }
+
+    @Test
+    fun `transferLeadership should fail cleanly when concurrent transfer already replaced the leader`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild()
+        doReturn(listOf(
+            GuildMember(guildId = 9L, userId = 1L, role = "LEADER"),
+            GuildMember(guildId = 9L, userId = 2L, role = "MEMBER")
+        )).whenever(guildMemberRepository).findByGuildId(9L)
+        // CAS 失败：读 leader 与 UPDATE 之间已被另一笔转让换主
+        doReturn(0).whenever(guildRepository).transferLeaderId(9L, 2L, 1L)
+
+        assertFalse(guildService.transferLeadership(1L, 2L))
+
+        verify(guildMemberRepository, never()).save(any())
+    }
+
+    @Test
+    fun `transferLeadership to self should be rejected without any lookups`() {
+        assertFalse(guildService.transferLeadership(1L, 1L))
+        verify(guildRepository, never()).transferLeaderId(any(), any(), any())
+    }
+
+    // ---- disbandGuild 权限矩阵 ----
+
+    @Test
+    fun `disbandGuild by solo leader should delete guild and member rows, detach player and keep gold burnt`() {
+        val (user, profile) = userWith(gold = 100, guildId = 9L)
+        val guild = leaderGuild()
+        doReturn(1L).whenever(guildMemberRepository).countByGuildId(9L)
+
+        assertTrue(guildService.disbandGuild(1L))
+
+        verify(guildMemberRepository).deleteByGuildId(9L)
+        verify(guildRepository).delete(guild)
+        assertNull(profile.guildId)
+        verify(userRepository).save(user)
+        // 创建费不退（有意取舍）：解散后金币仍只有原来的 100
+        assertEquals(100L, profile.gold)
+    }
+
+    @Test
+    fun `disbandGuild should be rejected while other members remain`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild()
+        doReturn(2L).whenever(guildMemberRepository).countByGuildId(9L)
+
+        assertFalse(guildService.disbandGuild(1L))
+
+        verify(guildRepository, never()).delete(any())
+        verify(guildMemberRepository, never()).deleteByGuildId(any())
+    }
+
+    @Test
+    fun `disbandGuild should be rejected for plain member`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild(leaderId = 99L)
+
+        assertFalse(guildService.disbandGuild(1L))
+
+        verify(guildMemberRepository, never()).countByGuildId(any())
+        verify(guildRepository, never()).delete(any())
+    }
+
+    // ---- leaveGuild 宗主新语义 ----
+
+    @Test
+    fun `leaveGuild as leader with members should auto-transfer to earliest joined member then leave`() {
+        userWith(gold = 100, guildId = 9L)
+        val guild = leaderGuild(members = 3)
+        val early = GuildMember(guildId = 9L, userId = 2L, role = "MEMBER", joinedAt = LocalDateTime.of(2026, 1, 1, 0, 0))
+        val late = GuildMember(guildId = 9L, userId = 3L, role = "MEMBER", joinedAt = LocalDateTime.of(2026, 2, 1, 0, 0))
+        // 乱序返回，验证按 joinedAt 取最早
+        doReturn(listOf(late, early, GuildMember(guildId = 9L, userId = 1L, role = "LEADER")))
+            .whenever(guildMemberRepository).findByGuildId(9L)
+        doReturn(1).whenever(guildRepository).transferLeaderId(9L, 2L, 1L)
+        doAnswer { guild.currentMembers -= 1; 1 }.whenever(guildRepository).tryLeaveMemberCount(9L)
+
+        assertTrue(guildService.leaveGuild(1L))
+
+        verify(guildRepository).transferLeaderId(9L, 2L, 1L)
+        assertEquals("LEADER", early.role)
+        verify(guildMemberRepository).save(early)
+        verify(guildMemberRepository).deleteByUserId(1L)
+        assertEquals(2, guild.currentMembers)
+    }
+
+    @Test
+    fun `leaveGuild as the last remaining member of the guild should disband it`() {
+        val (user, profile) = userWith(gold = 100, guildId = 9L)
+        val guild = leaderGuild(members = 1)
+        doReturn(listOf(GuildMember(guildId = 9L, userId = 1L, role = "LEADER")))
+            .whenever(guildMemberRepository).findByGuildId(9L)
+
+        assertTrue(guildService.leaveGuild(1L))
+
+        verify(guildMemberRepository).deleteByGuildId(9L)
+        verify(guildRepository).delete(guild)
+        assertNull(profile.guildId)
+        // 走解散路径：不再需要递减人数
+        verify(guildRepository, never()).tryLeaveMemberCount(any())
+    }
+
+    @Test
+    fun `leaveGuild as leader should abort when concurrent transfer already changed leader`() {
+        userWith(gold = 100, guildId = 9L)
+        leaderGuild(members = 2)
+        doReturn(listOf(
+            GuildMember(guildId = 9L, userId = 1L, role = "LEADER"),
+            GuildMember(guildId = 9L, userId = 2L, role = "MEMBER")
+        )).whenever(guildMemberRepository).findByGuildId(9L)
+        doReturn(0).whenever(guildRepository).transferLeaderId(9L, 2L, 1L)
+
+        assertFalse(guildService.leaveGuild(1L))
+
+        verify(guildMemberRepository, never()).deleteByUserId(any())
+        verify(guildRepository, never()).tryLeaveMemberCount(any())
+        verify(userRepository, never()).save(any())
+    }
+
+    // ---- contribution 累计 ----
+
+    @Test
+    fun `donate should accumulate contribution on the member row by donated amount`() {
+        userWith(gold = 5000, guildId = 9L)
+        val guild = leaderGuild()
+        val member = GuildMember(guildId = 9L, userId = 1L, role = "MEMBER", contribution = 40L)
+        doReturn(member).whenever(guildMemberRepository).findByUserId(1L)
+
+        assertTrue(guildService.donate(1L, 600L))
+
+        assertEquals(640L, member.contribution)
+        verify(guildMemberRepository).save(member)
+    }
+
+    @Test
+    fun `challengeBoss should accumulate contribution proportional to damage`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        val guild = leaderGuild()
+        val member = GuildMember(guildId = 9L, userId = 1L, role = "MEMBER")
+        doReturn(member).whenever(guildMemberRepository).findByUserId(1L)
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        assertNotNull(resp)
+        assertEquals(resp!!.damage / GuildBossBalance.CONTRIBUTION_PER_DAMAGE, member.contribution)
+        verify(guildMemberRepository).save(member)
     }
 }

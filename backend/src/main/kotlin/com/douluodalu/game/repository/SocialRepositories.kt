@@ -25,6 +25,19 @@ interface GuildRepository : JpaRepository<Guild, Long> {
     @Modifying
     @Query("UPDATE Guild g SET g.currentMembers = g.currentMembers - 1 WHERE g.id = :guildId AND g.currentMembers > 0")
     fun tryLeaveMemberCount(@Param("guildId") guildId: Long): Int
+
+    /**
+     * 宗主转让走条件原子 UPDATE（WHERE 带上现任宗主做 compare-and-set）：
+     * Guild 无 @Version 乐观锁列，整行 save 回写会把并发者刚改过的 member_count 覆盖回旧值；
+     * 而"读 leaderId → save"在并发双转让下会两边都"成功"。条件 UPDATE 让后提交者影响 0 行、明确失败。
+     */
+    @Modifying
+    @Query("UPDATE Guild g SET g.leaderId = :newLeaderId WHERE g.id = :guildId AND g.leaderId = :expectedLeaderId")
+    fun transferLeaderId(
+        @Param("guildId") guildId: Long,
+        @Param("newLeaderId") newLeaderId: Long,
+        @Param("expectedLeaderId") expectedLeaderId: Long
+    ): Int
 }
 
 @Repository
@@ -33,6 +46,7 @@ interface GuildMemberRepository : JpaRepository<GuildMember, GuildMemberId> {
     fun findByGuildId(guildId: Long): List<GuildMember>
     fun countByGuildId(guildId: Long): Long
     fun deleteByUserId(userId: Long)
+    fun deleteByGuildId(guildId: Long)
 }
 
 @Repository

@@ -78,9 +78,49 @@ class GuildController(
         val userId = auth.principal as Long
         val success = guildService.leaveGuild(userId)
         return if (success) {
+            // 宗主退出时服务端已自动处理：有成员→转让给加入最早者；只剩自己→解散
             ResponseEntity.ok(mapOf("message" to "已退出宗门"))
         } else {
             ResponseEntity.badRequest().body(mapOf("error" to "退出失败"))
+        }
+    }
+
+    @PostMapping("/kick")
+    fun kickMember(
+        auth: Authentication,
+        @RequestBody request: KickMemberRequest
+    ): ResponseEntity<Any> {
+        val userId = auth.principal as Long
+        val success = guildService.kickMember(userId, request.targetUserId)
+        return if (success) {
+            ResponseEntity.ok(mapOf("message" to "已踢出成员"))
+        } else {
+            ResponseEntity.badRequest().body(mapOf("error" to "踢人失败：仅宗主可踢其他成员，且不能踢自己"))
+        }
+    }
+
+    @PostMapping("/transfer")
+    fun transferLeadership(
+        auth: Authentication,
+        @RequestBody request: TransferLeaderRequest
+    ): ResponseEntity<Any> {
+        val userId = auth.principal as Long
+        val success = guildService.transferLeadership(userId, request.targetUserId)
+        return if (success) {
+            ResponseEntity.ok(mapOf("message" to "宗主已转让"))
+        } else {
+            ResponseEntity.badRequest().body(mapOf("error" to "转让失败：仅宗主可转让，目标须为本宗门成员"))
+        }
+    }
+
+    @PostMapping("/disband")
+    fun disbandGuild(auth: Authentication): ResponseEntity<Any> {
+        val userId = auth.principal as Long
+        val success = guildService.disbandGuild(userId)
+        return if (success) {
+            ResponseEntity.ok(mapOf("message" to "宗门已解散"))
+        } else {
+            ResponseEntity.badRequest().body(mapOf("error" to "解散失败：仅宗主可解散，且需宗门内只剩自己"))
         }
     }
 
@@ -137,3 +177,5 @@ class GuildController(
 
 data class CreateGuildRequest(val name: String, val description: String)
 data class DonateRequest(val amount: Long)
+data class KickMemberRequest(val targetUserId: Long)
+data class TransferLeaderRequest(val targetUserId: Long)

@@ -228,8 +228,11 @@ object LimitedShopData {
     // 旧库里挂在 itemId 1-3 的记录归属 Boss 商店，改名后限量额度自然重置，属一次性可接受偏差。
     val items = listOf(
         ShopItem(901, "传说魂核", "必得一个传说级魂核", 2000, "BOSS_COIN", "CORE_BOX", "MYTHIC", stock = 1),
-        ShopItem(902, "百万年魂骨箱", "随机获得一个百万年魂骨", 1500, "BOSS_COIN", "BONE_BOX", "MILLION", stock = 3),
-        ShopItem(903, "神赐礼包", "包含大量稀有材料", 3000, "BOSS_COIN", "GIFT_PACK", "DIVINE", stock = 1, requiresLevel = 100)
+        ShopItem(902, "百万年魂骨箱", "随机获得一个百万年魂骨", 1500, "BOSS_COIN", "BONE_BOX", "MILLION", stock = 3)
+        // 903 "神赐礼包"(GIFT_PACK) 已下架：ShopService 没有 GIFT_PACK 发放分支，
+        // rewardValidationError 预检虽能"干净拒绝"（不扣币），但对用户是"看得见买不了"的坏体验。
+        // 恢复条件：在 ShopService 的奖励发放 when(item.itemType) 中实现 GIFT_PACK
+        // （定义并派发稀有材料包）+ 从 rewardValidationError 拒绝名单放行 + 补发放测试，然后再挂回列表。
     )
 }
 

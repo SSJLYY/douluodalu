@@ -3,6 +3,8 @@ package com.douluodalu.game.service
 import com.douluodalu.game.dto.GuildBossResponse
 import com.douluodalu.game.entity.Guild
 import com.douluodalu.game.entity.GuildMember
+import com.douluodalu.game.entity.PlayerProfileEntity
+import com.douluodalu.game.entity.UserEntity
 import com.douluodalu.game.model.GuildBossBalance
 import com.douluodalu.game.repository.GuildMemberRepository
 import com.douluodalu.game.repository.GuildRepository
@@ -121,8 +123,20 @@ class GuildService(
 
         val guild = guildRepository.findById(guildId).orElse(null) ?: return false
 
-        // 如果是宗主，不能退出
-        if (guild.leaderId == userId) return false
+        // 宗主退出不再是死路（旧逻辑直接拒绝，宗主永远甩不掉宗门）：
+        // 只剩自己 → 等价解散；还有其他成员 → 自动转让给加入最早的成员后再正常退出
+        if (guild.leaderId == userId) {
+            val successors = guildMemberRepository.findByGuildId(guildId)
+                .filter { it.userId != userId }
+                .sortedWith(compareBy({ it.joinedAt }, { it.userId }))
+            if (successors.isEmpty()) return disbandLocked(user, player, guild)
+            val successor = successors.first()
+            // compare-and-set 转让：并发下已被别人换掉宗主则影响 0 行，本次退出让路
+            if (guildRepository.transferLeaderId(guildId, successor.userId, userId) == 0) return false
+            successor.role = "LEADER"
+            guildMemberRepository.save(successor)
+            // 自己这行的 role 无需改：下面正常退出流程会直接删除它
+        }
 
         // 退出宗门（同步维护 guild_member 表；计数走条件原子递减，防并发减成负数）
         player.guildId = null
@@ -130,6 +144,79 @@ class GuildService(
         guildRepository.tryLeaveMemberCount(guildId)
         userRepository.save(user)
 
+        return true
+    }
+
+    /**
+     * 踢人：仅宗主可踢，不能踢自己（宗主也不在"可踢"范围，先换宗主再踢）。
+     * 三处一致维护：guild_member 删行、被踢者 player.guildId 置空、member_count 走原子递减。
+     */
+    @Transactional
+    fun kickMember(operatorId: Long, targetUserId: Long): Boolean {
+        if (targetUserId == operatorId) return false
+        val operator = userRepository.findById(operatorId).orElse(null) ?: return false
+        val guildId = operator.player?.guildId ?: return false
+        val guild = guildRepository.findById(guildId).orElse(null) ?: return false
+        if (guild.leaderId != operatorId) return false
+
+        // 目标必须是本宗门成员（跨宗门/无宗门一律拒绝）
+        val targetMember = guildMemberRepository.findByUserId(targetUserId)
+            ?.takeIf { it.guildId == guildId } ?: return false
+        val targetUser = userRepository.findById(targetUserId).orElse(null) ?: return false
+        val targetPlayer = targetUser.player ?: return false
+
+        guildMemberRepository.delete(targetMember)
+        targetPlayer.guildId = null
+        userRepository.save(targetUser)
+        guildRepository.tryLeaveMemberCount(guildId)
+        return true
+    }
+
+    /** 转让宗主：仅宗主可操作，目标须为本宗门成员；leaderId 走 compare-and-set 原子 UPDATE 防并发双转让 */
+    @Transactional
+    fun transferLeadership(operatorId: Long, targetUserId: Long): Boolean {
+        if (targetUserId == operatorId) return false
+        val operator = userRepository.findById(operatorId).orElse(null) ?: return false
+        val guildId = operator.player?.guildId ?: return false
+        val guild = guildRepository.findById(guildId).orElse(null) ?: return false
+        if (guild.leaderId != operatorId) return false
+
+        val members = guildMemberRepository.findByGuildId(guildId)
+        val target = members.find { it.userId == targetUserId } ?: return false
+
+        if (guildRepository.transferLeaderId(guildId, targetUserId, operatorId) == 0) return false
+
+        target.role = "LEADER"
+        guildMemberRepository.save(target)
+        members.find { it.userId == operatorId }?.let {
+            it.role = "MEMBER"
+            guildMemberRepository.save(it)
+        }
+        return true
+    }
+
+    /**
+     * 解散宗门：仅宗主、且成员只剩自己时可解散（最小安全策略——不需要处理
+     * "把在线成员随机甩出宗门"的边界）。创建费 10000 金币不退还：
+     * 退款需要审计与防"建了退、退了建"套现路径，收益远小于本玩法复杂度成本。
+     */
+    @Transactional
+    fun disbandGuild(operatorId: Long): Boolean {
+        val user = userRepository.findById(operatorId).orElse(null) ?: return false
+        val player = user.player ?: return false
+        val guildId = player.guildId ?: return false
+        val guild = guildRepository.findById(guildId).orElse(null) ?: return false
+        if (guild.leaderId != operatorId) return false
+        if (guildMemberRepository.countByGuildId(guildId) > 1L) return false
+        return disbandLocked(user, player, guild)
+    }
+
+    /** 解散的落库动作（调用方已完成宗主身份与"仅剩自己"校验） */
+    private fun disbandLocked(user: UserEntity, player: PlayerProfileEntity, guild: Guild): Boolean {
+        guildMemberRepository.deleteByGuildId(guild.id)
+        guildRepository.delete(guild)
+        player.guildId = null
+        userRepository.save(user)
         return true
     }
 
@@ -150,6 +237,13 @@ class GuildService(
         player.gold -= amount
         guild.exp += amount / 100
         applyGuildLevelUps(guild)
+
+        // 贡献累计（amount 口径）。成员行理论上必存在（guildId 来自它），
+        // 但历史数据漂移时缺行不应阻塞捐献本身，故用可空安全更新
+        guildMemberRepository.findByUserId(userId)?.let {
+            it.contribution += amount
+            guildMemberRepository.save(it)
+        }
 
         guildRepository.save(guild)
         userRepository.save(user)
@@ -196,6 +290,13 @@ class GuildService(
         guild.exp += if (won) GuildBossBalance.WIN_GUILD_EXP else GuildBossBalance.LOSE_GUILD_EXP
         // Boss 战获得的宗门经验同样要触发升级（此前只有 donate 会升级，口径不一致）
         applyGuildLevelUps(guild)
+
+        // 贡献累计：按伤害折算（每 CONTRIBUTION_PER_DAMAGE 点伤害 1 点贡献），
+        // 与金币奖励同为"按伤害"口径，胜负都有份，鼓励参与度
+        guildMemberRepository.findByUserId(userId)?.let {
+            it.contribution += damage / GuildBossBalance.CONTRIBUTION_PER_DAMAGE
+            guildMemberRepository.save(it)
+        }
 
         guildRepository.save(guild)
         userRepository.save(user)
