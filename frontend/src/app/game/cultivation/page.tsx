@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import api, { CultivateResult, BreakthroughResult } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
+import { BootState } from '@/components/StateViews';
 
 const REALM_NAMES = [
     '魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣',
@@ -10,7 +11,7 @@ const REALM_NAMES = [
 ];
 
 export default function CultivationPage() {
-    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
+    const { gameState, message, setMessage, actionLoading: loading, loadError, runAction, refresh } = useGameData();
     const [cultivateResult, setCultivateResult] = useState<CultivateResult | null>(null);
     const [breakthroughResult, setBreakthroughResult] = useState<BreakthroughResult | null>(null);
 
@@ -33,7 +34,12 @@ export default function CultivationPage() {
     );
 
     if (!gameState) {
-        return <div className="text-center py-8">加载中...</div>;
+        return (
+            <div className="space-y-6">
+                <h1 className="text-2xl font-bold text-yellow-400">修炼</h1>
+                <BootState error={loadError} onRetry={refresh} rows={4} />
+            </div>
+        );
     }
 
     const currentRealmIndex = Math.min(Math.floor((gameState.profile.level - 1) / 10), REALM_NAMES.length - 1);

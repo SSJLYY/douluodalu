@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import api, { BackpackItem } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
+import { BootState, EmptyPanel } from '@/components/StateViews';
 
 const YEAR_NAMES = ['百年', '千年', '万年', '十万年', '百万年'];
 const QUALITY_NAMES = ['劣等', '普通', '优秀', '精良', '完美'];
@@ -14,11 +15,16 @@ const CORE_SLOTS = [
 ];
 
 export default function EquipmentPage() {
-    const { gameState, message, setMessage, refresh } = useGameData();
+    const { gameState, message, setMessage, refresh, loadError } = useGameData();
     const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
 
     if (!gameState) {
-        return <div className="text-center py-8">加载中...</div>;
+        return (
+            <div className="space-y-6">
+                <h1 className="text-2xl font-bold text-yellow-400">装备</h1>
+                <BootState error={loadError} onRetry={refresh} rows={5} />
+            </div>
+        );
     }
 
     function showMessage(text: string) {
@@ -189,14 +195,16 @@ export default function EquipmentPage() {
                             />
                         </div>
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-3 gap-3 sm:gap-2">
                         {Array.from({ length: 9 }).map((_, i) => {
                             const ring = gameState.equippedRings.find(r => r.slotIndex === i);
                             const slotKey = `ring-${i}`;
                             return (
-                                <div
+                                <button
+                                    type="button"
                                     key={i}
-                                    className={`p-2 rounded text-center text-sm cursor-pointer ${
+                                    aria-label={`魂环槽位 ${i + 1}${ring ? '，点击卸下' : '，空，点击选中'}`}
+                                    className={`block w-full p-2 rounded text-center text-sm cursor-pointer min-h-11 ${
                                         ring ? 'bg-purple-900 border border-purple-600' : 'bg-gray-700 dl-slot-empty'
                                     } ${selectedSlot === slotKey ? 'ring-2 ring-yellow-400' : ''}`}
                                     onClick={() => handleSlotClick(slotKey, Boolean(ring))}
@@ -204,13 +212,13 @@ export default function EquipmentPage() {
                                     <div className="text-xs text-gray-400">槽位 {i + 1}</div>
                                     {ring ? (
                                         <>
-                                            <div className="text-purple-300">{getRingInfo(ring)}</div>
-                                            <div className="text-xs text-gray-400">负荷 {(ring.load ?? 0).toLocaleString()}</div>
+                                            <div className="text-purple-300 break-all leading-snug">{getRingInfo(ring)}</div>
+                                            <div className="text-xs text-gray-400 tabular-nums">负荷 {(ring.load ?? 0).toLocaleString()}</div>
                                         </>
                                     ) : (
                                         <div className="text-gray-500">空</div>
                                     )}
-                                </div>
+                                </button>
                             );
                         })}
                     </div>
@@ -218,25 +226,27 @@ export default function EquipmentPage() {
 
                 <div className="bg-gray-800 rounded-lg p-4">
                     <h2 className="text-lg font-semibold mb-4 text-blue-400">魂骨 (6槽位)</h2>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-3 sm:gap-2">
                         {Array.from({ length: 6 }).map((_, i) => {
                             const bone = gameState.equippedBones.find(b => b.slotIndex === i);
                             const slotKey = `bone-${i}`;
                             return (
-                                <div
+                                <button
+                                    type="button"
                                     key={i}
-                                    className={`p-2 rounded text-center text-sm cursor-pointer ${
+                                    aria-label={`魂骨槽位 ${BONE_TYPE_NAMES[i]}${bone ? '，点击卸下' : '，空，点击选中'}`}
+                                    className={`block w-full p-2 rounded text-center text-sm cursor-pointer min-h-11 ${
                                         bone ? 'bg-blue-900 border border-blue-600' : 'bg-gray-700 dl-slot-empty'
                                     } ${selectedSlot === slotKey ? 'ring-2 ring-yellow-400' : ''}`}
                                     onClick={() => handleSlotClick(slotKey, Boolean(bone))}
                                 >
                                     <div className="text-xs text-gray-400">{BONE_TYPE_NAMES[i]}</div>
                                     {bone ? (
-                                        <div className="text-blue-300">{getBoneInfo(bone)}</div>
+                                        <div className="text-blue-300 break-all leading-snug">{getBoneInfo(bone)}</div>
                                     ) : (
                                         <div className="text-gray-500">空</div>
                                     )}
-                                </div>
+                                </button>
                             );
                         })}
                     </div>
@@ -244,25 +254,27 @@ export default function EquipmentPage() {
 
                 <div className="bg-gray-800 rounded-lg p-4">
                     <h2 className="text-lg font-semibold mb-4 text-green-400">魂核 (2槽位)</h2>
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                         {CORE_SLOTS.map((slot) => {
                             const core = gameState.equippedCores.find(c => c.slotType === slot.slotType);
                             const slotKey = `core-${slot.slotIndex}`;
                             return (
-                                <div
+                                <button
+                                    type="button"
                                     key={slot.slotType}
-                                    className={`p-3 rounded cursor-pointer ${
+                                    aria-label={`${slot.name}${core ? '，点击卸下' : '，空，点击选中'}`}
+                                    className={`block w-full p-3 rounded text-left cursor-pointer min-h-11 ${
                                         core ? 'bg-green-900 border border-green-600' : 'bg-gray-700 dl-slot-empty'
                                     } ${selectedSlot === slotKey ? 'ring-2 ring-yellow-400' : ''}`}
                                     onClick={() => handleSlotClick(slotKey, Boolean(core))}
                                 >
                                     <div className="text-xs text-gray-400">{slot.name}</div>
                                     {core ? (
-                                        <div className="text-green-300">{getCoreInfo(core)}</div>
+                                        <div className="text-green-300 break-all leading-snug">{getCoreInfo(core)}</div>
                                     ) : (
                                         <div className="text-gray-500">空</div>
                                     )}
-                                </div>
+                                </button>
                             );
                         })}
                     </div>
@@ -274,15 +286,15 @@ export default function EquipmentPage() {
                     <h2 className="text-lg font-semibold">背包 ({gameState.backpackItems.length}件)</h2>
                     <button
                         onClick={handleExpand}
-                        className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded transition"
+                        className="px-3 py-2 max-sm:min-h-11 text-sm bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded transition shrink-0"
                     >
                         扩容背包（消耗金币）
                     </button>
                 </div>
                 {gameState.backpackItems.length === 0 ? (
-                    <div className="text-gray-500 text-center py-4">背包为空</div>
+                    <EmptyPanel message="背包为空，去战斗掉落装备吧" testId="backpack-empty" />
                 ) : (
-                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-3 sm:gap-2">
                         {gameState.backpackItems.map((item) => {
                             const isRing = item.itemType === 'RING';
                             // hover(title)/选中时可见的负荷预览：装上后 X/Y（装得下/装不下）
@@ -319,7 +331,7 @@ export default function EquipmentPage() {
                                         <button
                                             onClick={(e) => { e.stopPropagation(); void handleEquip(item); }}
                                             aria-disabled={cannotFit || item.locked}
-                                            className={`flex-1 px-2 py-0.5 text-xs rounded border transition ${
+                                            className={`flex-1 px-2 py-1.5 max-sm:min-h-11 text-xs rounded border transition ${
                                                 cannotFit
                                                     ? 'bg-gray-700 border-gray-600 text-gray-500 opacity-50 cursor-not-allowed'
                                                     : 'bg-purple-600 hover:bg-purple-500 border-purple-500'
@@ -330,7 +342,7 @@ export default function EquipmentPage() {
                                         <button
                                             onClick={(e) => { e.stopPropagation(); if (!item.locked) handleSell(item); }}
                                             disabled={item.locked}
-                                            className="flex-1 px-2 py-0.5 text-xs bg-red-900/60 hover:bg-red-800 disabled:opacity-40 border border-red-700 rounded"
+                                            className="flex-1 px-2 py-1.5 max-sm:min-h-11 text-xs bg-red-900/60 hover:bg-red-800 disabled:opacity-40 border border-red-700 rounded"
                                         >
                                             出售
                                         </button>

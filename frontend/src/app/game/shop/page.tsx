@@ -1,17 +1,23 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import api, { ShopItem } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
+import { BootState, ErrorPanel, EmptyPanel, SkeletonCards } from '@/components/StateViews';
 
 export default function ShopPage() {
-    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
+    const { gameState, message, setMessage, actionLoading: loading, loadError, refresh, runAction } = useGameData();
     const [normalItems, setNormalItems] = useState<ShopItem[]>([]);
     const [bossItems, setBossItems] = useState<ShopItem[]>([]);
     const [limitedItems, setLimitedItems] = useState<ShopItem[]>([]);
     const [activeTab, setActiveTab] = useState<'normal' | 'boss' | 'limited'>('normal');
+    // 任务#27：商店商品三态——首载骨架 / 失败重试 / 空态（此前只有 console.error + 「暂无物品」误导）
+    const [shopLoading, setShopLoading] = useState(true);
+    const [shopError, setShopError] = useState('');
 
-    async function loadShopItems() {
+    const loadShopItems = useCallback(async () => {
+        setShopLoading(true);
+        setShopError('');
         try {
             const [normal, boss, limited] = await Promise.all([
                 api.getNormalShopItems(),
@@ -22,13 +28,15 @@ export default function ShopPage() {
             setBossItems(boss);
             setLimitedItems(limited);
         } catch (err) {
-            console.error('加载商店物品失败:', err);
+            setShopError(err instanceof Error && err.message ? err.message : '加载商店物品失败');
+        } finally {
+            setShopLoading(false);
         }
-    }
+    }, []);
 
     useEffect(() => {
         queueMicrotask(loadShopItems);
-    }, []);
+    }, [loadShopItems]);
 
     const handleBuyNormalItem = (itemId: number) => runAction(
         () => api.buyNormalShopItem(itemId),
@@ -49,7 +57,12 @@ export default function ShopPage() {
     );
 
     if (!gameState) {
-        return <div className="text-center py-8">加载中...</div>;
+        return (
+            <div className="space-y-6">
+                <h1 className="text-2xl font-bold text-yellow-400">商店</h1>
+                <BootState error={loadError} onRetry={refresh} rows={5} />
+            </div>
+        );
     }
 
     const canAfford = (item: ShopItem) => item.currencyType === 'GOLD'
@@ -57,6 +70,68 @@ export default function ShopPage() {
         : gameState.profile.bossCoin >= item.price;
 
     const currencyLabel = (item: ShopItem) => item.currencyType === 'GOLD' ? '金币' : 'Boss币';
+
+    /** 单个页签的商品列表：骨架 / 错误重试 / 空态 / 卡片网格（三页签同构，收敛于此避免复制粘贴） */
+    const renderShopList = (opts: {
+        tab: string;
+        title: string;
+        items: ShopItem[];
+        buyCls: string;
+        emptyText: string;
+        onBuy: (id: number) => void;
+        showMeta?: boolean;
+    }) => {
+        const { tab, title, items, buyCls, emptyText, onBuy, showMeta } = opts;
+        let body;
+        if (shopLoading && items.length === 0) {
+            body = <SkeletonCards count={6} testId={`shop-skeleton-${tab}`} />;
+        } else if (shopError && items.length === 0) {
+            body = <ErrorPanel message={shopError} onRetry={loadShopItems} testId={`shop-error-${tab}`} />;
+        } else if (items.length === 0) {
+            body = <EmptyPanel message={emptyText} testId={`shop-empty-${tab}`} />;
+        } else {
+            body = (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                    {items.map((item) => (
+                        <div key={item.id} className="bg-surface border border-line rounded-lg p-4 hover:shadow-lg transition-shadow">
+                            <h3 className="font-semibold text-lg break-words">{item.name}</h3>
+                            <p className="text-gray-400 text-sm mt-1">{item.description}</p>
+                            {showMeta && (
+                                <div className="mt-2 text-xs text-gray-500">
+                                    {item.requiresLevel > 1 && <span className="mr-3">需 {item.requiresLevel} 级</span>}
+                                    {item.stock >= 0 ? `限购 ${item.stock} 件` : '不限购'}
+                                </div>
+                            )}
+                            <div className="mt-4 flex justify-between items-center gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                    <span className="font-semibold tabular-nums">{item.price} {currencyLabel(item)}</span>
+                                </div>
+                                <button
+                                    onClick={() => onBuy(item.id)}
+                                    disabled={loading || !canAfford(item)}
+                                    className={`shrink-0 px-4 min-h-11 ${buyCls} disabled:bg-gray-600 rounded text-sm`}
+                                >
+                                    购买
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+        return (
+            <div className="space-y-4">
+                <h2 className="text-lg font-semibold">{title}</h2>
+                {/* 刷新失败但已有旧数据：顶部横幅提示，不打断浏览 */}
+                {shopError && items.length > 0 && (
+                    <div role="alert" className="dl-shake px-4 py-2 bg-red-500/20 border border-red-500/50 rounded-lg text-red-300 text-sm">
+                        {shopError}，正在显示上次数据
+                    </div>
+                )}
+                {body}
+            </div>
+        );
+    };
 
     return (
         <div className="space-y-6">
@@ -79,135 +154,56 @@ export default function ShopPage() {
             </div>
 
             {/* 标签页切换 */}
-            <div className="flex border-b border-gray-700">
-                <button
-                    className={`py-2 px-4 font-semibold ${
-                        activeTab === 'normal' 
-                            ? 'text-yellow-400 border-b-2 border-yellow-400' 
-                            : 'text-gray-400 hover:text-foreground'
-                    }`}
-                    onClick={() => setActiveTab('normal')}
-                >
-                    普通商店
-                </button>
-                <button
-                    className={`py-2 px-4 font-semibold ${
-                        activeTab === 'boss' 
-                            ? 'text-yellow-400 border-b-2 border-yellow-400' 
-                            : 'text-gray-400 hover:text-foreground'
-                    }`}
-                    onClick={() => setActiveTab('boss')}
-                >
-                    Boss商店
-                </button>
-                <button
-                    className={`py-2 px-4 font-semibold ${
-                        activeTab === 'limited' 
-                            ? 'text-yellow-400 border-b-2 border-yellow-400' 
-                            : 'text-gray-400 hover:text-foreground'
-                    }`}
-                    onClick={() => setActiveTab('limited')}
-                >
-                    限时珍品
-                </button>
+            <div className="flex border-b border-gray-700" role="tablist">
+                {([
+                    { id: 'normal', name: '普通商店' },
+                    { id: 'boss', name: 'Boss商店' },
+                    { id: 'limited', name: '限时珍品' },
+                ] as const).map((tab) => (
+                    <button
+                        key={tab.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={activeTab === tab.id}
+                        className={`min-h-11 py-2 px-4 font-semibold transition-colors ${
+                            activeTab === tab.id
+                                ? 'text-yellow-400 border-b-2 border-yellow-400'
+                                : 'text-gray-400 hover:text-foreground'
+                        }`}
+                        onClick={() => setActiveTab(tab.id)}
+                    >
+                        {tab.name}
+                    </button>
+                ))}
             </div>
 
-            {/* 普通商店（金币） */}
-            {activeTab === 'normal' && (
-                <div className="space-y-4">
-                    <h2 className="text-lg font-semibold">普通商店</h2>
-                    {normalItems.length === 0 ? (
-                        <div className="text-gray-500 text-center py-4">暂无物品</div>
-                    ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {normalItems.map((item) => (
-                                <div key={item.id} className="bg-surface border border-line rounded-lg p-4 hover:shadow-lg transition-shadow">
-                                    <h3 className="font-semibold text-lg">{item.name}</h3>
-                                    <p className="text-gray-400 text-sm mt-1">{item.description}</p>
-                                    <div className="mt-4 flex justify-between items-center">
-                                        <div className="flex items-center gap-2">
-                                            <span className="font-semibold">{item.price} {currencyLabel(item)}</span>
-                                        </div>
-                                        <button
-                                            onClick={() => handleBuyNormalItem(item.id)}
-                                            disabled={loading || !canAfford(item)}
-                                            className="px-4 py-2 bg-green-700 hover:bg-green-600 disabled:bg-gray-600 rounded text-sm"
-                                        >
-                                            购买
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
+            {activeTab === 'normal' && renderShopList({
+                tab: 'normal',
+                title: '普通商店',
+                items: normalItems,
+                buyCls: 'bg-green-700 hover:bg-green-600',
+                emptyText: '暂无物品',
+                onBuy: handleBuyNormalItem,
+            })}
 
-            {/* Boss商店 */}
-            {activeTab === 'boss' && (
-                <div className="space-y-4">
-                    <h2 className="text-lg font-semibold">Boss商店</h2>
-                    {bossItems.length === 0 ? (
-                        <div className="text-gray-500 text-center py-4">暂无物品</div>
-                    ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {bossItems.map((item) => (
-                                <div key={item.id} className="bg-surface border border-line rounded-lg p-4 hover:shadow-lg transition-shadow">
-                                    <h3 className="font-semibold text-lg">{item.name}</h3>
-                                    <p className="text-gray-400 text-sm mt-1">{item.description}</p>
-                                    <div className="mt-4 flex justify-between items-center">
-                                        <div className="flex items-center gap-2">
-                                            <span className="font-semibold">{item.price} {currencyLabel(item)}</span>
-                                        </div>
-                                        <button
-                                            onClick={() => handleBuyBossItem(item.id)}
-                                            disabled={loading || !canAfford(item)}
-                                            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm"
-                                        >
-                                            购买
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
+            {activeTab === 'boss' && renderShopList({
+                tab: 'boss',
+                title: 'Boss商店',
+                items: bossItems,
+                buyCls: 'bg-blue-600 hover:bg-blue-700',
+                emptyText: '暂无物品',
+                onBuy: handleBuyBossItem,
+            })}
 
-            {/* 限时珍品 */}
-            {activeTab === 'limited' && (
-                <div className="space-y-4">
-                    <h2 className="text-lg font-semibold">限时珍品</h2>
-                    {limitedItems.length === 0 ? (
-                        <div className="text-gray-500 text-center py-4">暂无物品，请稍后再来</div>
-                    ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {limitedItems.map((item) => (
-                                <div key={item.id} className="bg-surface border border-line rounded-lg p-4 hover:shadow-lg transition-shadow">
-                                    <h3 className="font-semibold text-lg">{item.name}</h3>
-                                    <p className="text-gray-400 text-sm mt-1">{item.description}</p>
-                                    <div className="mt-2 text-xs text-gray-500">
-                                        {item.requiresLevel > 1 && <span className="mr-3">需 {item.requiresLevel} 级</span>}
-                                        {item.stock >= 0 ? `限购 ${item.stock} 件` : '不限购'}
-                                    </div>
-                                    <div className="mt-4 flex justify-between items-center">
-                                        <div className="flex items-center gap-2">
-                                            <span className="font-semibold">{item.price} {currencyLabel(item)}</span>
-                                        </div>
-                                        <button
-                                            onClick={() => handleBuyLimitedItem(item.id)}
-                                            disabled={loading || !canAfford(item)}
-                                            className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 rounded text-sm"
-                                        >
-                                            购买
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
+            {activeTab === 'limited' && renderShopList({
+                tab: 'limited',
+                title: '限时珍品',
+                items: limitedItems,
+                buyCls: 'bg-purple-600 hover:bg-purple-700',
+                emptyText: '暂无物品，请稍后再来',
+                onBuy: handleBuyLimitedItem,
+                showMeta: true,
+            })}
 
             {/* 消息提示 */}
             {message && (

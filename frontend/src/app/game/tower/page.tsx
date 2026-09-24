@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import api, { TowerBattleResult } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
+import { BootState } from '@/components/StateViews';
 
 export default function TowerPage() {
-    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
+    const { gameState, message, setMessage, actionLoading: loading, loadError, runAction, refresh } = useGameData();
     const [battleResult, setBattleResult] = useState<TowerBattleResult | null>(null);
 
     const handleChallenge = () => runAction(
@@ -22,7 +23,12 @@ export default function TowerPage() {
     );
 
     if (!gameState) {
-        return <div className="text-center py-8">加载中...</div>;
+        return (
+            <div className="space-y-6">
+                <h1 className="text-2xl font-bold text-red-400">杀戮之都</h1>
+                <BootState error={loadError} onRetry={refresh} rows={4} />
+            </div>
+        );
     }
 
     const currentFloor = gameState.profile.towerFloor;

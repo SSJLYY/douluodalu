@@ -2,6 +2,7 @@
 
 import api from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
+import { BootState } from '@/components/StateViews';
 
 const TALENT_BRANCHES = [
     { id: 'WAR_GOD', name: '战神', icon: '⚔️', description: '提升战斗能力' },
@@ -14,7 +15,7 @@ const TALENT_BRANCHES = [
 const TALENT_MAX_LEVEL = 3;
 
 export default function TalentPage() {
-    const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
+    const { gameState, message, setMessage, actionLoading: loading, loadError, runAction, refresh } = useGameData();
 
     const handleUpgradeTalent = (branch: string) => runAction(
         () => api.upgradeTalent(branch),
@@ -23,7 +24,12 @@ export default function TalentPage() {
     );
 
     if (!gameState) {
-        return <div className="text-center py-8">加载中...</div>;
+        return (
+            <div className="space-y-6">
+                <h1 className="text-2xl font-bold text-yellow-400">天赋</h1>
+                <BootState error={loadError} onRetry={refresh} rows={4} />
+            </div>
+        );
     }
 
     const talentPoints = gameState.profile.talentPoints;
@@ -77,7 +83,7 @@ export default function TalentPage() {
                             <button
                                 onClick={() => handleUpgradeTalent(branch.id)}
                                 disabled={loading || !canUpgrade}
-                                className="w-full py-2 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 rounded text-sm transition-colors"
+                                className="w-full min-h-11 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 rounded text-sm transition-colors"
                             >
                                 {loading ? '升级中...' : 
                                  currentLevel >= maxLevel ? '已满级' :

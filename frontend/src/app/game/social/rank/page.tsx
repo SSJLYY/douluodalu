@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import api, { RankEntry } from '@/lib/api';
 import { useAsync } from '@/lib/hooks';
+import { SkeletonRows, ErrorPanel } from '@/components/StateViews';
 
 const RANK_TYPES = [
     { id: 'level', name: '等级排行', icon: '⚡' },
@@ -16,26 +17,6 @@ const PODIUM = [
     { rank: 2, medal: '🥈', label: '亚军', cls: 'dl-podium-silver text-gray-300', height: 'h-16 sm:h-20' },
     { rank: 3, medal: '🥉', label: '季军', cls: 'dl-podium-bronze text-orange-400', height: 'h-12 sm:h-14' },
 ];
-
-/** 首屏骨架：与真实列表行同构的 shimmer 占位，避免「白屏 → 数据」闪烁 */
-function RankSkeleton({ rows = 8 }: { rows?: number }) {
-    return (
-        <div data-testid="rank-skeleton" aria-hidden className="divide-y divide-gray-700">
-            {Array.from({ length: rows }, (_, i) => (
-                <div key={i} className="p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <div className="dl-skeleton w-8 h-8" />
-                        <div>
-                            <div className="dl-skeleton w-28 h-4" />
-                            <div className="dl-skeleton w-16 h-3 mt-2" />
-                        </div>
-                    </div>
-                    <div className="dl-skeleton w-16 h-5" />
-                </div>
-            ))}
-        </div>
-    );
-}
 
 export default function RankPage() {
     const { user } = useAuth();
@@ -95,7 +76,7 @@ export default function RankPage() {
                         data-testid="rank-refresh"
                         onClick={handleRefresh}
                         disabled={loading}
-                        className="px-3 py-1.5 rounded-lg text-sm border border-line bg-surface-soft/80 hover:bg-surface-soft transition-colors inline-flex items-center gap-2"
+                        className="px-3 py-1.5 max-sm:min-h-11 rounded-lg text-sm border border-line bg-surface-soft/80 hover:bg-surface-soft transition-colors inline-flex items-center gap-2"
                     >
                         <span aria-hidden className={loading ? 'dl-spinner' : ''}>{loading ? '' : '↻'}</span>
                         {loading ? '刷新中...' : '刷新'}
@@ -110,7 +91,7 @@ export default function RankPage() {
                         key={rankType.id}
                         role="tab"
                         aria-selected={activeRank === rankType.id}
-                        className={`py-2 px-4 font-semibold flex items-center gap-2 transition-colors ${
+                        className={`min-h-11 py-2 px-4 font-semibold flex items-center gap-2 transition-colors ${
                             activeRank === rankType.id
                                 ? 'text-yellow-400 border-b-2 border-yellow-400'
                                 : 'text-gray-400 hover:text-foreground'
@@ -126,19 +107,9 @@ export default function RankPage() {
             {/* 排行榜主体：骨架 / 错误重试 / 空态 / 领奖台+列表 */}
             <div className="bg-gray-800 rounded-lg overflow-hidden">
                 {loading && list.length === 0 ? (
-                    <RankSkeleton />
+                    <SkeletonRows rows={8} testId="rank-skeleton" />
                 ) : error && list.length === 0 ? (
-                    <div data-testid="rank-error" className="dl-pop text-center py-10 px-4">
-                        <div className="text-red-400 mb-4">{error}</div>
-                        <button
-                            type="button"
-                            data-testid="rank-retry"
-                            onClick={handleRefresh}
-                            className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm transition-colors"
-                        >
-                            重试
-                        </button>
-                    </div>
+                    <ErrorPanel message={error} onRetry={handleRefresh} testId="rank-error" retryTestId="rank-retry" />
                 ) : !error && list.length === 0 && !loading ? (
                     <div className="text-center py-8 text-gray-500">暂无数据</div>
                 ) : (

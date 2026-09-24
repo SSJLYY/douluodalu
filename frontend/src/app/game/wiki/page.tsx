@@ -91,8 +91,10 @@ export default function WikiPage() {
                 {WIKI_CATEGORIES.map((category) => (
                     <button
                         key={category.id}
+                        type="button"
+                        aria-pressed={activeCategory === category.id}
                         onClick={() => setActiveCategory(category.id)}
-                        className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                        className={`px-4 min-h-11 rounded-lg text-sm font-semibold transition-colors inline-flex items-center ${
                             activeCategory === category.id
                                 ? 'bg-yellow-600 text-white'
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
@@ -115,28 +117,28 @@ export default function WikiPage() {
                     <div className="space-y-4">
                         {currentCategory.content.map((item, index) => (
                             <div key={index} className="bg-gray-700 rounded-lg p-4">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <h3 className="font-semibold text-lg">{item.name}</h3>
+                                <div className="flex justify-between items-start gap-2">
+                                    <div className="min-w-0">
+                                        <h3 className="font-semibold text-lg break-words">{item.name}</h3>
                                         <p className="text-gray-400 mt-1">{item.description}</p>
                                     </div>
                                     {'level' in item && (
-                                        <span className="bg-yellow-600 px-2 py-1 rounded text-sm">
+                                        <span className="bg-yellow-600 px-2 py-1 rounded text-sm shrink-0">
                                             等级 {item.level}
                                         </span>
                                     )}
                                     {'year' in item && (
-                                        <span className="bg-purple-600 px-2 py-1 rounded text-sm">
+                                        <span className="bg-purple-600 px-2 py-1 rounded text-sm shrink-0 tabular-nums">
                                             {item.year}年
                                         </span>
                                     )}
                                     {'slot' in item && (
-                                        <span className="bg-blue-600 px-2 py-1 rounded text-sm">
+                                        <span className="bg-blue-600 px-2 py-1 rounded text-sm shrink-0">
                                             槽位 {item.slot + 1}
                                         </span>
                                     )}
                                     {'id' in item && !('year' in item) && !('slot' in item) && (
-                                        <span className="bg-gray-600 dl-badge-outline px-2 py-1 rounded text-sm">
+                                        <span className="bg-gray-600 dl-badge-outline px-2 py-1 rounded text-sm shrink-0">
                                             地图 {item.id + 1}
                                         </span>
                                     )}

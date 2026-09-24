@@ -359,6 +359,24 @@ span:is(.bg-purple-600, .bg-blue-600, .bg-yellow-600, .bg-red-600, .bg-green-600
   animation: dl-shimmer 1.4s ease-in-out infinite;
 }
 
+/* ---------- 任务#27 一致性工具 ---------- */
+/* 横向滚动条（顶栏资源行 / 底部导航）：触屏惯性滚动、隐藏滚动条外观 */
+.dl-scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.dl-scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
+/* 键盘可达性：所有可交互元素 focus-visible 时给统一金色焦点环（鼠标点击不触发） */
+:where(a, button, input, select, textarea, summary, [role='tab'], [role='button'], [tabindex]:not([tabindex='-1'])):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* ---------- 排行榜领奖台：前三名专属底色（调色板变量驱动） ---------- */
 .dl-podium-gold {
   background: linear-gradient(180deg,

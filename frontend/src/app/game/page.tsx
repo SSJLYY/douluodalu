@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import api, { BattleResult, OfflineReward, PowerDetail } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
+import { BootState } from '@/components/StateViews';
 
 const MAP_NAMES = ['圣魂村', '诺丁城外', '星斗外围', '落日森林', '极北之地', '海神岛', '杀戮之都外域', '神界废墟'];
 const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣', '魂斗罗', '封号斗罗', '极限斗罗', '半神', '神祇', '神王', '至高神王', '创世神'];
@@ -31,9 +32,9 @@ function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetai
                 className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-surface-soft/60 transition rounded-xl"
             >
                 <span className="text-sm font-semibold text-orange-400">⚔️ 战力明细</span>
-                <span className="flex items-center gap-2 text-sm text-gray-400">
-                    总战力
-                    <span key={power} className="dl-value-flash font-bold text-orange-400">{power.toLocaleString()}</span>
+                <span className="flex items-center gap-2 text-sm text-gray-400 min-w-0">
+                    <span className="hidden sm:inline">总战力</span>
+                    <span key={power} className="dl-value-flash font-bold text-orange-400 tabular-nums">{power.toLocaleString()}</span>
                     <span className={`inline-block transition-transform duration-300 ${open ? 'rotate-180' : ''}`} aria-hidden>▾</span>
                 </span>
             </button>
@@ -43,12 +44,12 @@ function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetai
                         const pct = power > 0 ? Math.min(100, (r.share / power) * 100) : 0;
                         return (
                             <div key={r.key} data-power-row={r.key}>
-                                <div className="flex justify-between text-xs mb-1">
-                                    <span className="text-gray-300">
+                                <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-xs mb-1">
+                                    <span className="text-gray-300 min-w-0">
                                         {r.icon} {r.label}
                                         <span className="text-gray-500 ml-2">攻 +{r.atk.toLocaleString()} · 生 +{r.hp.toLocaleString()}</span>
                                     </span>
-                                    <span className="text-gray-400 tabular-nums">
+                                    <span className="text-gray-400 tabular-nums shrink-0">
                                         {r.share.toLocaleString()}（{pct.toFixed(1)}%）
                                     </span>
                                 </div>
@@ -80,7 +81,7 @@ let offlineClaimAttempted = false;
 export default function GamePage() {
     const { user, isLoading, logout } = useAuth();
     const router = useRouter();
-    const { gameState, message, setMessage, actionLoading, runAction, refresh } = useGameData();
+    const { gameState, message, setMessage, actionLoading, loadError, runAction, refresh } = useGameData();
     const [battleResult, setBattleResult] = useState<BattleResult | null>(null);
     const [offline, setOffline] = useState<OfflineReward | null>(null);
 
@@ -126,9 +127,12 @@ export default function GamePage() {
     );
 
     if (isLoading || !gameState) {
+        // 首载骨架 / 加载失败错误重试（统一三态，复用 StateViews）
         return (
-            <div className="min-h-screen flex items-center justify-center">
-                <div className="text-xl animate-pulse">加载游戏数据...</div>
+            <div className="min-h-screen bg-gradient-to-b from-gray-900 via-gray-800 to-gray-900">
+                <div className="max-w-4xl mx-auto p-4">
+                    <BootState error={isLoading ? '' : loadError} onRetry={refresh} rows={7} />
+                </div>
             </div>
         );
     }
@@ -142,29 +146,29 @@ export default function GamePage() {
 
     return (
         <div className="min-h-screen bg-gradient-to-b from-gray-900 via-gray-800 to-gray-900">
-            {/* 顶部导航 */}
-            <header className="bg-surface/90 backdrop-blur border-b border-line px-4 py-3 flex items-center justify-between">
-                <h1 className="text-lg font-bold text-accent">斗罗大陆·放置传说</h1>
-                <div className="flex items-center gap-4">
-                    <span className="text-sm text-gray-300">{user?.nickname}</span>
-                    <button onClick={logout} className="text-sm text-red-400 hover:text-red-300">退出</button>
+            {/* 顶部导航：窄屏下标题截断、按钮触控高度 */}
+            <header className="bg-surface/90 backdrop-blur border-b border-line px-4 py-3 flex items-center justify-between gap-3">
+                <h1 className="text-base sm:text-lg font-bold text-accent truncate">斗罗大陆·放置传说</h1>
+                <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-sm text-gray-300 truncate max-w-[8rem]">{user?.nickname}</span>
+                    <button onClick={logout} className="text-sm min-h-11 px-2 text-red-400 hover:text-red-300">退出</button>
                 </div>
             </header>
 
             <div className="max-w-4xl mx-auto p-4 space-y-4">
                 {/* 玩家状态栏 */}
                 <div className="dl-fade-up bg-surface/80 rounded-xl p-4 border border-line">
-                    <div className="flex items-center justify-between mb-3">
-                        <div>
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-3">
+                        <div className="min-w-0">
                             <span className="text-yellow-400 font-bold text-lg">{realmName}</span>
                             <span className="text-gray-400 ml-2">Lv.{p.level}</span>
                             {p.prestigeCount > 0 && <span className="text-purple-400 ml-2">{p.prestigeCount}转</span>}
                             {/* 任务#21：主页头部战力（变化时重挂载触发 flash 动画） */}
                             <span className="ml-2 text-sm font-semibold text-orange-400">
-                                ⚔️ 战力 <span key={gameState.power} className="dl-value-flash inline-block">{gameState.power.toLocaleString()}</span>
+                                ⚔️ 战力 <span key={gameState.power} className="dl-value-flash inline-block tabular-nums">{gameState.power.toLocaleString()}</span>
                             </span>
                         </div>
-                        <div className="text-sm text-gray-400">
+                        <div className="text-sm text-gray-400 min-w-0 truncate max-w-full">
                             {p.martialSoulName ? `武魂: ${p.martialSoulName}` : '未觉醒武魂'}
                         </div>
                     </div>
@@ -202,8 +206,8 @@ export default function GamePage() {
 
                 {/* 战斗区域 */}
                 <div className="dl-fade-up [animation-delay:80ms] bg-surface/80 rounded-xl p-4 border border-line">
-                    <div className="flex items-center justify-between mb-4">
-                        <div>
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-4">
+                        <div className="min-w-0">
                             <h2 className="text-lg font-bold text-orange-400">{mapName}</h2>
                             <p className="text-sm text-gray-400">第 {p.currentStage}/15 层</p>
                         </div>

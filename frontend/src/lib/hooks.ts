@@ -58,12 +58,17 @@ export function useGameData(pollMs: number | false = POLL_INTERVAL_MS) {
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [message, setMessage] = useState('');
     const [actionLoading, setActionLoading] = useState(false);
+    // 任务#27：/api/game/state 最近一次加载失败的原因（成功即清空）。
+    // 首屏未拿到数据时页面据此渲染统一错误重试面板；已拿到数据时静默兜底旧值，不打扰。
+    const [loadError, setLoadError] = useState('');
 
     const refresh = useCallback(async () => {
         try {
             setGameState(await api.getGameState());
+            setLoadError('');
         } catch (err) {
-            console.error('加载游戏状态失败:', err);
+            // 轮询失败属于常态（后端重启/网络抖动），不再 console.error 刷屏，交给页面门控展示
+            setLoadError(errorMessage(err, '加载游戏状态失败'));
         }
     }, []);
 
@@ -130,5 +135,5 @@ export function useGameData(pollMs: number | false = POLL_INTERVAL_MS) {
         }
     }, [refresh]);
 
-    return { gameState, setGameState, message, setMessage, actionLoading, refresh, runAction };
+    return { gameState, setGameState, message, setMessage, actionLoading, loadError, refresh, runAction };
 }
