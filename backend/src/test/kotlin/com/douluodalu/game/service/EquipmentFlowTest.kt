@@ -66,11 +66,15 @@ class EquipmentFlowTest {
         id = id, userId = 1L, itemType = "RING", yearOrdinal = year, qualityOrdinal = quality, percentage = percentage
     )
 
+    /** 高等级存档：容量=（(50+10L)×3+(50L+100)/100)×6，Lv.99 → 19023，让默认测试环(负荷2800)轻松装下 */
+    private fun highLevelProfile(): PlayerProfileEntity = PlayerProfileEntity(userId = 1L, level = 99)
+
     @Test
     fun `equipRing should move item from backpack to slot`() {
         val r = ring(id = 11L)
         doReturn(listOf(r)).whenever(backpackRepo).findByUserIdAndItemType(1L, "RING")
         doReturn(null).whenever(equippedRingRepo).findByUserIdAndSlotIndex(1L, 0)
+        doReturn(highLevelProfile()).whenever(profileRepo).findByUserId(1L)
 
         assertTrue(gameService.equipRing(1L, 0, 0))
 
@@ -86,10 +90,13 @@ class EquipmentFlowTest {
 
     @Test
     fun `equipRing on occupied slot should return old ring to backpack and replace it`() {
-        val newRing = ring(id = 22L, year = 2, quality = 3, percentage = 600)
+        // percentage=120 → 负荷 100000×0.12×0.9=10800，Lv.99 容量 19023 内可换装
+        val newRing = ring(id = 22L, year = 2, quality = 3, percentage = 120)
         val oldEquipped = EquippedRing(id = 5L, userId = 1L, slotIndex = 3, ringId = 9L, yearOrdinal = 0, qualityOrdinal = 1, percentage = 120)
         doReturn(listOf(newRing)).whenever(backpackRepo).findByUserIdAndItemType(1L, "RING")
         doReturn(oldEquipped).whenever(equippedRingRepo).findByUserIdAndSlotIndex(1L, 3)
+        doReturn(listOf(oldEquipped)).whenever(equippedRingRepo).findByUserId(1L)
+        doReturn(highLevelProfile()).whenever(profileRepo).findByUserId(1L)
 
         assertTrue(gameService.equipRing(1L, 3, 0))
 
@@ -139,6 +146,58 @@ class EquipmentFlowTest {
         verify(equippedRingRepo, never()).delete(any())
         verify(backpackRepo, never()).save(any())
         verify(backpackRepo, never()).delete(any())
+    }
+
+    // ======== 任务#21：魂环负荷校验（公式对齐 shared SoulRingSystem，见 RingLoadCalculatorTest） ========
+
+    private fun levelProfile(level: Int): PlayerProfileEntity = PlayerProfileEntity(userId = 1L, level = level)
+
+    @Test
+    fun `equipRing should reject over-capacity ring with 负荷不足 message and write nothing`() {
+        // Lv.8 容量 = ((50+80)×3 + 500/100)×6 = 2370；千年完美(23.8%) 负荷 = 10000×0.238×1.0 = 2380 → 超 10
+        val r = ring(id = 71L, year = 1, quality = 4, percentage = 238)
+        doReturn(listOf(r)).whenever(backpackRepo).findByUserIdAndItemType(1L, "RING")
+        doReturn(null).whenever(equippedRingRepo).findByUserIdAndSlotIndex(1L, 0)
+        doReturn(levelProfile(8)).whenever(profileRepo).findByUserId(1L)
+
+        val err = assertThrows(IllegalArgumentException::class.java) { gameService.equipRing(1L, 0, 0) }
+        assertTrue(err.message!!.startsWith("负荷不足"))
+        assertTrue(err.message!!.contains("当前负荷 0/2370"))
+        assertTrue(err.message!!.contains("该魂环需负荷 2380"))
+        assertTrue(err.message!!.contains("还需 10"))
+
+        verify(equippedRingRepo, never()).save(any())
+        verify(backpackRepo, never()).delete(any())
+    }
+
+    @Test
+    fun `equipRing should allow ring whose load exactly equals capacity (boundary)`() {
+        // 千年完美(23.7%) 负荷 = 2370 = Lv.8 容量 → 等载允许（<=）
+        val r = ring(id = 72L, year = 1, quality = 4, percentage = 237)
+        doReturn(listOf(r)).whenever(backpackRepo).findByUserIdAndItemType(1L, "RING")
+        doReturn(null).whenever(equippedRingRepo).findByUserIdAndSlotIndex(1L, 0)
+        doReturn(levelProfile(8)).whenever(profileRepo).findByUserId(1L)
+
+        assertTrue(gameService.equipRing(1L, 0, 0))
+        verify(equippedRingRepo).save(any())
+        verify(backpackRepo).delete(r)
+    }
+
+    @Test
+    fun `overloaded ring should become equippable after leveling up (扩容闭环)`() {
+        val r = ring(id = 73L, year = 1, quality = 4, percentage = 238)
+        doReturn(listOf(r)).whenever(backpackRepo).findByUserIdAndItemType(1L, "RING")
+        doReturn(null).whenever(equippedRingRepo).findByUserIdAndSlotIndex(1L, 0)
+        val profile = levelProfile(8)
+        doReturn(profile).whenever(profileRepo).findByUserId(1L)
+
+        // Lv.8 容量 2370 < 2380 → 拒绝
+        assertThrows(IllegalArgumentException::class.java) { gameService.equipRing(1L, 0, 0) }
+
+        // 升级后容量 = ((50+90)×3 + 550/100)×6 = 2553 ≥ 2380 → 可装
+        profile.level = 9
+        assertTrue(gameService.equipRing(1L, 0, 0))
+        verify(equippedRingRepo).save(any())
     }
 
     @Test

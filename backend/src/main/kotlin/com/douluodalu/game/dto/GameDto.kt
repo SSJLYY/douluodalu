@@ -8,7 +8,14 @@ data class GameStateResponse(
     val equippedCores: List<EquippedCoreDto>,
     val backpackItems: List<BackpackItemDto>,
     val talents: Map<String, Int>,
-    val achievements: List<String>
+    val achievements: List<String>,
+    // ======== 任务#21：战力 + 魂环负荷体系（全部带默认值，向后兼容） ========
+    /** 总战斗力（EquipmentPowerService.powerOf，与战斗/爬塔响应同源） */
+    val power: Long = 0,
+    /** 当前已装备魂环总负荷（shared SoulRingSystem.calcRingLoad 逐件求和） */
+    val ringLoad: Long = 0,
+    /** 魂环吸收容量 = 根骨×6（超负荷装环会被 400 拒绝） */
+    val capacity: Long = 0
 )
 
 data class ProfileDto(
@@ -41,7 +48,9 @@ data class EquippedRingDto(
     val qualityOrdinal: Int,
     val percentage: Int,
     val affixesJson: String?,
-    val skillName: String?
+    val skillName: String?,
+    /** 该魂环负荷（任务#21，= 等效年份；带默认值向后兼容） */
+    val load: Long = 0
 )
 
 data class EquippedBoneDto(
@@ -76,7 +85,9 @@ data class BackpackItemDto(
     val passiveSkillName: String?,
     val coreName: String?,
     val coreValue: Int?,
-    val coreLevel: Int
+    val coreLevel: Int,
+    /** 若为魂环：该环负荷（前端"装得下/装不下"预览用）；其他类型为 0。任务#21，向后兼容 */
+    val load: Long = 0
 )
 
 // ======== 操作响应 ========

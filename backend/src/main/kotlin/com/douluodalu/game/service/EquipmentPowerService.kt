@@ -20,7 +20,7 @@ import org.springframework.stereotype.Service
  *    CORE_ATK_PCT_WEIGHT × coreValue/100 × 稀有度倍率，并用 CORE_ATK_PCT_CAP 封顶防失控。
  *
  * 品质倍率表取自《魂环负荷与年份对应关系.md》的 qualityMult [1.0, 1.2, 1.5, 1.8, 2.2]。
- * 注：魂环年份负荷校验（shared 引擎 1858 行附近的负荷体系）属独立大功能，本次范围外。
+ * 注：魂环年份负荷校验在任务#21 由 RingLoadCalculator 实现（逐行移植 shared SoulRingSystem）。
  */
 /** 单件装备折出的攻击/生命加成 */
 data class EquipmentBonus(val atkBonus: Long, val hpBonus: Long)

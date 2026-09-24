@@ -102,12 +102,17 @@ class GameService(
         val profile = profileRepo.findByUserId(userId)
             ?: throw IllegalStateException("玩家存档不存在")
         val talents = talentRepo.findByUserId(userId).associate { it.branch to it.level }
-        val equippedRings = equippedRingRepo.findByUserId(userId)
-            .map { EquippedRingDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.percentage, null, null) }
-        val equippedBones = equippedBoneRepo.findByUserId(userId)
-            .map { EquippedBoneDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.enhanceLevel, null, null) }
-        val equippedCores = equippedCoreRepo.findByUserId(userId)
-            .map { EquippedCoreDto(it.slotType, it.coreName, it.rarityOrdinal, null, it.coreValue, it.coreLevel) }
+        val rings = equippedRingRepo.findByUserId(userId)
+        val bones = equippedBoneRepo.findByUserId(userId)
+        val cores = equippedCoreRepo.findByUserId(userId)
+        val equippedRings = rings.map {
+            EquippedRingDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.percentage, null, null,
+                RingLoadCalculator.ringLoad(it))
+        }
+        val equippedBones = bones.map { EquippedBoneDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.enhanceLevel, null, null) }
+        val equippedCores = cores.map { EquippedCoreDto(it.slotType, it.coreName, it.rarityOrdinal, null, it.coreValue, it.coreLevel) }
+        // 任务#21：战力 + 魂环负荷/容量（公式同源：EquipmentPowerService / RingLoadCalculator）
+        val bonus = EquipmentPowerService.bonus(profile.level, rings, bones, cores)
         return GameStateResponse(
             profile = toProfileDto(profile),
             equippedRings = equippedRings,
@@ -115,7 +120,10 @@ class GameService(
             equippedCores = equippedCores,
             backpackItems = backpackRepo.findByUserIdOrderByCreatedAtAsc(userId).map { toBackpackItemDto(it) },
             talents = talents,
-            achievements = emptyList()
+            achievements = emptyList(),
+            power = EquipmentPowerService.powerOf(profile.level, bonus),
+            ringLoad = RingLoadCalculator.totalRingLoad(rings),
+            capacity = absorptionCapacityFor(profile, bonus)
         )
     }
 
@@ -414,10 +422,26 @@ class GameService(
         qualityOrdinal = e.qualityOrdinal, affixesJson = e.affixesJson, locked = e.locked,
         percentage = e.percentage, skillName = e.skillName, boneTypeOrdinal = e.boneTypeOrdinal,
         enhanceLevel = e.enhanceLevel, passiveSkillName = e.passiveSkillName,
-        coreName = e.coreName, coreValue = e.coreValue, coreLevel = e.coreLevel
+        coreName = e.coreName, coreValue = e.coreValue, coreLevel = e.coreLevel,
+        // 任务#21：魂环条目带负荷，供前端"装得下/装不下"预览（其他装备不占负荷，为 0）
+        load = if (e.itemType == "RING") RingLoadCalculator.ringLoad(e.yearOrdinal, e.qualityOrdinal, e.percentage) else 0
     )
 
+    /** 玩家魂环吸收容量：根骨×6。攻击/生命与战斗结算同源（含装备加成），matk/pdef/mdef 后端未建模取 0 */
+    private fun absorptionCapacityFor(profile: PlayerProfileEntity, bonus: EquipmentBonus): Long =
+        RingLoadCalculator.absorptionCapacity(
+            RingLoadCalculator.calcRootBone(
+                maxHp = getMaxHp(profile.level) + bonus.hpBonus,
+                atk = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL + bonus.atkBonus,
+                matk = 0, pdef = 0, mdef = 0
+            )
+        )
+
     // ======== 装备操作 ========
+    /**
+     * 装备魂环（任务#21：接入 shared 同源的负荷校验）。
+     * 超负荷时抛 IllegalArgumentException → GlobalExceptionHandler 输出 400 {error,message}。
+     */
     @Transactional
     fun equipRing(userId: Long, slotIndex: Int, ringIndex: Int): Boolean {
         if (slotIndex < 0 || slotIndex > 8) return false // 9个槽位
@@ -429,6 +453,25 @@ class GameService(
 
         // 检查槽位是否已被占用，如果有则卸下原有魂环
         val existing = equippedRingRepo.findByUserIdAndSlotIndex(userId, slotIndex)
+
+        // 吸收容量检测（shared GameEngine.kt:1851~1861 同构）：换装时旧环负荷先释放，再叠加新环
+        val profile = getProfile(userId)
+        val equipped = equippedRingRepo.findByUserId(userId)
+        val newLoad = RingLoadCalculator.ringLoad(ring.yearOrdinal, ring.qualityOrdinal, ring.percentage)
+        val loadAfterEquip = RingLoadCalculator.totalRingLoad(equipped.filterNot { it.slotIndex == slotIndex }) + newLoad
+        val totalLoadBefore = RingLoadCalculator.totalRingLoad(equipped)
+        val bonus = EquipmentPowerService.bonus(
+            profile.level, equipped,
+            equippedBoneRepo.findByUserId(userId), equippedCoreRepo.findByUserId(userId)
+        )
+        val capacity = absorptionCapacityFor(profile, bonus)
+        if (loadAfterEquip > capacity) {
+            val overload = loadAfterEquip - capacity
+            throw IllegalArgumentException(
+                "负荷不足！当前负荷 $totalLoadBefore/$capacity，该魂环需负荷 $newLoad，还需 $overload 才可吸收"
+            )
+        }
+
         if (existing != null) {
             // 卸下已有魂环
             backpackRepo.save(

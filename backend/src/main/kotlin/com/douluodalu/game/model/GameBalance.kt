@@ -28,7 +28,7 @@ object GameBalance {
     //   魂环 = 年份档位 × 品质倍率 × 成熟度倍率(1 + percentage/1000，对应 shared 的 1.1~2.0 区间)
     //   魂骨 = 年份档位 × 品质倍率 × (1 + 强化等级 × 0.10)（shared 的 enhanceEffect 简化版）
     //   魂核 = 按基础攻击的百分比附加（shared「力量」魂核 atk += atk*value/100 的加权版）
-    // 注：魂环年份负荷校验属独立大功能，本次未实现（见仿真报告「已修复项」说明）。
+    // 注：魂环年份负荷校验已由 RingLoadCalculator 实现（任务#21，公式逐行移植 shared SoulRingSystem）。
     val EQUIP_QUALITY_MULT = listOf(1.0, 1.2, 1.5, 1.8, 2.2) // 取自《魂环负荷与年份对应关系.md》qualityMult
     const val RING_ATK_WEIGHT = 20L        // 单魂环攻击基础值（再乘年份/品质/成熟度倍率）
     const val RING_HP_WEIGHT = 80L         // 单魂环生命基础值
