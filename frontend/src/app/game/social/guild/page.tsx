@@ -160,7 +160,7 @@ export default function GuildPage() {
                                 value={newGuildName}
                                 onChange={(e) => setNewGuildName(e.target.value)}
                                 placeholder="请输入宗门名称"
-                                className="w-full px-4 py-2 bg-gray-700 text-white placeholder:text-gray-300 rounded border border-gray-500 focus:border-yellow-400 focus:outline-none"
+                                className="w-full px-4 py-2 bg-gray-700 placeholder:text-gray-300 rounded border border-gray-500 focus:border-yellow-400 focus:outline-none"
                                 maxLength={20}
                             />
                         </div>
@@ -298,7 +298,7 @@ export default function GuildPage() {
 
             {/* 消息提示 */}
             {message && (
-                <div className="bg-gray-700 rounded-lg p-4 text-center border border-gray-500 text-white">
+                <div className="bg-gray-700 rounded-lg p-4 text-center border border-gray-500">
                     {message}
                 </div>
             )}

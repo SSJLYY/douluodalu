@@ -41,7 +41,7 @@ export default function RankPage() {
                         className={`py-2 px-4 font-semibold flex items-center gap-2 ${
                             activeRank === rankType.id
                                 ? 'text-yellow-400 border-b-2 border-yellow-400'
-                                : 'text-gray-400 hover:text-white'
+                                : 'text-gray-400 hover:text-foreground'
                         }`}
                         onClick={() => setActiveRank(rankType.id)}
                     >

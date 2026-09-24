@@ -60,10 +60,10 @@ export default function ShopPage() {
 
     return (
         <div className="space-y-6">
-            <h1 className="text-2xl font-bold text-yellow-400">商店</h1>
+            <h1 className="text-2xl font-bold text-yellow-400 dl-fade-up">商店</h1>
 
             {/* 货币显示 */}
-            <div className="bg-gray-800 rounded-lg p-4">
+            <div className="dl-fade-up [animation-delay:60ms] bg-surface border border-line rounded-lg p-4">
                 <div className="flex justify-around">
                     <div className="text-center">
                         <div className="text-yellow-500 text-2xl">💰</div>
@@ -84,7 +84,7 @@ export default function ShopPage() {
                     className={`py-2 px-4 font-semibold ${
                         activeTab === 'normal' 
                             ? 'text-yellow-400 border-b-2 border-yellow-400' 
-                            : 'text-gray-400 hover:text-white'
+                            : 'text-gray-400 hover:text-foreground'
                     }`}
                     onClick={() => setActiveTab('normal')}
                 >
@@ -94,7 +94,7 @@ export default function ShopPage() {
                     className={`py-2 px-4 font-semibold ${
                         activeTab === 'boss' 
                             ? 'text-yellow-400 border-b-2 border-yellow-400' 
-                            : 'text-gray-400 hover:text-white'
+                            : 'text-gray-400 hover:text-foreground'
                     }`}
                     onClick={() => setActiveTab('boss')}
                 >
@@ -104,7 +104,7 @@ export default function ShopPage() {
                     className={`py-2 px-4 font-semibold ${
                         activeTab === 'limited' 
                             ? 'text-yellow-400 border-b-2 border-yellow-400' 
-                            : 'text-gray-400 hover:text-white'
+                            : 'text-gray-400 hover:text-foreground'
                     }`}
                     onClick={() => setActiveTab('limited')}
                 >
@@ -121,7 +121,7 @@ export default function ShopPage() {
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {normalItems.map((item) => (
-                                <div key={item.id} className="bg-gray-800 rounded-lg p-4">
+                                <div key={item.id} className="bg-surface border border-line rounded-lg p-4 hover:shadow-lg transition-shadow">
                                     <h3 className="font-semibold text-lg">{item.name}</h3>
                                     <p className="text-gray-400 text-sm mt-1">{item.description}</p>
                                     <div className="mt-4 flex justify-between items-center">
@@ -152,7 +152,7 @@ export default function ShopPage() {
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {bossItems.map((item) => (
-                                <div key={item.id} className="bg-gray-800 rounded-lg p-4">
+                                <div key={item.id} className="bg-surface border border-line rounded-lg p-4 hover:shadow-lg transition-shadow">
                                     <h3 className="font-semibold text-lg">{item.name}</h3>
                                     <p className="text-gray-400 text-sm mt-1">{item.description}</p>
                                     <div className="mt-4 flex justify-between items-center">
@@ -183,7 +183,7 @@ export default function ShopPage() {
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {limitedItems.map((item) => (
-                                <div key={item.id} className="bg-gray-800 rounded-lg p-4">
+                                <div key={item.id} className="bg-surface border border-line rounded-lg p-4 hover:shadow-lg transition-shadow">
                                     <h3 className="font-semibold text-lg">{item.name}</h3>
                                     <p className="text-gray-400 text-sm mt-1">{item.description}</p>
                                     <div className="mt-2 text-xs text-gray-500">
@@ -211,13 +211,13 @@ export default function ShopPage() {
 
             {/* 消息提示 */}
             {message && (
-                <div className="bg-gray-700 rounded-lg p-4 text-center">
+                <div key={message} className="dl-slide-in bg-gray-700 rounded-lg p-4 text-center">
                     {message}
                 </div>
             )}
 
             {/* 商店说明 */}
-            <div className="bg-gray-800 rounded-lg p-4">
+            <div className="bg-surface border border-line rounded-lg p-4">
                 <h3 className="font-semibold mb-2">商店说明</h3>
                 <ul className="text-sm text-gray-300 space-y-1">
                     <li>• Boss商店：使用Boss币购买稀有物品</li>

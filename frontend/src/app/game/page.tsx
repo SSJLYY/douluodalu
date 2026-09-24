@@ -78,8 +78,8 @@ export default function GamePage() {
     return (
         <div className="min-h-screen bg-gradient-to-b from-gray-900 via-gray-800 to-gray-900">
             {/* 顶部导航 */}
-            <header className="bg-gray-800/90 backdrop-blur border-b border-gray-700 px-4 py-3 flex items-center justify-between">
-                <h1 className="text-lg font-bold text-yellow-400">斗罗大陆·放置传说</h1>
+            <header className="bg-surface/90 backdrop-blur border-b border-line px-4 py-3 flex items-center justify-between">
+                <h1 className="text-lg font-bold text-accent">斗罗大陆·放置传说</h1>
                 <div className="flex items-center gap-4">
                     <span className="text-sm text-gray-300">{user?.nickname}</span>
                     <button onClick={logout} className="text-sm text-red-400 hover:text-red-300">退出</button>
@@ -88,7 +88,7 @@ export default function GamePage() {
 
             <div className="max-w-4xl mx-auto p-4 space-y-4">
                 {/* 玩家状态栏 */}
-                <div className="bg-gray-800/80 rounded-xl p-4 border border-gray-700">
+                <div className="dl-fade-up bg-surface/80 rounded-xl p-4 border border-line">
                     <div className="flex items-center justify-between mb-3">
                         <div>
                             <span className="text-yellow-400 font-bold text-lg">{realmName}</span>
@@ -107,29 +107,29 @@ export default function GamePage() {
                             <span>{p.currentHp}/{maxHp}</span>
                         </div>
                         <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
-                            <div className="h-full bg-gradient-to-r from-red-600 to-red-400 rounded-full transition-all" style={{ width: `${hpPercent}%` }} />
+                            <div className="h-full bg-gradient-to-r from-red-600 to-red-400 rounded-full transition-all duration-700 ease-out" style={{ width: `${hpPercent}%` }} />
                         </div>
                     </div>
 
                     {/* 资源 */}
                     <div className="grid grid-cols-3 gap-4 text-center text-sm">
                         <div className="bg-gray-700/50 rounded-lg p-2">
-                            <div className="text-yellow-400 font-bold">{p.gold.toLocaleString()}</div>
+                            <div key={p.gold} className="dl-value-flash text-yellow-400 font-bold">{p.gold.toLocaleString()}</div>
                             <div className="text-xs text-gray-400">金币</div>
                         </div>
                         <div className="bg-gray-700/50 rounded-lg p-2">
-                            <div className="text-blue-400 font-bold">{p.soulPower.toLocaleString()}</div>
+                            <div key={p.soulPower} className="dl-value-flash text-blue-400 font-bold">{p.soulPower.toLocaleString()}</div>
                             <div className="text-xs text-gray-400">魂力</div>
                         </div>
                         <div className="bg-gray-700/50 rounded-lg p-2">
-                            <div className="text-purple-400 font-bold">{p.bossCoin.toLocaleString()}</div>
+                            <div key={p.bossCoin} className="dl-value-flash text-purple-400 font-bold">{p.bossCoin.toLocaleString()}</div>
                             <div className="text-xs text-gray-400">Boss币</div>
                         </div>
                     </div>
                 </div>
 
                 {/* 战斗区域 */}
-                <div className="bg-gray-800/80 rounded-xl p-4 border border-gray-700">
+                <div className="dl-fade-up [animation-delay:80ms] bg-surface/80 rounded-xl p-4 border border-line">
                     <div className="flex items-center justify-between mb-4">
                         <div>
                             <h2 className="text-lg font-bold text-orange-400">{mapName}</h2>
@@ -143,7 +143,7 @@ export default function GamePage() {
 
                     {/* 战斗消息 */}
                     {message && (
-                        <div className={`mb-4 p-3 rounded-lg text-sm ${
+                        <div key={message} className={`dl-slide-in mb-4 p-3 rounded-lg text-sm ${
                             message.includes('胜利') || message.includes('成功')
                                 ? 'bg-green-500/20 border border-green-500/50 text-green-300'
                                 : message.includes('战败') || message.includes('失败')
@@ -156,7 +156,7 @@ export default function GamePage() {
 
                     {/* 战斗结果 */}
                     {battleResult && (
-                        <div className={`mb-4 p-4 rounded-lg border ${
+                        <div key={`${battleResult.monsterName}-${battleResult.rounds}`} className={`dl-fade-up mb-4 p-4 rounded-lg border ${
                             battleResult.won ? 'bg-green-900/30 border-green-600' : 'bg-red-900/30 border-red-600'
                         }`}>
                             <div className="font-bold mb-2">
@@ -213,20 +213,20 @@ export default function GamePage() {
                 </div>
 
                 {/* 快捷导航 */}
-                <div className="grid grid-cols-4 gap-3">
-                    <button onClick={() => router.push('/game/equipment')} className="bg-gray-800/80 rounded-xl p-4 border border-gray-700 hover:border-yellow-500 transition text-center">
+                <div className="dl-fade-up [animation-delay:160ms] grid grid-cols-4 gap-3">
+                    <button onClick={() => router.push('/game/equipment')} className="bg-surface/80 rounded-xl p-4 border border-line hover:border-yellow-500 hover:-translate-y-0.5 transition text-center">
                         <div className="text-2xl mb-1">⚔️</div>
                         <div className="text-sm text-gray-300">装备</div>
                     </button>
-                    <button onClick={() => router.push('/game/shop')} className="bg-gray-800/80 rounded-xl p-4 border border-gray-700 hover:border-yellow-500 transition text-center">
+                    <button onClick={() => router.push('/game/shop')} className="bg-surface/80 rounded-xl p-4 border border-line hover:border-yellow-500 hover:-translate-y-0.5 transition text-center">
                         <div className="text-2xl mb-1">🏪</div>
                         <div className="text-sm text-gray-300">商店</div>
                     </button>
-                    <button onClick={() => router.push('/game/tower')} className="bg-gray-800/80 rounded-xl p-4 border border-gray-700 hover:border-yellow-500 transition text-center">
+                    <button onClick={() => router.push('/game/tower')} className="bg-surface/80 rounded-xl p-4 border border-line hover:border-yellow-500 hover:-translate-y-0.5 transition text-center">
                         <div className="text-2xl mb-1">🗼</div>
                         <div className="text-sm text-gray-300">杀戮之都</div>
                     </button>
-                    <button onClick={() => router.push('/game/social/rank')} className="bg-gray-800/80 rounded-xl p-4 border border-gray-700 hover:border-yellow-500 transition text-center">
+                    <button onClick={() => router.push('/game/social/rank')} className="bg-surface/80 rounded-xl p-4 border border-line hover:border-yellow-500 hover:-translate-y-0.5 transition text-center">
                         <div className="text-2xl mb-1">🏆</div>
                         <div className="text-sm text-gray-300">排行榜</div>
                     </button>
@@ -235,8 +235,8 @@ export default function GamePage() {
 
             {/* 离线收益弹窗 */}
             {offline && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-                    <div className="bg-gray-800 border border-yellow-500/50 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+                <div className="dl-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+                    <div className="dl-pop bg-surface border border-yellow-500/50 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
                         <h3 className="text-lg font-bold text-yellow-400 mb-3">欢迎回来！</h3>
                         <p className="text-sm text-gray-400 mb-4">
                             你离开了 {Math.floor(offline.offlineSeconds / 60)} 分钟，放置收益已入账：

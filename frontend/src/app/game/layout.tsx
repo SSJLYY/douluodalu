@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { useGameData } from '@/lib/hooks';
+import ThemeToggle from '@/components/ThemeToggle';
 
 const NAV_ITEMS = [
     { href: '/game', label: '战斗', icon: '⚔️' },
@@ -46,10 +47,10 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
     return (
         <div className="min-h-screen flex flex-col">
             {/* 顶部状态栏 */}
-            <header className="bg-gray-800 border-b border-gray-700 p-3">
+            <header className="bg-surface border-b border-line p-3">
                 <div className="max-w-7xl mx-auto flex justify-between items-center">
                     <div className="flex items-center gap-4">
-                        <h1 className="text-xl font-bold text-yellow-400">斗罗大陆</h1>
+                        <h1 className="text-xl font-bold text-accent">斗罗大陆</h1>
                         <span className="text-gray-400">|</span>
                         <span className="text-gray-300">{user.nickname}</span>
                     </div>
@@ -58,25 +59,29 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
                         <div className="flex items-center gap-4 text-sm">
                             <div className="flex items-center gap-2">
                                 <span className="text-yellow-500">💰</span>
-                                <span>{gameState.profile.gold.toLocaleString()}</span>
+                                {/* key=数值：变化时重挂载触发 dl-value-flash 过渡动画 */}
+                                <span key={gameState.profile.gold} className="dl-value-flash">{gameState.profile.gold.toLocaleString()}</span>
                             </div>
                             <div className="flex items-center gap-2">
                                 <span className="text-purple-500">⚡</span>
-                                <span>{gameState.profile.soulPower.toLocaleString()}</span>
+                                <span key={gameState.profile.soulPower} className="dl-value-flash">{gameState.profile.soulPower.toLocaleString()}</span>
                             </div>
                             <div className="flex items-center gap-2">
                                 <span className="text-blue-500">💎</span>
-                                <span>{gameState.profile.bossCoin.toLocaleString()}</span>
+                                <span key={gameState.profile.bossCoin} className="dl-value-flash">{gameState.profile.bossCoin.toLocaleString()}</span>
                             </div>
                         </div>
                     )}
 
-                    <button
-                        onClick={logout}
-                        className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-sm"
-                    >
-                        退出
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <ThemeToggle />
+                        <button
+                            onClick={logout}
+                            className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-sm"
+                        >
+                            退出
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -86,7 +91,7 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
             </main>
 
             {/* 底部导航栏 */}
-            <nav className="bg-gray-800 border-t border-gray-700">
+            <nav className="bg-surface border-t border-line">
                 <div className="max-w-7xl mx-auto">
                     <div className="flex overflow-x-auto">
                         {NAV_ITEMS.map((item) => (
@@ -95,8 +100,8 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
                                 href={item.href}
                                 className={`flex flex-col items-center py-3 px-4 min-w-[80px] transition-colors ${
                                     pathname === item.href
-                                        ? 'text-yellow-400 bg-gray-700'
-                                        : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                                        ? 'text-accent bg-surface-soft'
+                                        : 'text-gray-400 hover:text-foreground hover:bg-surface-soft'
                                 }`}
                             >
                                 <span className="text-xl">{item.icon}</span>

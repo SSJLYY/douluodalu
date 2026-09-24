@@ -1,51 +1,207 @@
 @import "tailwindcss";
 
+/* ============================================================
+   主题方案（Tailwind v4，class 驱动的暗/亮双主题）：
+   - <html> 上挂 .dark（或无 class = 亮色），layout.tsx 内联脚本防闪烁初始化
+   - @custom-variant dark 让 dark: 工具类响应 .dark（class 策略）
+   - 所有颜色经 --pal-*（调色板）与语义令牌（--bg/--fg/--surface 等）
+     两套 CSS 变量驱动，页面里写死的 bg-gray/text-gray 等类名不改也能随主题切换
+   ============================================================ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------- 亮色主题（默认值） ---------- */
 :root {
-  --background: #111827;
-  --foreground: #f9fafb;
+  color-scheme: light;
+
+  /* 语义令牌 */
+  --bg: #eef1f6;            /* 页面背景 */
+  --fg: #1b2230;            /* 正文 */
+  --surface: #ffffff;       /* 卡片 */
+  --surface-soft: #eef1f5;  /* 内嵌小块/输入 */
+  --line: #d9dee7;          /* 分隔线/描边 */
+  --muted: #525d70;         /* 次要文字 */
+  --accent: #a16207;        /* 品牌金（亮色下加深保对比度） */
+  --on-solid: #ffffff;      /* 饱和色按钮上的文字（两主题恒白） */
+  --disabled-fg: #6b7280;
+  --input-bg: #ffffff;
+  --input-fg: #1b2230;
+  --placeholder: #94a3b8;
+
+  /* 灰阶调色板：亮色反转（数字大 = 颜色浅） */
+  --pal-gray-100: #f3f4f6;
+  --pal-gray-200: #e5e7eb;
+  --pal-gray-300: #cbd5e1;
+  --pal-gray-400: #c9d1dc;
+  --pal-gray-500: #c3cbd8;
+  --pal-gray-600: #d3d9e3;
+  --pal-gray-700: #e7ebf2;
+  --pal-gray-800: #ffffff;
+  --pal-gray-900: #e9edf4;
+
+  /* 彩色调色板：亮色下把「文字常用档」加深、「背景常用档」调浅 */
+  --pal-yellow-200: #713f12;
+  --pal-yellow-300: #854d0e;
+  --pal-yellow-400: #a16207;
+  --pal-yellow-500: #b45309;
+  --pal-yellow-600: #ca8a04;
+  --pal-yellow-700: #a16207;
+  --pal-yellow-900: #fef3c7;
+  --pal-orange-400: #c2410c;
+  --pal-orange-500: #ea580c;
+  --pal-red-300: #b91c1c;
+  --pal-red-400: #dc2626;
+  --pal-red-500: #dc2626;
+  --pal-red-700: #b91c1c;
+  --pal-red-800: #fecaca;
+  --pal-red-900: #fee2e2;
+  --pal-green-300: #166534;
+  --pal-green-400: #15803d;
+  --pal-green-500: #16a34a;
+  --pal-green-900: #f0fdf4;
+  --pal-blue-300: #1e40af;
+  --pal-blue-400: #1d4ed8;
+  --pal-blue-500: #1d4ed8;
+  --pal-blue-900: #eff6ff;
+  --pal-purple-300: #6b21a8;
+  --pal-purple-400: #7e22ce;
+  --pal-purple-500: #9333ea;
+  --pal-purple-900: #f3e8ff;
+  --pal-purple-950: #ede9fe;
 }
 
+/* ---------- 暗色主题：还原既有深色视觉（调色板 = Tailwind 默认灰阶/彩阶） ---------- */
+.dark {
+  color-scheme: dark;
+
+  --bg: #111827;
+  --fg: #f9fafb;
+  --surface: #1f2937;
+  --surface-soft: #374151;
+  --line: #374151;
+  --muted: #d1d5db;
+  --accent: #facc15;
+  --disabled-fg: #e5e7eb;
+  --input-bg: #374151;
+  --input-fg: #ffffff;
+  --placeholder: #d1d5db;
+
+  --pal-gray-100: #f3f4f6;
+  --pal-gray-200: #e5e7eb;
+  --pal-gray-300: #d1d5db;
+  --pal-gray-400: #9ca3af;
+  --pal-gray-500: #6b7280;
+  --pal-gray-600: #4b5563;
+  --pal-gray-700: #374151;
+  --pal-gray-800: #1f2937;
+  --pal-gray-900: #111827;
+
+  --pal-yellow-200: #fef9c3;
+  --pal-yellow-300: #fde047;
+  --pal-yellow-400: #facc15;
+  --pal-yellow-500: #eab308;
+  --pal-yellow-600: #ca8a04;
+  --pal-yellow-700: #a16207;
+  --pal-yellow-900: #713f12;
+  --pal-orange-400: #fb923c;
+  --pal-orange-500: #f97316;
+  --pal-red-300: #fca5a5;
+  --pal-red-400: #f87171;
+  --pal-red-500: #ef4444;
+  --pal-red-700: #b91c1c;
+  --pal-red-800: #991b1b;
+  --pal-red-900: #7f1d1d;
+  --pal-green-300: #86efac;
+  --pal-green-400: #4ade80;
+  --pal-green-500: #22c55e;
+  --pal-green-900: #14532d;
+  --pal-blue-300: #93c5fd;
+  --pal-blue-400: #60a5fa;
+  --pal-blue-500: #3b82f6;
+  --pal-blue-900: #1e3a8a;
+  --pal-purple-300: #d8b4fe;
+  --pal-purple-400: #c084fc;
+  --pal-purple-500: #a855f7;
+  --pal-purple-900: #581c87;
+  --pal-purple-950: #2e1065;
+}
+
+/* 把调色板与语义令牌接入 Tailwind 工具类生成（inline：运行时变量切换即时生效） */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-surface: var(--surface);
+  --color-surface-soft: var(--surface-soft);
+  --color-line: var(--line);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-on-solid: var(--on-solid);
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-gray-100: var(--pal-gray-100);
+  --color-gray-200: var(--pal-gray-200);
+  --color-gray-300: var(--pal-gray-300);
+  --color-gray-400: var(--pal-gray-400);
+  --color-gray-500: var(--pal-gray-500);
+  --color-gray-600: var(--pal-gray-600);
+  --color-gray-700: var(--pal-gray-700);
+  --color-gray-800: var(--pal-gray-800);
+  --color-gray-900: var(--pal-gray-900);
+
+  --color-yellow-200: var(--pal-yellow-200);
+  --color-yellow-300: var(--pal-yellow-300);
+  --color-yellow-400: var(--pal-yellow-400);
+  --color-yellow-500: var(--pal-yellow-500);
+  --color-yellow-600: var(--pal-yellow-600);
+  --color-yellow-700: var(--pal-yellow-700);
+  --color-yellow-900: var(--pal-yellow-900);
+  --color-orange-400: var(--pal-orange-400);
+  --color-orange-500: var(--pal-orange-500);
+  --color-red-300: var(--pal-red-300);
+  --color-red-400: var(--pal-red-400);
+  --color-red-500: var(--pal-red-500);
+  --color-red-700: var(--pal-red-700);
+  --color-red-800: var(--pal-red-800);
+  --color-red-900: var(--pal-red-900);
+  --color-green-300: var(--pal-green-300);
+  --color-green-400: var(--pal-green-400);
+  --color-green-500: var(--pal-green-500);
+  --color-green-900: var(--pal-green-900);
+  --color-blue-300: var(--pal-blue-300);
+  --color-blue-400: var(--pal-blue-400);
+  --color-blue-500: var(--pal-blue-500);
+  --color-blue-900: var(--pal-blue-900);
+  --color-purple-300: var(--pal-purple-300);
+  --color-purple-400: var(--pal-purple-400);
+  --color-purple-500: var(--pal-purple-500);
+  --color-purple-900: var(--pal-purple-900);
+  --color-purple-950: var(--pal-purple-950);
 }
 
 body {
-  background: #111827;
-  color: #f9fafb;
+  background: var(--bg);
+  color: var(--fg);
   font-family: Arial, Helvetica, sans-serif;
-  color-scheme: dark;
 }
 
-body,
-body :where(main, section, article, header, nav, aside, div, p, span, label, li, h1, h2, h3, h4, h5, h6) {
-  color: inherit;
-}
+/* ---------- 文字色补偿：灰阶「文字档」与「背景档」解耦 ---------- */
+/* 暗色：次要文字要够亮（原设计强制提亮，这里按主题收敛为类覆盖） */
+.dark .text-gray-300 { color: #f3f4f6; }
+.dark .text-gray-400 { color: #e5e7eb; }
+.dark .text-gray-500 { color: #d1d5db; }
+.dark .text-purple-500 { color: #c084fc; }
+/* 亮色：次要文字要够深（灰阶刻度本身已翻浅） */
+html:not(.dark) .text-gray-100 { color: #111827; }
+html:not(.dark) .text-gray-200 { color: #1f2937; }
+html:not(.dark) .text-gray-300 { color: #3d4757; }
+html:not(.dark) .text-gray-400 { color: #4d586b; }
+html:not(.dark) .text-gray-500 { color: #66707f; }
 
-:where([class*="bg-gray-"], [class*="bg-slate-"], [class*="bg-zinc-"], [class*="bg-neutral-"], [class*="bg-purple-950"], [class*="from-gray-"], [class*="via-gray-"], [class*="to-gray-"]) {
-  color: #f9fafb;
-}
-
-:where([class*="bg-gray-"], [class*="bg-slate-"], [class*="bg-zinc-"], [class*="bg-neutral-"]) :where(p, span, label, li, h1, h2, h3, h4, h5, h6, div) {
-  color: inherit;
-}
-
+/* ---------- 表单控件（变量驱动，两主题自适应） ---------- */
 input,
 textarea,
 select {
-  background-color: #374151;
-  color: #ffffff;
-  caret-color: #facc15;
-  color-scheme: dark;
+  background-color: var(--input-bg);
+  color: var(--input-fg);
+  caret-color: var(--accent);
 }
 
 input:-webkit-autofill,
@@ -53,92 +209,92 @@ input:-webkit-autofill:hover,
 input:-webkit-autofill:focus,
 textarea:-webkit-autofill,
 select:-webkit-autofill {
-  -webkit-text-fill-color: #ffffff;
-  box-shadow: 0 0 0 1000px #374151 inset;
-  caret-color: #facc15;
+  -webkit-text-fill-color: var(--input-fg);
+  box-shadow: 0 0 0 1000px var(--input-bg) inset;
+  caret-color: var(--accent);
 }
 
 ::placeholder {
-  color: #d1d5db;
+  color: var(--placeholder);
   opacity: 1;
 }
 
 button:disabled {
-  color: #e5e7eb;
+  color: var(--disabled-fg);
   cursor: not-allowed;
 }
 
-.text-gray-500 {
-  color: #d1d5db;
+/* 饱和色实心按钮/徽章：两主题下都承载白字（深色底不变，故白字恒可读） */
+button:not(:disabled):is(.bg-gradient-to-r, .bg-gradient-to-b, .bg-purple-600, .bg-blue-600, .bg-green-600, .bg-green-700, .bg-red-600, .bg-yellow-600, .bg-yellow-700, .bg-orange-600, .bg-indigo-600, .bg-cyan-600),
+span:is(.bg-purple-600, .bg-blue-600, .bg-yellow-600, .bg-red-600, .bg-green-600) {
+  color: var(--on-solid);
 }
 
-.text-gray-400 {
-  color: #e5e7eb;
+/* ============================================================
+   动画（纯 CSS keyframes，不引入 JS 动画库）
+   ============================================================ */
+@keyframes dl-fade-up {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes dl-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dl-shake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-7px); }
+  30% { transform: translateX(6px); }
+  45% { transform: translateX(-4px); }
+  60% { transform: translateX(3px); }
+  75% { transform: translateX(-2px); }
+}
+@keyframes dl-pop {
+  from { opacity: 0; transform: scale(0.92) translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes dl-slide-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes dl-value-flash {
+  0% { transform: scale(1.18); color: var(--accent); }
+  100% { transform: scale(1); }
+}
+@keyframes dl-spin {
+  to { transform: rotate(360deg); }
 }
 
-.text-gray-300 {
-  color: #f3f4f6;
+.dl-fade-up { animation: dl-fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.dl-fade-in { animation: dl-fade-in 0.4s ease-out both; }
+.dl-shake { animation: dl-shake 0.5s ease-in-out; }
+.dl-pop { animation: dl-pop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.dl-slide-in { animation: dl-slide-in 0.4s ease-out both; }
+.dl-value-flash {
+  display: inline-block;
+  animation: dl-value-flash 0.6s ease-out;
 }
 
-.bg-gray-800,
-.bg-gray-800\/80,
-.bg-gray-800\/90 {
-  background-color: rgb(31 41 55 / var(--tw-bg-opacity, 1));
+/* 提交按钮 loading 小转圈（继承 currentColor） */
+.dl-spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.125em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 9999px;
+  animation: dl-spin 0.7s linear infinite;
 }
 
-.text-transparent {
-  color: transparent;
-}
-
-.text-white {
-  color: #ffffff;
-}
-
-.text-yellow-400 {
-  color: #facc15;
-}
-
-.text-yellow-500 {
-  color: #eab308;
-}
-
-.text-orange-400 {
-  color: #fb923c;
-}
-
-.text-red-300 {
-  color: #fca5a5;
-}
-
-.text-red-400 {
-  color: #f87171;
-}
-
-.text-blue-300 {
-  color: #93c5fd;
-}
-
-.text-blue-400 {
-  color: #60a5fa;
-}
-
-.text-blue-500 {
-  color: #3b82f6;
-}
-
-.text-green-300 {
-  color: #86efac;
-}
-
-.text-green-400 {
-  color: #4ade80;
-}
-
-.text-purple-300 {
-  color: #d8b4fe;
-}
-
-.text-purple-400,
-.text-purple-500 {
-  color: #c084fc;
+@media (prefers-reduced-motion: reduce) {
+  .dl-fade-up,
+  .dl-fade-in,
+  .dl-shake,
+  .dl-pop,
+  .dl-slide-in,
+  .dl-value-flash,
+  .dl-spinner {
+    animation: none;
+  }
 }
