@@ -219,6 +219,16 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 
 ---
 
+## 🏯 第十二轮：宗门管理 UI 全栈接通 + 读路径性能（2026-09-24）
+
+1. **宗门成员接口**：`GET /api/guild/members`（joinedAt 升序、userId/昵称/贡献/isLeader；昵称 findAllById 批查防 N+1，isLeader 以 guild.leaderId 为唯一事实源；Kotlin isXxx 序列化陷阱用 @JsonProperty 钉住）。
+2. **宗门管理 UI**：成员列表卡（宗主/我徽章、贡献值）+ 宗主视角踢人/转让按钮 + 解散入口（仅剩自己启用+禁用态 title 说明）；第十一轮三端点自此真正可用。双账号宗主↔成员视角浏览器实测：踢→徽章/人数联动、转让→管理权即时移动、解散→回落未加入态；375px 无破版、console 0 error。
+3. **读路径性能**（隔离 worktree 实证）：排行榜旧实现**全表取回无 LIMIT** 内存 take() —— Pageable 下推后 EXPLAIN 走 idx_level/idx_tower_floor 反向扫描免 filesort；`findByUserId` 改 JOIN FETCH（@MapsId 关联每次补发 users SELECT，全仓调用方签名零改动，/api/game/state 7→6 条 SQL）；排行榜接 Caffeine（TTL 30s + 唯一写点 breakthrough/towerBattle @CacheEvict 主动失效；`CACHE_RANK_ENABLED=false` 一键惰化直查库）。热路径 SQL 实测 1→0 条。game/state 有意不缓存（写多读多，陈旧风险大于收益）。
+4. **验证**：mvn test 基线 94→**103 全绿**（公会+5、缓存+4）；8090 合并态真库冒烟：rank 两次一致、members 形状正确、state 200；tsc/eslint 干净。
+5. 遗留：若后续给 level/towerFloor 增加新写点需同步补 @CacheEvict（否则最坏陈旧 30s）；生产 CORS 白名单含 localhost:3000 不含 127.0.0.1:3000；dev 库造有 3 人测试宗门（id=100，宗主 e2euser2）供回归。
+
+---
+
 ## 🔮 后续建议
 
 1. **前端优化**
@@ -234,5 +244,5 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 
 3. **高级特性**
    - Redis 分布式锁（多实例部署）
-   - Spring Cache（背包/装备读多写少）
+   - ~~Spring Cache（读多写少端点）~~ ✅ 已完成（第十二轮：排行榜 Caffeine + 开关；背包/状态机写频繁有意不缓存）
    - API 版本控制 `/api/v1/...`
