@@ -96,6 +96,28 @@ export default function EquipmentPage() {
         }
     }
 
+    /** 出售背包物品：itemIndex 为全背包列表（与 /api/game/state 返回顺序一致）下标 */
+    async function handleSell(item: BackpackItem) {
+        const itemIndex = gameState!.backpackItems.findIndex((i) => i.id === item.id);
+        try {
+            await api.sellBackpackItem(itemIndex);
+            showMessage('出售成功，金币已入账');
+            await refresh();
+        } catch (err: unknown) {
+            showMessage(err instanceof Error ? err.message : '出售失败');
+        }
+    }
+
+    async function handleExpand() {
+        try {
+            await api.expandBackpack();
+            showMessage('背包扩容成功');
+            await refresh();
+        } catch (err: unknown) {
+            showMessage(err instanceof Error ? err.message : '扩容失败');
+        }
+    }
+
     const getRingInfo = (ring: { yearOrdinal: number; qualityOrdinal: number; percentage: number }) => {
         return `${YEAR_NAMES[ring.yearOrdinal] || '?'} ${QUALITY_NAMES[ring.qualityOrdinal] || '?'} (${ring.percentage}年)`;
     };
@@ -206,7 +228,15 @@ export default function EquipmentPage() {
             </div>
 
             <div className="bg-gray-800 rounded-lg p-4">
-                <h2 className="text-lg font-semibold mb-4">背包 ({gameState.backpackItems.length}件)</h2>
+                <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-semibold">背包 ({gameState.backpackItems.length}件)</h2>
+                    <button
+                        onClick={handleExpand}
+                        className="px-3 py-1 text-sm bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded transition"
+                    >
+                        扩容背包（消耗金币）
+                    </button>
+                </div>
                 {gameState.backpackItems.length === 0 ? (
                     <div className="text-gray-500 text-center py-4">背包为空</div>
                 ) : (
@@ -229,6 +259,13 @@ export default function EquipmentPage() {
                                     {item.itemType === 'BONE' && `${YEAR_NAMES[item.yearOrdinal]} ${BONE_TYPE_NAMES[item.boneTypeOrdinal || 0]}`}
                                     {item.itemType === 'CORE' && item.coreName}
                                 </div>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); if (!item.locked) handleSell(item); }}
+                                    disabled={item.locked}
+                                    className="mt-1 w-full px-2 py-0.5 text-xs bg-red-900/60 hover:bg-red-800 disabled:opacity-40 border border-red-700 rounded"
+                                >
+                                    出售
+                                </button>
                             </div>
                         ))}
                     </div>

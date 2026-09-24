@@ -1,19 +1,39 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import api, { BattleResult } from '@/lib/api';
+import api, { BattleResult, OfflineReward } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
 
 const MAP_NAMES = ['圣魂村', '诺丁城外', '星斗外围', '落日森林', '极北之地', '海神岛', '杀戮之都外域', '神界废墟'];
 const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣', '魂斗罗', '封号斗罗', '极限斗罗', '半神', '神祇', '神王', '至高神王', '创世神'];
 
+// 模块级标记：跨组件StrictMode双挂载/客户端导航只领取一次离线收益（刷新页面会重新领取，符合放置游戏惯例）
+let offlineClaimAttempted = false;
+
 export default function GamePage() {
     const { user, isLoading, logout } = useAuth();
     const router = useRouter();
-    const { gameState, message, setMessage, actionLoading, runAction } = useGameData();
+    const { gameState, message, setMessage, actionLoading, runAction, refresh } = useGameData();
     const [battleResult, setBattleResult] = useState<BattleResult | null>(null);
+    const [offline, setOffline] = useState<OfflineReward | null>(null);
+
+    // 进入主页领取一次离线收益：有实际产出才弹窗，0 收益静默关闭
+    useEffect(() => {
+        if (offlineClaimAttempted) return;
+        offlineClaimAttempted = true;
+        api.claimOfflineReward()
+            .then((reward) => {
+                if (reward.goldGained > 0 || reward.expGained > 0) setOffline(reward);
+            })
+            .catch(() => undefined);
+    }, []);
+
+    const dismissOffline = () => {
+        setOffline(null);
+        void refresh();
+    };
 
     const handleBattle = () => runAction(
         () => api.battle(),
@@ -147,6 +167,19 @@ export default function GamePage() {
                                 {battleResult.won && ` +${battleResult.goldGained}金币 +${battleResult.expGained}魂力`}
                                 {battleResult.drops.length > 0 && ` 掉落${battleResult.drops.length}件装备`}
                             </div>
+                            {battleResult.battleLog && battleResult.battleLog.length > 0 && (
+                                <details className="mt-2 text-xs text-gray-400">
+                                    <summary className="cursor-pointer select-none">回合日志</summary>
+                                    <ul className="mt-1 space-y-0.5">
+                                        {battleResult.battleLog.map((r) => (
+                                            <li key={r.round}>
+                                                第{r.round}回合: 我输出{r.playerDamage}，受{r.monsterDamage} |
+                                                我HP {r.playerHpBefore}→{r.playerHpAfter}，敌HP {r.monsterHpBefore}→{r.monsterHpAfter}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </details>
+                            )}
                         </div>
                     )}
 
@@ -199,6 +232,29 @@ export default function GamePage() {
                     </button>
                 </div>
             </div>
+
+            {/* 离线收益弹窗 */}
+            {offline && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+                    <div className="bg-gray-800 border border-yellow-500/50 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+                        <h3 className="text-lg font-bold text-yellow-400 mb-3">欢迎回来！</h3>
+                        <p className="text-sm text-gray-400 mb-4">
+                            你离开了 {Math.floor(offline.offlineSeconds / 60)} 分钟，放置收益已入账：
+                        </p>
+                        <ul className="text-sm space-y-1 mb-4">
+                            <li className="text-yellow-300">金币 +{offline.goldGained.toLocaleString()}</li>
+                            <li className="text-blue-300">魂力 +{offline.expGained.toLocaleString()}</li>
+                            {offline.battleWins > 0 && <li className="text-green-300">自动胜利 {offline.battleWins} 场</li>}
+                        </ul>
+                        <button
+                            onClick={dismissOffline}
+                            className="w-full py-2 bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 rounded-lg font-bold transition"
+                        >
+                            收下
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -6,16 +6,19 @@ import { useGameData } from '@/lib/hooks';
 
 export default function ShopPage() {
     const { gameState, message, setMessage, actionLoading: loading, runAction } = useGameData();
+    const [normalItems, setNormalItems] = useState<ShopItem[]>([]);
     const [bossItems, setBossItems] = useState<ShopItem[]>([]);
     const [limitedItems, setLimitedItems] = useState<ShopItem[]>([]);
-    const [activeTab, setActiveTab] = useState<'boss' | 'limited'>('boss');
+    const [activeTab, setActiveTab] = useState<'normal' | 'boss' | 'limited'>('normal');
 
     async function loadShopItems() {
         try {
-            const [boss, limited] = await Promise.all([
+            const [normal, boss, limited] = await Promise.all([
+                api.getNormalShopItems(),
                 api.getBossShopItems(),
                 api.getLimitedShopItems()
             ]);
+            setNormalItems(normal);
             setBossItems(boss);
             setLimitedItems(limited);
         } catch (err) {
@@ -27,9 +30,15 @@ export default function ShopPage() {
         queueMicrotask(loadShopItems);
     }, []);
 
+    const handleBuyNormalItem = (itemId: number) => runAction(
+        () => api.buyNormalShopItem(itemId),
+        (result) => setMessage((result.item as { reward?: string })?.reward || '购买成功！'),
+        '购买失败',
+    );
+
     const handleBuyBossItem = (itemId: number) => runAction(
         () => api.buyBossShopItem(itemId),
-        () => setMessage('购买成功！'),
+        (result) => setMessage((result.item as { reward?: string })?.reward || '购买成功！'),
         '购买失败',
     );
 
@@ -73,6 +82,16 @@ export default function ShopPage() {
             <div className="flex border-b border-gray-700">
                 <button
                     className={`py-2 px-4 font-semibold ${
+                        activeTab === 'normal' 
+                            ? 'text-yellow-400 border-b-2 border-yellow-400' 
+                            : 'text-gray-400 hover:text-white'
+                    }`}
+                    onClick={() => setActiveTab('normal')}
+                >
+                    普通商店
+                </button>
+                <button
+                    className={`py-2 px-4 font-semibold ${
                         activeTab === 'boss' 
                             ? 'text-yellow-400 border-b-2 border-yellow-400' 
                             : 'text-gray-400 hover:text-white'
@@ -92,6 +111,37 @@ export default function ShopPage() {
                     限时珍品
                 </button>
             </div>
+
+            {/* 普通商店（金币） */}
+            {activeTab === 'normal' && (
+                <div className="space-y-4">
+                    <h2 className="text-lg font-semibold">普通商店</h2>
+                    {normalItems.length === 0 ? (
+                        <div className="text-gray-500 text-center py-4">暂无物品</div>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {normalItems.map((item) => (
+                                <div key={item.id} className="bg-gray-800 rounded-lg p-4">
+                                    <h3 className="font-semibold text-lg">{item.name}</h3>
+                                    <p className="text-gray-400 text-sm mt-1">{item.description}</p>
+                                    <div className="mt-4 flex justify-between items-center">
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-semibold">{item.price} {currencyLabel(item)}</span>
+                                        </div>
+                                        <button
+                                            onClick={() => handleBuyNormalItem(item.id)}
+                                            disabled={loading || !canAfford(item)}
+                                            className="px-4 py-2 bg-green-700 hover:bg-green-600 disabled:bg-gray-600 rounded text-sm"
+                                        >
+                                            购买
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Boss商店 */}
             {activeTab === 'boss' && (

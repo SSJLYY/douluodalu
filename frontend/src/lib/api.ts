@@ -5,6 +5,9 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 /** token 失效时派发的全局事件，AuthContext 监听后做软跳转（避免 window.location 硬刷新） */
 export const UNAUTHORIZED_EVENT = 'douluodalu:unauthorized';
 
+/** 409 重试前派发的全局事件，useGameData 监听后立即重取 game/state */
+export const STATE_REFRESH_EVENT = 'douluodalu:state-refresh';
+
 class ApiClient {
     private token: string | null = null;
 
@@ -25,7 +28,10 @@ class ApiClient {
         return this.token;
     }
 
-    private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+    /** 409 乐观锁冲突（player_profile @Version）自动重试：等待后端事务收尾后重放一次 */
+    private static readonly RETRY_DELAY_MS = 400;
+
+    private async request<T>(path: string, options: RequestInit = {}, attempt = 0): Promise<T> {
         const token = this.getToken();
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
@@ -46,6 +52,17 @@ class ApiClient {
                 window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
             }
             throw new Error('认证失败，请重新登录');
+        }
+
+        // 409 乐观锁冲突（player_profile @Version）：后端每次请求都会重新加载最新 version，
+        // 短暂延迟后重放一次即可自愈；auth 路径的 409（用户名已存在）不重试。
+        // 同时派发 STATE_REFRESH_EVENT 通知 useGameData 重取最新 state。
+        if (res.status === 409 && attempt === 0 && !path.startsWith('/api/auth')) {
+            await new Promise((r) => setTimeout(r, ApiClient.RETRY_DELAY_MS));
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new Event(STATE_REFRESH_EVENT));
+            }
+            return this.request<T>(path, options, attempt + 1);
         }
 
         if (!res.ok) {
@@ -117,6 +134,16 @@ class ApiClient {
     }
 
     // Shop（后端 ShopItem：currencyType 为字符串，itemData 为编码字符串）
+    async getNormalShopItems() {
+        return this.request<ShopItem[]>('/api/shop/normal');
+    }
+
+    async buyNormalShopItem(itemId: number) {
+        return this.request<{ message: string; item: unknown }>('/api/shop/normal/buy/' + itemId, {
+            method: 'POST',
+        });
+    }
+
     async getBossShopItems() {
         return this.request<ShopItem[]>('/api/shop/boss');
     }
@@ -362,6 +389,16 @@ export interface BackpackItem {
     coreLevel: number;
 }
 
+export interface BattleRound {
+    round: number;
+    playerHpBefore: number;
+    monsterHpBefore: number;
+    playerDamage: number;
+    monsterDamage: number;
+    playerHpAfter: number;
+    monsterHpAfter: number;
+}
+
 export interface BattleResult {
     won: boolean;
     rounds: number;
@@ -373,6 +410,7 @@ export interface BattleResult {
     playerLevel: number;
     playerGold: number;
     playerSoulPower: number;
+    battleLog?: BattleRound[];
 }
 
 export interface TowerBattleResult {
