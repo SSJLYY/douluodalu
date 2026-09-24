@@ -43,6 +43,58 @@ class GameService(
             "圣魂村", "诺丁城外", "星斗外围", "落日森林",
             "极北之地", "海神岛", "杀戮之都外域", "神界废墟"
         )
+
+        /** 回合制战斗结算结果（纯函数产出，LongRunSimulationTest 直接复用保证镜像不漂移） */
+        data class BattleOutcome(
+            val won: Boolean,
+            val rounds: Int,
+            val playerHpLeft: Long,
+            val log: List<BattleRoundLog>
+        )
+
+        /** 按地图/关卡生成怪物 (hp, atk)。镜像约定：仿真端调用同一函数。 */
+        fun monsterStats(mapId: Int, stage: Int): Pair<Long, Int> {
+            val monsterHp = ((GameBalance.MONSTER_HP_BASE + mapId * GameBalance.MONSTER_HP_PER_MAP) *
+                    (1.0 + stage * GameBalance.MONSTER_STAGE_GROWTH)).toLong()
+            val monsterAtk = ((GameBalance.MONSTER_ATK_BASE + mapId * GameBalance.MONSTER_ATK_PER_MAP) *
+                    (1.0 + stage * GameBalance.MONSTER_STAGE_GROWTH)).toInt()
+            return monsterHp to monsterAtk
+        }
+
+        /**
+         * 纯函数回合结算：玩家先手，攻击浮动 ±20%（atk + rng[0, atk/5)），30 回合内击杀即胜。
+         * rng 显式注入，便于测试用固定种子断言「装备更好 → 结果单调不减」。
+         */
+        fun resolveBattle(
+            playerAtk: Long,
+            playerHp: Long,
+            monsterHp: Long,
+            monsterAtk: Int,
+            maxRounds: Int,
+            rng: Random
+        ): BattleOutcome {
+            var pHp = playerHp
+            var mHp = monsterHp
+            var rounds = 0
+            val log = mutableListOf<BattleRoundLog>()
+            while (rounds < maxRounds && pHp > 0 && mHp > 0) {
+                rounds++
+                val playerHpBefore = pHp
+                val monsterHpBefore = mHp
+
+                val pDmg = playerAtk + rng.nextLong(playerAtk / 5)
+                mHp -= pDmg
+                if (mHp <= 0) {
+                    log.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, 0, pHp, 0))
+                    break
+                }
+
+                val mDmg = monsterAtk.toLong() + rng.nextLong((monsterAtk / 5).coerceAtLeast(1).toLong())
+                pHp -= mDmg
+                log.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, mDmg, pHp, mHp))
+            }
+            return BattleOutcome(won = mHp <= 0, rounds = rounds, playerHpLeft = pHp, log = log)
+        }
     }
 
     @Transactional(readOnly = true)
@@ -98,42 +150,34 @@ class GameService(
         val mapId = profile.currentMapId
         val stage = profile.currentStage
 
-        // 生成怪物（使用浮点数避免精度丢失）
-        val monsterHp = ((GameBalance.MONSTER_HP_BASE + mapId * GameBalance.MONSTER_HP_PER_MAP) *
-                (1.0 + stage * GameBalance.MONSTER_STAGE_GROWTH)).toLong()
-        val monsterAtk = ((GameBalance.MONSTER_ATK_BASE + mapId * GameBalance.MONSTER_ATK_PER_MAP) *
-                (1.0 + stage * GameBalance.MONSTER_STAGE_GROWTH)).toInt()
+        // 装备战力接入（P7 修复）：已装备魂环/魂骨/魂核折算攻防加成
+        val equip = EquipmentPowerService.bonus(
+            profile.level,
+            equippedRingRepo.findByUserId(userId),
+            equippedBoneRepo.findByUserId(userId),
+            equippedCoreRepo.findByUserId(userId)
+        )
+        val power = EquipmentPowerService.powerOf(profile.level, equip)
+
+        // 生成怪物
+        val (monsterHp, monsterAtk) = monsterStats(mapId, stage)
         val monsterName = "${MAP_NAMES.getOrElse(mapId) { "未知" }}·${stage}层怪物"
 
-        // 简化战斗计算
-        val playerAtk = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL
-        var playerHp = profile.currentHp
-        var mHp = monsterHp
-        var rounds = 0
-        val maxRounds = GameBalance.MAX_BATTLE_ROUNDS
-        val battleLog = mutableListOf<BattleRoundLog>()
-
-        while (rounds < maxRounds && playerHp > 0 && mHp > 0) {
-            rounds++
-            val playerHpBefore = playerHp
-            val monsterHpBefore = mHp
-
-            // 玩家攻击
-            val pDmg = playerAtk + Random.nextLong(playerAtk / 5)
-            mHp -= pDmg
-            if (mHp <= 0) {
-                battleLog.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, 0, playerHp, 0))
-                break
-            }
-
-            // 怪物攻击
-            val mDmg = monsterAtk.toLong() + Random.nextLong((monsterAtk / 5).toLong())
-            playerHp -= mDmg
-
-            battleLog.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, mDmg, playerHp, mHp))
-        }
-
-        val won = mHp <= 0
+        // 战斗计算：攻击力 = 等级基础 + 装备加成；生命上限同样吃装备 hpBonus（战败回满时生效）
+        val playerAtk = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL + equip.atkBonus
+        val maxHp = getMaxHp(profile.level) + equip.hpBonus
+        val outcome = resolveBattle(
+            playerAtk = playerAtk,
+            playerHp = profile.currentHp.coerceAtMost(maxHp),
+            monsterHp = monsterHp,
+            monsterAtk = monsterAtk,
+            maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
+            rng = Random
+        )
+        val won = outcome.won
+        val playerHp = outcome.playerHpLeft
+        val rounds = outcome.rounds
+        val battleLog = outcome.log
         val expGained = if (won)
             (GameBalance.WIN_EXP_BASE + mapId * GameBalance.WIN_EXP_PER_MAP + stage * GameBalance.WIN_EXP_PER_STAGE)
         else 0L
@@ -159,7 +203,7 @@ class GameService(
             }
         } else {
             profile.totalBattleLosses++
-            profile.currentHp = getMaxHp(profile.level) // 死亡回满血
+            profile.currentHp = maxHp // 死亡回满血（含装备生命加成）
             profile.currentStage = 1 // 退回第1关
         }
         profile.updatedAt = LocalDateTime.now()
@@ -211,7 +255,7 @@ class GameService(
             drops = drops, playerHp = profile.currentHp,
             playerLevel = profile.level, playerGold = profile.gold,
             playerSoulPower = profile.soulPower, battleLog = battleLog,
-            message = dropLostMessage
+            message = dropLostMessage, power = power
         )
     }
 
@@ -219,7 +263,15 @@ class GameService(
     fun towerBattle(userId: Long): TowerResponse {
         val profile = getProfile(userId)
         val towerLevel = profile.towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
-        val won = Random.nextDouble() > GameBalance.TOWER_BASE_LOSE_CHANCE + profile.towerFloor * GameBalance.TOWER_FLOOR_DIFFICULTY
+        // P2+P7 修复：胜率 = 1-(0.25+floor×0.005) 基础值 + 装备战力加成（floor=99 仍 >0，换装可登顶）
+        val equip = EquipmentPowerService.bonus(
+            profile.level,
+            equippedRingRepo.findByUserId(userId),
+            equippedBoneRepo.findByUserId(userId),
+            equippedCoreRepo.findByUserId(userId)
+        )
+        val power = EquipmentPowerService.powerOf(profile.level, equip)
+        val won = Random.nextDouble() < EquipmentPowerService.towerWinChance(profile.towerFloor, power)
         val monsterName = GameBalance.TOWER_MONSTERS[Random.nextInt(GameBalance.TOWER_MONSTERS.size)]
         val rounds = 4 + Random.nextInt(6)
         val expGained = if (won) GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL else 0L
@@ -242,7 +294,7 @@ class GameService(
             profile.codexKills += 1
         } else {
             profile.totalBattleLosses += 1
-            profile.currentHp = getMaxHp(profile.level)
+            profile.currentHp = getMaxHp(profile.level) + equip.hpBonus
         }
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
@@ -251,7 +303,7 @@ class GameService(
             won = won, rounds = rounds, monsterName = monsterName,
             expGained = expGained, goldGained = goldGained, bossCoinGained = bossCoinGained,
             towerFloor = profile.towerFloor, killingIntent = profile.killingIntent,
-            drops = drops, playerLevel = profile.level
+            drops = drops, playerLevel = profile.level, power = power
         )
     }
 
@@ -299,12 +351,15 @@ class GameService(
         val effectiveSeconds = min(offlineSeconds, GameBalance.OFFLINE_MAX_SECONDS)
         if (effectiveSeconds < 60) return OfflineRewardResponse(effectiveSeconds, 0, 0, 0)
 
-        val goldPerSecond = (GameBalance.OFFLINE_GOLD_BASE + profile.level * GameBalance.OFFLINE_GOLD_PER_LEVEL) *
+        // P1 修复：OFFLINE_*_BASE/PER_LEVEL 语义为「每小时」，按小时计费（不足 1h 按比例折算）。
+        // 旧实现按秒计费导致 12h=43,200 秒直接日入数十万~数千万金币（见仿真报告 P1）。
+        val effectiveHours = effectiveSeconds / 3600.0
+        val goldPerHour = (GameBalance.OFFLINE_GOLD_BASE + profile.level * GameBalance.OFFLINE_GOLD_PER_LEVEL) *
                 GameBalance.OFFLINE_EFFICIENCY
-        val expPerSecond = (GameBalance.OFFLINE_EXP_BASE + profile.level * GameBalance.OFFLINE_EXP_PER_LEVEL) *
+        val expPerHour = (GameBalance.OFFLINE_EXP_BASE + profile.level * GameBalance.OFFLINE_EXP_PER_LEVEL) *
                 GameBalance.OFFLINE_EFFICIENCY
-        val goldGained = (goldPerSecond * effectiveSeconds).toLong()
-        val expGained = (expPerSecond * effectiveSeconds).toLong()
+        val goldGained = (goldPerHour * effectiveHours).toLong()
+        val expGained = (expPerHour * effectiveHours).toLong()
         val battleWins = effectiveSeconds / GameBalance.OFFLINE_SECONDS_PER_BATTLE_WIN
 
         profile.gold += goldGained

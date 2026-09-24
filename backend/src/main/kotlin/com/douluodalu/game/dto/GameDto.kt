@@ -103,7 +103,8 @@ data class BattleResponse(
     val playerGold: Long,
     val playerSoulPower: Long,
     val battleLog: List<BattleRoundLog>,
-    val message: String? = null // 背包满导致掉落丢失时的提示
+    val message: String? = null, // 背包满导致掉落丢失时的提示
+    val power: Long = 0 // 战斗力（含装备加成），字段带默认值向后兼容，前端暂未消费
 )
 
 data class CultivateResponse(
@@ -140,5 +141,6 @@ data class TowerResponse(
     val towerFloor: Int,
     val killingIntent: Int,
     val drops: List<BackpackItemDto>,
-    val playerLevel: Int
+    val playerLevel: Int,
+    val power: Long = 0 // 战斗力（含装备加成），字段带默认值向后兼容，前端暂未消费
 )

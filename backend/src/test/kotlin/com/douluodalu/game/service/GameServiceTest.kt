@@ -1,5 +1,6 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
 import com.douluodalu.game.repository.BackpackItemRepository
@@ -90,10 +91,11 @@ class GameServiceTest {
         val maxSeconds = 12 * 3600L
         assertEquals(maxSeconds, response.offlineSeconds)
 
-        // level=5：gold/s = (10 + 5*2) * 0.8 = 16.0，exp/s = (5 + 5) * 0.8 = 8.0
-        assertEquals((16.0 * maxSeconds).toLong(), response.goldGained)
-        assertEquals((8.0 * maxSeconds).toLong(), response.expGained)
-        assertEquals(maxSeconds / 5, response.battleWins)
+        // P1 修复后按「小时」计费：level=5 → gold/h = (10 + 5*2) * 0.8 = 16.0，exp/h = (5 + 5) * 0.8 = 8.0
+        // 12h 封顶 → 金币 16×12=192、魂力 8×12=96（旧「每秒」语义为 691,200/345,600，通胀数千倍）
+        assertEquals((16.0 * 12).toLong(), response.goldGained)
+        assertEquals((8.0 * 12).toLong(), response.expGained)
+        assertEquals(maxSeconds / 5, response.battleWins) // P6 胜场折算维持原逻辑（本次不修）
 
         assertEquals(response.goldGained, p.gold)
         assertEquals(response.expGained, p.soulPower)
@@ -118,6 +120,26 @@ class GameServiceTest {
             "offlineSeconds=${response.offlineSeconds} 应约为 7200")
         assertTrue(response.goldGained > 0)
         assertTrue(response.expGained > 0)
+    }
+
+    @Test
+    fun `battle response should expose combat power including equipment bonus`() {
+        val p = profile() // level=5
+        p.currentHp = 350L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        val ring = EquippedRing(userId = 1L, slotIndex = 0, ringId = 1L, yearOrdinal = 4, qualityOrdinal = 4, percentage = 900)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(listOf(ring))
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+
+        val response = gameService.battle(1L)
+
+        val expectedPower = EquipmentPowerService.powerOf(
+            5, EquipmentPowerService.bonus(5, listOf(ring), emptyList(), emptyList())
+        )
+        assertTrue(expectedPower > 0)
+        assertEquals(expectedPower, response.power, "BattleResponse.power 应等于 等级+装备 折算的战斗力")
     }
 
     @Test
