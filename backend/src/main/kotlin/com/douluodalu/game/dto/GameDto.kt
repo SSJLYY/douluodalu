@@ -102,7 +102,8 @@ data class BattleResponse(
     val playerLevel: Int,
     val playerGold: Long,
     val playerSoulPower: Long,
-    val battleLog: List<BattleRoundLog>
+    val battleLog: List<BattleRoundLog>,
+    val message: String? = null // 背包满导致掉落丢失时的提示
 )
 
 data class CultivateResponse(

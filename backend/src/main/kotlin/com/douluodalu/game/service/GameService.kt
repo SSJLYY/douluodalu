@@ -165,28 +165,33 @@ class GameService(
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
 
-        // 战斗掉落
+        // 战斗掉落（背包已满则掉落丢失，并在响应中提示）
         val drops = mutableListOf<BackpackItemDto>()
+        var dropLostMessage: String? = null
         if (won) {
             val dropChance = GameBalance.BASE_DROP_CHANCE + mapId * GameBalance.DROP_CHANCE_PER_MAP +
                     stage * GameBalance.DROP_CHANCE_PER_STAGE
             if (Random.nextDouble() < dropChance) {
-                val dropType = when (Random.nextInt(3)) {
-                    0 -> "RING"
-                    1 -> "BONE"
-                    else -> "CORE"
+                if (hasBackpackSpace(profile)) {
+                    val dropType = when (Random.nextInt(3)) {
+                        0 -> "RING"
+                        1 -> "BONE"
+                        else -> "CORE"
+                    }
+                    val yearOrdinal = (mapId / 2).coerceIn(0, 4)
+                    val qualityOrdinal = Random.nextInt(0, 5)
+                    val item = BackpackItemEntity(
+                        userId = userId,
+                        itemType = dropType,
+                        yearOrdinal = yearOrdinal,
+                        qualityOrdinal = qualityOrdinal,
+                        percentage = Random.nextInt(100, 1000)
+                    )
+                    backpackRepo.save(item)
+                    drops.add(toBackpackItemDto(item))
+                } else {
+                    dropLostMessage = "背包已满，掉落物品丢失，请及时整理背包"
                 }
-                val yearOrdinal = (mapId / 2).coerceIn(0, 4)
-                val qualityOrdinal = Random.nextInt(0, 5)
-                val item = BackpackItemEntity(
-                    userId = userId,
-                    itemType = dropType,
-                    yearOrdinal = yearOrdinal,
-                    qualityOrdinal = qualityOrdinal,
-                    percentage = Random.nextInt(100, 1000)
-                )
-                backpackRepo.save(item)
-                drops.add(toBackpackItemDto(item))
             }
             // Boss额外掉落
             if (stage % 5 == 0 && Random.nextDouble() < GameBalance.BOSS_EXTRA_DROP_CHANCE) {
@@ -205,7 +210,8 @@ class GameService(
             expGained = expGained, goldGained = goldGained,
             drops = drops, playerHp = profile.currentHp,
             playerLevel = profile.level, playerGold = profile.gold,
-            playerSoulPower = profile.soulPower, battleLog = battleLog
+            playerSoulPower = profile.soulPower, battleLog = battleLog,
+            message = dropLostMessage
         )
     }
 
@@ -221,7 +227,7 @@ class GameService(
         val bossCoinGained = if (won && Random.nextDouble() < GameBalance.TOWER_BOSS_COIN_CHANCE) 1L else 0L
         val killingGained = if (won) 1 + profile.towerFloor / GameBalance.TOWER_KILLING_PER_FLOORS else 0
         val drops = if (won && Random.nextDouble() < GameBalance.TOWER_DROP_CHANCE) {
-            listOf(rollBackpackDrop(userId, towerLevel))
+            listOfNotNull(rollBackpackDrop(userId, towerLevel))
         } else {
             emptyList()
         }
@@ -250,11 +256,13 @@ class GameService(
     }
 
     /**
-     * 生成一件随机装备并直接放入背包，返回其 DTO。
+     * 生成一件随机装备并放入背包，返回其 DTO；背包已满时拒绝发放并返回 null（掉落丢失）。
      * 掉落权重参照数值框架：魂骨 > 魂核 > 魂环，品质/年份随等级提升。
      */
     @Transactional
-    fun rollBackpackDrop(userId: Long, level: Int): BackpackItemDto {
+    fun rollBackpackDrop(userId: Long, level: Int): BackpackItemDto? {
+        val profile = getProfile(userId)
+        if (!hasBackpackSpace(profile)) return null
         val itemType = when {
             Random.nextDouble() > 0.72 -> "BONE"
             Random.nextDouble() > 0.45 -> "CORE"
@@ -312,6 +320,14 @@ class GameService(
     private fun getProfile(userId: Long): PlayerProfileEntity {
         return profileRepo.findByUserId(userId)
             ?: throw IllegalStateException("玩家存档不存在")
+    }
+
+    /**
+     * 背包是否还有空间放入一件新物品。所有获得新背包物品的路径
+     * （战斗掉落、魂塔掉落、宗门 Boss 掉落）发放前必须校验。
+     */
+    private fun hasBackpackSpace(profile: PlayerProfileEntity): Boolean {
+        return backpackRepo.countByUserId(profile.userId) < profile.backpackCapacity
     }
 
     private fun getBreakthroughCost(level: Int): Long {

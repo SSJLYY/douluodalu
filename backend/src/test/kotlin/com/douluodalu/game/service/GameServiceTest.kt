@@ -17,6 +17,8 @@ import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doAnswer
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.time.LocalDateTime
 import kotlin.math.abs
@@ -116,5 +118,32 @@ class GameServiceTest {
             "offlineSeconds=${response.offlineSeconds} 应约为 7200")
         assertTrue(response.goldGained > 0)
         assertTrue(response.expGained > 0)
+    }
+
+    @Test
+    fun `rollBackpackDrop should refuse to grant and return null when backpack is full`() {
+        val p = profile()
+        p.backpackCapacity = 5
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(5L)
+
+        val dto = gameService.rollBackpackDrop(1L, 10)
+
+        assertNull(dto)
+        verify(backpackRepo, never()).save(any())
+    }
+
+    @Test
+    fun `rollBackpackDrop should save item when backpack has space`() {
+        val p = profile()
+        p.backpackCapacity = 5
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(4L)
+        doAnswer { it.arguments[0] }.whenever(backpackRepo).save(any())
+
+        val dto = gameService.rollBackpackDrop(1L, 10)
+
+        assertNotNull(dto)
+        verify(backpackRepo).save(any())
     }
 }

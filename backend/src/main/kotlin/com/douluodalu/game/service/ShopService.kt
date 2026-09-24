@@ -17,6 +17,11 @@ class ShopService(
     private val backpackItemRepository: BackpackItemRepository,
     private val purchaseRecordRepository: ShopPurchaseRecordRepository
 ) {
+    companion object {
+        /** 会发放新背包物品的商品类型，购买/掉落前需校验背包容量 */
+        val BACKPACK_GRANT_TYPES = setOf("RING_BOX", "BONE_BOX", "CORE_BOX")
+    }
+
     @Transactional
     fun buyItem(userId: Long, item: ShopItem): ShopResult {
         val user = userRepository.findById(userId).orElse(null)
@@ -24,6 +29,16 @@ class ShopService(
 
         val player = user.player
             ?: return ShopResult(false, error = "玩家数据不存在", item = mapOf("id" to item.id, "name" to item.name))
+
+        // 先检查等级，避免等级不足时已扣款（早退不触发回滚，托管实体的扣款会被提交）
+        if (player.level < item.requiresLevel) {
+            return ShopResult(false, error = "等级不足，需要${item.requiresLevel}级", item = mapOf("id" to item.id, "name" to item.name))
+        }
+
+        // 开箱类商品会发放背包物品：在扣款前校验背包容量，满包整单失败（不扣款、无需退款）
+        if (item.itemType in BACKPACK_GRANT_TYPES && !hasBackpackSpace(player)) {
+            return ShopResult(false, error = "背包已满，请先整理背包", item = mapOf("id" to item.id, "name" to item.name))
+        }
 
         // 检查货币
         when (item.currencyType) {
@@ -42,11 +57,6 @@ class ShopService(
                 if (player.gold < 0) return ShopResult(false, error = "余额不足", item = mapOf("id" to item.id, "name" to item.name))
             }
             else -> return ShopResult(false, error = "无效的货币类型", item = mapOf("id" to item.id, "name" to item.name))
-        }
-
-        // 检查等级
-        if (player.level < item.requiresLevel) {
-            return ShopResult(false, error = "等级不足，需要${item.requiresLevel}级", item = mapOf("id" to item.id, "name" to item.name))
         }
 
         // 发放物品
@@ -103,6 +113,14 @@ class ShopService(
             }
         }
         return buyItem(userId, item)
+    }
+
+    /**
+     * 背包是否还有空间放入一件新物品。所有发放背包物品的商品
+     * （魂环箱/魂骨箱/魂核箱）在扣款前统一用此方法校验。
+     */
+    private fun hasBackpackSpace(player: com.douluodalu.game.entity.PlayerProfileEntity): Boolean {
+        return backpackItemRepository.countByUserId(player.userId) < player.backpackCapacity
     }
 
     private fun grantRingBox(player: com.douluodalu.game.entity.PlayerProfileEntity, tier: String): String {

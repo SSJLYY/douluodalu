@@ -1,0 +1,206 @@
+package com.douluodalu.game.service
+
+import com.douluodalu.game.controller.ShopResult
+import com.douluodalu.game.entity.PlayerProfileEntity
+import com.douluodalu.game.entity.ShopPurchaseRecord
+import com.douluodalu.game.entity.UserEntity
+import com.douluodalu.game.model.ShopItem
+import com.douluodalu.game.repository.BackpackItemRepository
+import com.douluodalu.game.repository.ShopPurchaseRecordRepository
+import com.douluodalu.game.repository.UserRepository
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.mockito.ArgumentCaptor
+import org.mockito.Captor
+import org.mockito.InjectMocks
+import org.mockito.Mock
+import org.mockito.MockitoAnnotations
+import org.mockito.kotlin.*
+import com.douluodalu.game.entity.BackpackItemEntity
+import java.util.Optional
+
+class ShopServiceTest {
+    @Mock
+    private lateinit var userRepository: UserRepository
+
+    @Mock
+    private lateinit var gameService: GameService
+
+    @Mock
+    private lateinit var backpackItemRepository: BackpackItemRepository
+
+    @Mock
+    private lateinit var purchaseRecordRepository: ShopPurchaseRecordRepository
+
+    @Captor
+    private lateinit var itemCaptor: ArgumentCaptor<BackpackItemEntity>
+
+    @InjectMocks
+    private lateinit var shopService: ShopService
+
+    @BeforeEach
+    fun setUp() {
+        MockitoAnnotations.openMocks(this)
+        doAnswer { inv -> (inv.arguments[0] as BackpackItemEntity) }
+            .whenever(backpackItemRepository).save(any())
+    }
+
+    private fun userWith(gold: Long = 0, bossCoin: Long = 0, level: Int = 10, soulPower: Long = 0, capacity: Int = 20): Pair<UserEntity, PlayerProfileEntity> {
+        val profile = PlayerProfileEntity(userId = 1L, level = level)
+        profile.gold = gold
+        profile.bossCoin = bossCoin
+        profile.soulPower = soulPower
+        profile.backpackCapacity = capacity
+        val user = UserEntity(id = 1, username = "u", nickname = "n", passwordHash = "h")
+        user.player = profile
+        doReturn(Optional.of(user)).whenever(userRepository).findById(1L)
+        return user to profile
+    }
+
+    @Test
+    fun `buyItem should reject insufficient gold without deducting or saving`() {
+        val (user, profile) = userWith(gold = 100)
+
+        val result = shopService.buyItem(1L, ShopItem(204, "魂力精华(小)", "", 300, "GOLD", "SOUL_POWER", "500"))
+
+        assertFalse(result.success)
+        assertEquals("金币不足", result.error)
+        assertEquals(100L, profile.gold)
+        verify(userRepository, never()).save(any())
+        verify(purchaseRecordRepository, never()).save(any())
+        verify(backpackItemRepository, never()).save(any())
+    }
+
+    @Test
+    fun `buyItem SOUL_POWER should deduct gold and grant soul power`() {
+        val (user, profile) = userWith(gold = 1000, soulPower = 50)
+        doReturn(null).whenever(purchaseRecordRepository).findByUserIdAndItemId(1L, 204L)
+
+        val result = shopService.buyItem(1L, ShopItem(204, "魂力精华(小)", "", 300, "GOLD", "SOUL_POWER", "500"))
+
+        assertTrue(result.success)
+        assertEquals(700L, profile.gold)
+        assertEquals(550L, profile.soulPower)
+        verify(userRepository).save(user)
+        // 首次购买：新记录 purchaseCount=1
+        val captor = ArgumentCaptor.forClass(ShopPurchaseRecord::class.java)
+        verify(purchaseRecordRepository).save(captor.capture())
+        assertEquals(1, captor.value.purchaseCount)
+        assertEquals(204L, captor.value.itemId)
+    }
+
+    @Test
+    fun `buyItem BACKPACK_EXPAND should increase capacity and accumulate purchase count`() {
+        val (user, profile) = userWith(gold = 5000, capacity = 20)
+        val existing = ShopPurchaseRecord(userId = 1L, itemId = 205L, purchaseCount = 3)
+        doReturn(existing).whenever(purchaseRecordRepository).findByUserIdAndItemId(1L, 205L)
+
+        val result = shopService.buyItem(1L, ShopItem(205, "背包扩展券", "", 3000, "GOLD", "BACKPACK_EXPAND", "5"))
+
+        assertTrue(result.success)
+        assertEquals(25, profile.backpackCapacity)
+        assertEquals(2000L, profile.gold)
+        verify(purchaseRecordRepository).save(existing)
+        assertEquals(4, existing.purchaseCount)
+    }
+
+    @Test
+    fun `buyItem RING_BOX should persist a backpack ring item via repository save`() {
+        val (user, profile) = userWith(bossCoin = 100)
+        doReturn(null).whenever(purchaseRecordRepository).findByUserIdAndItemId(1L, 1L)
+
+        val result = shopService.buyItem(1L, ShopItem(1, "万年魂环箱", "", 50, "BOSS_COIN", "RING_BOX", "TEN_THOUSAND"))
+
+        assertTrue(result.success)
+        assertEquals(50L, profile.bossCoin)
+        verify(backpackItemRepository).save(itemCaptor.capture())
+        val saved = itemCaptor.value
+        assertEquals("RING", saved.itemType)
+        assertEquals(1L, saved.userId)
+        assertEquals(2, saved.yearOrdinal) // TEN_THOUSAND → ordinal 2
+        // 品质保底随机 [1,5)，年分数随机 [100,1000)：只断言区间，不断言具体值
+        assertTrue(saved.qualityOrdinal in 1..4, "quality=${saved.qualityOrdinal} 应在 1..4")
+        assertTrue(saved.percentage in 100..999, "percentage=${saved.percentage} 应在 100..999")
+    }
+
+    @Test
+    fun `buyItem RING_BOX should fail whole purchase without deduction when backpack is full`() {
+        val (user, profile) = userWith(bossCoin = 100, capacity = 20)
+        doReturn(20L).whenever(backpackItemRepository).countByUserId(1L)
+
+        val result = shopService.buyItem(1L, ShopItem(1, "万年魂环箱", "", 50, "BOSS_COIN", "RING_BOX", "TEN_THOUSAND"))
+
+        assertFalse(result.success)
+        assertEquals("背包已满，请先整理背包", result.error)
+        // 扣款前拦截：Boss 币不减少，不落任何写
+        assertEquals(100L, profile.bossCoin)
+        verify(backpackItemRepository, never()).save(any())
+        verify(userRepository, never()).save(any())
+        verify(purchaseRecordRepository, never()).save(any())
+    }
+
+    @Test
+    fun `buyItem BONE_BOX should fail when backpack is full and pass when space remains`() {
+        val (user, profile) = userWith(gold = 1000, capacity = 10)
+        doReturn(10L).whenever(backpackItemRepository).countByUserId(1L)
+
+        val full = shopService.buyItem(1L, ShopItem(203, "百年魂骨箱", "", 800, "GOLD", "BONE_BOX", "HUNDRED"))
+        assertFalse(full.success)
+        assertEquals("背包已满，请先整理背包", full.error)
+        assertEquals(1000L, profile.gold)
+        verify(backpackItemRepository, never()).save(any())
+
+        // 腾出空间后同一商品可正常购买
+        doReturn(3L).whenever(backpackItemRepository).countByUserId(1L)
+        doReturn(null).whenever(purchaseRecordRepository).findByUserIdAndItemId(1L, 203L)
+        val ok = shopService.buyItem(1L, ShopItem(203, "百年魂骨箱", "", 800, "GOLD", "BONE_BOX", "HUNDRED"))
+        assertTrue(ok.success)
+        assertEquals(200L, profile.gold)
+        verify(backpackItemRepository).save(itemCaptor.capture())
+        assertEquals("BONE", itemCaptor.value.itemType)
+    }
+
+    @Test
+    fun `buyItem should reject invalid currency type without any deduction`() {
+        val (user, profile) = userWith(gold = 10000)
+
+        val result = shopService.buyItem(1L, ShopItem(999, "奇怪商品", "", 100, "DIAMOND", "SOUL_POWER", "500"))
+
+        assertFalse(result.success)
+        assertEquals("无效的货币类型", result.error)
+        assertEquals(10000L, profile.gold)
+        verify(userRepository, never()).save(any())
+        verify(purchaseRecordRepository, never()).save(any())
+    }
+
+    @Test
+    fun `buyItem should reject insufficient level without deducting currency`() {
+        val (user, profile) = userWith(bossCoin = 3000, level = 10)
+
+        val result = shopService.buyItem(1L, ShopItem(3, "神赐礼包", "", 3000, "BOSS_COIN", "GIFT_PACK", "DIVINE", stock = 1, requiresLevel = 100))
+
+        assertFalse(result.success)
+        assertEquals("等级不足，需要100级", result.error)
+        assertEquals(3000L, profile.bossCoin)
+        verify(userRepository, never()).save(any())
+        verify(purchaseRecordRepository, never()).save(any())
+    }
+
+    @Test
+    fun `buyLimitedItem should reject when purchase count reached stock`() {
+        val (user, profile) = userWith(bossCoin = 5000, level = 100)
+        val record = ShopPurchaseRecord(userId = 1L, itemId = 1L, purchaseCount = 1)
+        doReturn(record).whenever(purchaseRecordRepository).findByUserIdAndItemId(1L, 1L)
+
+        val result = shopService.buyLimitedItem(1L, ShopItem(1, "传说魂核", "", 2000, "BOSS_COIN", "CORE_BOX", "MYTHIC", stock = 1))
+
+        assertFalse(result.success)
+        assertEquals("该商品已售罄", result.error)
+        assertEquals(5000L, profile.bossCoin)
+        verify(userRepository, never()).save(any())
+        verify(backpackItemRepository, never()).save(any())
+        // 售罄路径连余额都不该去查（未进入 buyItem 的扣款逻辑）
+        assertEquals(1, record.purchaseCount)
+    }
+}

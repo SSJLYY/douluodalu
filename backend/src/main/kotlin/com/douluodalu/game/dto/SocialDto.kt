@@ -53,7 +53,7 @@ data class GuildBossResponse(
     val bossHp: Long,
     val goldGained: Long,
     val bossCoinGained: Long,
-    val item: BackpackItemDto,
+    val item: BackpackItemDto? = null, // 背包已满时为 null（掉落丢失）
     val message: String
 )
 

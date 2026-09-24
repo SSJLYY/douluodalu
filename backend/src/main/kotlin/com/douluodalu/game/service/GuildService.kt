@@ -4,6 +4,7 @@ import com.douluodalu.game.dto.GuildBossResponse
 import com.douluodalu.game.entity.Guild
 import com.douluodalu.game.entity.GuildMember
 import com.douluodalu.game.model.GuildBossBalance
+import com.douluodalu.game.repository.GuildMemberRepository
 import com.douluodalu.game.repository.GuildRepository
 import com.douluodalu.game.repository.UserRepository
 import org.springframework.stereotype.Service
@@ -14,6 +15,7 @@ import kotlin.random.Random
 @Service
 class GuildService(
     private val guildRepository: GuildRepository,
+    private val guildMemberRepository: GuildMemberRepository,
     private val userRepository: UserRepository,
     private val gameService: GameService
 ) {
@@ -54,13 +56,14 @@ class GuildService(
         )
         val savedGuild = guildRepository.save(guild)
 
-        // 创建宗主
+        // 创建宗主（落 guild_member 表）
         val member = GuildMember(
             guildId = savedGuild.id,
             userId = userId,
             role = "LEADER",
             joinedAt = LocalDateTime.now()
         )
+        guildMemberRepository.save(member)
 
         // 更新玩家
         player.guildId = savedGuild.id
@@ -84,9 +87,17 @@ class GuildService(
         // 检查宗门人数
         if (guild.currentMembers >= guild.maxMembers) return false
 
-        // 加入宗门
+        // 加入宗门（同步维护 guild_member 表）
         player.guildId = guildId
         guild.currentMembers += 1
+        guildMemberRepository.save(
+            GuildMember(
+                guildId = guildId,
+                userId = userId,
+                role = "MEMBER",
+                joinedAt = LocalDateTime.now()
+            )
+        )
         guildRepository.save(guild)
         userRepository.save(user)
 
@@ -104,9 +115,10 @@ class GuildService(
         // 如果是宗主，不能退出
         if (guild.leaderId == userId) return false
 
-        // 退出宗门
+        // 退出宗门（同步维护 guild_member 表）
         player.guildId = null
         guild.currentMembers -= 1
+        guildMemberRepository.deleteByUserId(userId)
         guildRepository.save(guild)
         userRepository.save(user)
 
@@ -143,7 +155,7 @@ class GuildService(
 
     /**
      * 挑战宗门 Boss：伤害与玩家等级/战斗魂力挂钩，胜利判定按伤害占 Boss 生命比例。
-     * 无论胜负均获得金币、Boss 币与一件随机装备，并为宗门积累经验。
+     * 无论胜负均获得金币、Boss 币与一件随机装备（背包已满则掉落丢失），并为宗门积累经验。
      */
     @Transactional
     fun challengeBoss(userId: Long): GuildBossResponse? {
@@ -176,7 +188,8 @@ class GuildService(
             goldGained = goldGained,
             bossCoinGained = bossCoinGained,
             item = item,
-            message = if (won) "宗门 Boss 挑战成功" else "造成了有效伤害，获得参与奖励"
+            message = (if (won) "宗门 Boss 挑战成功" else "造成了有效伤害，获得参与奖励") +
+                    if (item == null) "；背包已满，掉落装备丢失" else ""
         )
     }
 }
