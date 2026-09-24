@@ -79,5 +79,10 @@ class PlayerProfileEntity(
     var createdAt: LocalDateTime = LocalDateTime.now(),
 
     @Column(name = "updated_at")
-    var updatedAt: LocalDateTime = LocalDateTime.now()
+    var updatedAt: LocalDateTime = LocalDateTime.now(),
+
+    /** JPA 乐观锁版本号，防止 player_profile 资源并发读改写双花 */
+    @Version
+    @Column(name = "version")
+    var version: Long = 0
 )

@@ -5,16 +5,20 @@ import com.douluodalu.game.entity.BackpackItemEntity
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.EquippedBone
 import com.douluodalu.game.entity.EquippedCore
+import com.douluodalu.game.entity.PlayerProfileEntity
+import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.BackpackItemRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
 import com.douluodalu.game.repository.TalentRepository
 import com.douluodalu.game.repository.EquippedRingRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
+import com.douluodalu.game.repository.UserRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Duration
 import java.time.LocalDateTime
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
 
@@ -25,7 +29,9 @@ class GameService(
     private val talentRepo: TalentRepository,
     private val equippedRingRepo: EquippedRingRepository,
     private val equippedBoneRepo: EquippedBoneRepository,
-    private val equippedCoreRepo: EquippedCoreRepository
+    private val equippedCoreRepo: EquippedCoreRepository,
+    private val userRepository: UserRepository,
+    private val webSocketService: WebSocketService
 ) {
     companion object {
         val REALM_NAMES = listOf(
@@ -55,7 +61,7 @@ class GameService(
             equippedRings = equippedRings,
             equippedBones = equippedBones,
             equippedCores = equippedCores,
-            backpackItems = backpackRepo.findByUserId(userId).map { toBackpackItemDto(it) },
+            backpackItems = backpackRepo.findByUserIdOrderByCreatedAtAsc(userId).map { toBackpackItemDto(it) },
             talents = talents,
             achievements = emptyList()
         )
@@ -64,8 +70,8 @@ class GameService(
     @Transactional
     fun cultivate(userId: Long): CultivateResponse {
         val profile = getProfile(userId)
-        val baseGain = 10L + profile.level * 2L
-        val gain = baseGain + Random.nextLong(baseGain / 4)
+        val baseGain = GameBalance.CULTIVATE_BASE_GAIN + profile.level * GameBalance.CULTIVATE_LEVEL_GAIN_FACTOR
+        val gain = baseGain + Random.nextLong(baseGain / GameBalance.CULTIVATE_RANDOM_DIVISOR)
         profile.soulPower += gain
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
@@ -93,31 +99,47 @@ class GameService(
         val stage = profile.currentStage
 
         // 生成怪物（使用浮点数避免精度丢失）
-        val monsterHp = ((200L + mapId * 300L) * (1.0 + stage * 0.12)).toLong()
-        val monsterAtk = ((15 + mapId * 25) * (1.0 + stage * 0.12)).toInt()
+        val monsterHp = ((GameBalance.MONSTER_HP_BASE + mapId * GameBalance.MONSTER_HP_PER_MAP) *
+                (1.0 + stage * GameBalance.MONSTER_STAGE_GROWTH)).toLong()
+        val monsterAtk = ((GameBalance.MONSTER_ATK_BASE + mapId * GameBalance.MONSTER_ATK_PER_MAP) *
+                (1.0 + stage * GameBalance.MONSTER_STAGE_GROWTH)).toInt()
         val monsterName = "${MAP_NAMES.getOrElse(mapId) { "未知" }}·${stage}层怪物"
 
         // 简化战斗计算
-        val playerAtk = 50L + profile.level * 10L
+        val playerAtk = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL
         var playerHp = profile.currentHp
         var mHp = monsterHp
         var rounds = 0
-        val maxRounds = 30
+        val maxRounds = GameBalance.MAX_BATTLE_ROUNDS
+        val battleLog = mutableListOf<BattleRoundLog>()
 
         while (rounds < maxRounds && playerHp > 0 && mHp > 0) {
             rounds++
+            val playerHpBefore = playerHp
+            val monsterHpBefore = mHp
+
             // 玩家攻击
             val pDmg = playerAtk + Random.nextLong(playerAtk / 5)
             mHp -= pDmg
-            if (mHp <= 0) break
+            if (mHp <= 0) {
+                battleLog.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, 0, playerHp, 0))
+                break
+            }
+
             // 怪物攻击
             val mDmg = monsterAtk.toLong() + Random.nextLong((monsterAtk / 5).toLong())
             playerHp -= mDmg
+
+            battleLog.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, mDmg, playerHp, mHp))
         }
 
         val won = mHp <= 0
-        val expGained = if (won) (50L + mapId * 30L + stage * 10L) else 0L
-        val goldGained = if (won) (30L + mapId * 20L + stage * 8L) else 0L
+        val expGained = if (won)
+            (GameBalance.WIN_EXP_BASE + mapId * GameBalance.WIN_EXP_PER_MAP + stage * GameBalance.WIN_EXP_PER_STAGE)
+        else 0L
+        val goldGained = if (won)
+            (GameBalance.WIN_GOLD_BASE + mapId * GameBalance.WIN_GOLD_PER_MAP + stage * GameBalance.WIN_GOLD_PER_STAGE)
+        else 0L
 
         if (won) {
             profile.totalBattleWins++
@@ -125,8 +147,8 @@ class GameService(
             profile.soulPower += expGained
             profile.currentHp = playerHp.coerceAtLeast(1)
             // 推进关卡
-            if (stage >= 15) {
-                if (profile.autoAdvanceMap && mapId < 7) {
+            if (stage >= GameBalance.STAGES_PER_MAP) {
+                if (profile.autoAdvanceMap && mapId < GameBalance.MAX_MAP_ID) {
                     profile.currentMapId = mapId + 1
                     profile.currentStage = 1
                 } else {
@@ -146,7 +168,8 @@ class GameService(
         // 战斗掉落
         val drops = mutableListOf<BackpackItemDto>()
         if (won) {
-            val dropChance = 0.15 + mapId * 0.02 + stage * 0.005
+            val dropChance = GameBalance.BASE_DROP_CHANCE + mapId * GameBalance.DROP_CHANCE_PER_MAP +
+                    stage * GameBalance.DROP_CHANCE_PER_STAGE
             if (Random.nextDouble() < dropChance) {
                 val dropType = when (Random.nextInt(3)) {
                     0 -> "RING"
@@ -166,35 +189,115 @@ class GameService(
                 drops.add(toBackpackItemDto(item))
             }
             // Boss额外掉落
-            if (stage % 5 == 0 && Random.nextDouble() < 0.4) {
+            if (stage % 5 == 0 && Random.nextDouble() < GameBalance.BOSS_EXTRA_DROP_CHANCE) {
                 profile.bossCoin += 1 + mapId
             }
         }
 
+        // 广播战斗结果到 WebSocket
+        val user = userRepository.findById(userId).orElse(null)
+        if (user != null) {
+            webSocketService.broadcastBattleResult(userId, user.username, monsterName, won)
+        }
+
         return BattleResponse(
-            won = won, rounds = rounds, monsterName = monsterName,
+            won = won, rounds = rounds, monsterName = monsterName, monsterMaxHp = monsterHp,
             expGained = expGained, goldGained = goldGained,
             drops = drops, playerHp = profile.currentHp,
             playerLevel = profile.level, playerGold = profile.gold,
-            playerSoulPower = profile.soulPower
+            playerSoulPower = profile.soulPower, battleLog = battleLog
         )
+    }
+
+    @Transactional
+    fun towerBattle(userId: Long): TowerResponse {
+        val profile = getProfile(userId)
+        val towerLevel = profile.towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
+        val won = Random.nextDouble() > GameBalance.TOWER_BASE_LOSE_CHANCE + profile.towerFloor * GameBalance.TOWER_FLOOR_DIFFICULTY
+        val monsterName = GameBalance.TOWER_MONSTERS[Random.nextInt(GameBalance.TOWER_MONSTERS.size)]
+        val rounds = 4 + Random.nextInt(6)
+        val expGained = if (won) GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL else 0L
+        val goldGained = if (won) GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL else 0L
+        val bossCoinGained = if (won && Random.nextDouble() < GameBalance.TOWER_BOSS_COIN_CHANCE) 1L else 0L
+        val killingGained = if (won) 1 + profile.towerFloor / GameBalance.TOWER_KILLING_PER_FLOORS else 0
+        val drops = if (won && Random.nextDouble() < GameBalance.TOWER_DROP_CHANCE) {
+            listOf(rollBackpackDrop(userId, towerLevel))
+        } else {
+            emptyList()
+        }
+
+        if (won) {
+            profile.gold += goldGained
+            profile.soulPower += expGained
+            profile.bossCoin += bossCoinGained
+            profile.towerFloor = min(GameBalance.TOWER_MAX_FLOOR, profile.towerFloor + 1)
+            profile.killingIntent += killingGained
+            profile.totalBattleWins += 1
+            profile.codexKills += 1
+        } else {
+            profile.totalBattleLosses += 1
+            profile.currentHp = getMaxHp(profile.level)
+        }
+        profile.updatedAt = LocalDateTime.now()
+        profileRepo.save(profile)
+
+        return TowerResponse(
+            won = won, rounds = rounds, monsterName = monsterName,
+            expGained = expGained, goldGained = goldGained, bossCoinGained = bossCoinGained,
+            towerFloor = profile.towerFloor, killingIntent = profile.killingIntent,
+            drops = drops, playerLevel = profile.level
+        )
+    }
+
+    /**
+     * 生成一件随机装备并直接放入背包，返回其 DTO。
+     * 掉落权重参照数值框架：魂骨 > 魂核 > 魂环，品质/年份随等级提升。
+     */
+    @Transactional
+    fun rollBackpackDrop(userId: Long, level: Int): BackpackItemDto {
+        val itemType = when {
+            Random.nextDouble() > 0.72 -> "BONE"
+            Random.nextDouble() > 0.45 -> "CORE"
+            else -> "RING"
+        }
+        val qualityOrdinal = min(4, level / 8 + Random.nextInt(3))
+        val yearOrdinal = min(4, level / 12 + Random.nextInt(2))
+        val item = BackpackItemEntity(
+            userId = userId,
+            itemType = itemType,
+            yearOrdinal = yearOrdinal,
+            qualityOrdinal = qualityOrdinal,
+            percentage = 100 + level * 12 + Random.nextInt(80),
+            skillName = if (itemType == "RING") listOf("蓝银缠绕", "昊天重击", "疾风突刺")[Random.nextInt(3)] else null,
+            boneTypeOrdinal = if (itemType == "BONE") Random.nextInt(6) else null,
+            enhanceLevel = if (itemType == "BONE") max(1, level / 10) else 0,
+            passiveSkillName = if (itemType != "RING") listOf("坚韧", "破甲", "凝神")[Random.nextInt(3)] else null,
+            coreName = if (itemType == "CORE") listOf("攻击魂核", "防御魂核", "辅助魂核")[Random.nextInt(3)] else null,
+            coreValue = if (itemType == "CORE") 10 + level * 3 else null,
+            coreLevel = if (itemType == "CORE") max(1, level / 5) else 0
+        )
+        backpackRepo.save(item)
+        return toBackpackItemDto(item)
     }
 
     @Transactional
     fun claimOfflineReward(userId: Long): OfflineRewardResponse {
         val profile = getProfile(userId)
-        val lastLogout = profile.lastLogoutTime ?: return OfflineRewardResponse(0, 0, 0, 0)
-        val offlineSeconds = Duration.between(lastLogout, LocalDateTime.now()).seconds
-        val maxSeconds = 12 * 3600L
-        val effectiveSeconds = min(offlineSeconds, maxSeconds)
+        // 离线起算时间：优先登出时间；从未登出过（老数据/首次）时回退最后登录时间或最后更新时间
+        val lastExit = profile.lastLogoutTime
+            ?: profile.user?.lastLoginAt
+            ?: profile.updatedAt
+        val offlineSeconds = Duration.between(lastExit, LocalDateTime.now()).seconds
+        val effectiveSeconds = min(offlineSeconds, GameBalance.OFFLINE_MAX_SECONDS)
         if (effectiveSeconds < 60) return OfflineRewardResponse(effectiveSeconds, 0, 0, 0)
 
-        val efficiency = 0.8
-        val goldPerSecond = (10L + profile.level * 2L) * efficiency
-        val expPerSecond = (5L + profile.level) * efficiency
+        val goldPerSecond = (GameBalance.OFFLINE_GOLD_BASE + profile.level * GameBalance.OFFLINE_GOLD_PER_LEVEL) *
+                GameBalance.OFFLINE_EFFICIENCY
+        val expPerSecond = (GameBalance.OFFLINE_EXP_BASE + profile.level * GameBalance.OFFLINE_EXP_PER_LEVEL) *
+                GameBalance.OFFLINE_EFFICIENCY
         val goldGained = (goldPerSecond * effectiveSeconds).toLong()
         val expGained = (expPerSecond * effectiveSeconds).toLong()
-        val battleWins = effectiveSeconds / 5
+        val battleWins = effectiveSeconds / GameBalance.OFFLINE_SECONDS_PER_BATTLE_WIN
 
         profile.gold += goldGained
         profile.soulPower += expGained

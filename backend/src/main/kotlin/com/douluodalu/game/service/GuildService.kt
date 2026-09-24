@@ -1,17 +1,21 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.dto.GuildBossResponse
 import com.douluodalu.game.entity.Guild
 import com.douluodalu.game.entity.GuildMember
+import com.douluodalu.game.model.GuildBossBalance
 import com.douluodalu.game.repository.GuildRepository
 import com.douluodalu.game.repository.UserRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDateTime
+import kotlin.random.Random
 
 @Service
 class GuildService(
     private val guildRepository: GuildRepository,
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    private val gameService: GameService
 ) {
     fun getGuildList(): List<Guild> {
         return guildRepository.findAll()
@@ -135,5 +139,44 @@ class GuildService(
         userRepository.save(user)
 
         return true
+    }
+
+    /**
+     * 挑战宗门 Boss：伤害与玩家等级/战斗魂力挂钩，胜利判定按伤害占 Boss 生命比例。
+     * 无论胜负均获得金币、Boss 币与一件随机装备，并为宗门积累经验。
+     */
+    @Transactional
+    fun challengeBoss(userId: Long): GuildBossResponse? {
+        val user = userRepository.findById(userId).orElse(null) ?: return null
+        val player = user.player ?: return null
+        val guildId = player.guildId ?: return null
+        val guild = guildRepository.findById(guildId).orElse(null) ?: return null
+
+        val damage = player.level * GuildBossBalance.BASE_DAMAGE_PER_LEVEL +
+                player.battleSoulPower +
+                Random.nextLong(GuildBossBalance.DAMAGE_RANDOM_RANGE)
+        val bossHp = GuildBossBalance.BOSS_HP_BASE + guild.level * GuildBossBalance.BOSS_HP_PER_GUILD_LEVEL
+        val won = damage >= (bossHp * GuildBossBalance.WIN_DAMAGE_RATIO).toLong()
+        val goldGained = damage / GuildBossBalance.GOLD_PER_DAMAGE_DIVISOR
+        val bossCoinGained = if (won) GuildBossBalance.WIN_BOSS_COIN_BASE + guild.level else GuildBossBalance.LOSE_BOSS_COIN
+        val item = gameService.rollBackpackDrop(userId, player.level + guild.level)
+
+        player.gold += goldGained
+        player.bossCoin += bossCoinGained
+        player.updatedAt = LocalDateTime.now()
+        guild.exp += if (won) GuildBossBalance.WIN_GUILD_EXP else GuildBossBalance.LOSE_GUILD_EXP
+
+        guildRepository.save(guild)
+        userRepository.save(user)
+
+        return GuildBossResponse(
+            won = won,
+            damage = damage,
+            bossHp = bossHp,
+            goldGained = goldGained,
+            bossCoinGained = bossCoinGained,
+            item = item,
+            message = if (won) "宗门 Boss 挑战成功" else "造成了有效伤害，获得参与奖励"
+        )
     }
 }

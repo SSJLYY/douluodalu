@@ -1,5 +1,6 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.config.AuditLog
 import com.douluodalu.game.dto.*
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
@@ -20,6 +21,7 @@ class AuthService(
     private val passwordEncoder: PasswordEncoder,
     private val jwtUtil: JwtUtil
 ) {
+    @AuditLog(action = "USER_REGISTER", target = "用户注册", logParams = false)
     @Transactional
     fun register(request: RegisterRequest): AuthResponse {
         val user = UserEntity(
@@ -47,6 +49,7 @@ class AuthService(
         }
     }
 
+    @AuditLog(action = "USER_LOGIN", target = "用户登录", logParams = false)
     @Transactional
     fun login(request: LoginRequest): AuthResponse {
         // 统一错误消息：用户不存在和密码错误返回相同消息，防止枚举攻击
@@ -67,5 +70,20 @@ class AuthService(
         val user = userRepository.findById(userId)
             .orElseThrow { IllegalArgumentException("用户不存在") }
         return UserInfoResponse(user.id, user.username, user.nickname, user.avatarUrl)
+    }
+
+    /**
+     * 登出：将当前 token 加入黑名单，并回写 lastLogoutTime，
+     * 供离线收益按“最后登出时间”正确计算。
+     */
+    @AuditLog(action = "USER_LOGOUT", target = "用户登出")
+    @Transactional
+    fun logout(token: String) {
+        jwtUtil.revokeToken(token)
+        val userId = runCatching { jwtUtil.getUserIdFromToken(token) }.getOrNull() ?: return
+        val profile = playerProfileRepository.findByUserId(userId) ?: return
+        profile.lastLogoutTime = LocalDateTime.now()
+        profile.updatedAt = LocalDateTime.now()
+        playerProfileRepository.save(profile)
     }
 }

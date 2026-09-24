@@ -20,7 +20,7 @@ class RankController(
             RankEntryResponse(
                 idx + 1,
                 p.userId,
-                p.user.nickname,
+                p.user?.nickname ?: "",
                 p.level.toLong(),
                 "转生${p.prestigeCount}次"
             )
@@ -35,7 +35,7 @@ class RankController(
         val effectiveLimit = limit.coerceIn(1, 1000)
         val profiles = playerProfileRepo.findWithUserByTowerFloorGreaterThanEqualOrderByTowerFloorDesc(1).take(effectiveLimit)
         val result = profiles.mapIndexed { idx, p ->
-            RankEntryResponse(idx + 1, p.userId, p.user.nickname, p.towerFloor.toLong(), null)
+            RankEntryResponse(idx + 1, p.userId, p.user?.nickname ?: "", p.towerFloor.toLong(), null)
         }
         return ResponseEntity.ok(result)
     }

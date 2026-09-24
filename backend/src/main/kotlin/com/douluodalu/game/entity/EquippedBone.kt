@@ -5,7 +5,7 @@ import java.time.LocalDateTime
 
 @Entity
 @Table(name = "equipped_bone")
-class EquippedBoneEntity(
+class EquippedBone(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     var id: Long = 0,
@@ -32,11 +32,7 @@ class EquippedBoneEntity(
     var enhanceLevel: Int = 0,
 
     @Column(name = "equip_at")
-    var equipAt: LocalDateTime = LocalDateTime.now(),
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id", insertable = false, updatable = false)
-    var user: UserEntity? = null
+    var equipAt: LocalDateTime = LocalDateTime.now()
 ) {
-    override fun toString() = "EquippedBone[id=$id,user=$userId,slot=$slotIndex,bone=$boneId,year=$yearOrdinal,qual=$qualityOrdinal,type=$boneTypeOrdinal,enh=$enhanceLevel]"
+    override fun toString() = "EquippedBone[id=$id,user=$userId,slot=$slotIndex,bone=$boneId,year=$yearOrdinal,quality=$qualityOrdinal,type=$boneTypeOrdinal,enh=$enhanceLevel]"
 }

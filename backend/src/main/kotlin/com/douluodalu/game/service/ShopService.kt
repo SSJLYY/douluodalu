@@ -4,6 +4,7 @@ import com.douluodalu.game.controller.ShopResult
 import com.douluodalu.game.entity.BackpackItemEntity
 import com.douluodalu.game.model.*
 import com.douluodalu.game.repository.BackpackItemRepository
+import com.douluodalu.game.repository.ShopPurchaseRecordRepository
 import com.douluodalu.game.repository.UserRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -13,7 +14,8 @@ import kotlin.random.Random
 class ShopService(
     private val userRepository: UserRepository,
     private val gameService: GameService,
-    private val backpackItemRepository: BackpackItemRepository
+    private val backpackItemRepository: BackpackItemRepository,
+    private val purchaseRecordRepository: ShopPurchaseRecordRepository
 ) {
     @Transactional
     fun buyItem(userId: Long, item: ShopItem): ShopResult {
@@ -74,26 +76,27 @@ class ShopService(
         }
 
         // 更新购买记录
-        val existingRecord = backpackItemRepository.findShopPurchaseRecordByUserIdAndItemId(userId, item.id)
+        val existingRecord = purchaseRecordRepository.findByUserIdAndItemId(userId, item.id)
         if (existingRecord != null) {
             existingRecord.purchaseCount += 1
+            purchaseRecordRepository.save(existingRecord)
         } else {
             val newRecord = com.douluodalu.game.entity.ShopPurchaseRecord()
             newRecord.userId = userId
             newRecord.itemId = item.id
             newRecord.purchaseCount = 1
-            backpackItemRepository.save(newRecord)
+            purchaseRecordRepository.save(newRecord)
         }
 
         userRepository.save(user)
-        return ShopResult(true, reward, item = mapOf("id" to item.id, "name" to item.name, "reward" to reward))
+        return ShopResult(true, item = mapOf("id" to item.id, "name" to item.name, "reward" to reward))
     }
 
     @Transactional
     fun buyLimitedItem(userId: Long, item: ShopItem): ShopResult {
         // 检查限购
         if (item.stock > 0) {
-            val record = backpackItemRepository.findShopPurchaseRecordByUserIdAndItemId(userId, item.id)
+            val record = purchaseRecordRepository.findByUserIdAndItemId(userId, item.id)
             val purchased = record?.purchaseCount ?: 0
             if (purchased >= item.stock) {
                 return ShopResult(false, error = "该商品已售罄")

@@ -42,6 +42,21 @@ data class GuildListResponse(
     val notice: String?
 )
 
+data class GuildMyResponse(
+    val joined: Boolean,
+    val guild: GuildListResponse? = null
+)
+
+data class GuildBossResponse(
+    val won: Boolean,
+    val damage: Long,
+    val bossHp: Long,
+    val goldGained: Long,
+    val bossCoinGained: Long,
+    val item: BackpackItemDto,
+    val message: String
+)
+
 data class RankEntryResponse(
     val rank: Int,
     val userId: Long,

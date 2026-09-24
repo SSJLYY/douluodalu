@@ -80,17 +80,29 @@ data class BackpackItemDto(
 )
 
 // ======== 操作响应 ========
+data class BattleRoundLog(
+    val round: Int,
+    val playerHpBefore: Long,
+    val monsterHpBefore: Long,
+    val playerDamage: Long,
+    val monsterDamage: Long,
+    val playerHpAfter: Long,
+    val monsterHpAfter: Long
+)
+
 data class BattleResponse(
     val won: Boolean,
     val rounds: Int,
     val monsterName: String,
+    val monsterMaxHp: Long,
     val expGained: Long,
     val goldGained: Long,
     val drops: List<BackpackItemDto>,
     val playerHp: Long,
     val playerLevel: Int,
     val playerGold: Long,
-    val playerSoulPower: Long
+    val playerSoulPower: Long,
+    val battleLog: List<BattleRoundLog>
 )
 
 data class CultivateResponse(
@@ -115,4 +127,17 @@ data class OfflineRewardResponse(
 data class SimpleResponse(
     val success: Boolean,
     val message: String
+)
+
+data class TowerResponse(
+    val won: Boolean,
+    val rounds: Int,
+    val monsterName: String,
+    val expGained: Long,
+    val goldGained: Long,
+    val bossCoinGained: Long,
+    val towerFloor: Int,
+    val killingIntent: Int,
+    val drops: List<BackpackItemDto>,
+    val playerLevel: Int
 )

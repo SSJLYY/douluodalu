@@ -13,12 +13,16 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.CorsConfigurationSource
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
 
 @Configuration
 @EnableWebSecurity
 class SecurityConfig(
-    private val jwtAuthFilter: JwtAuthFilter
+    private val jwtAuthFilter: JwtAuthFilter,
+    private val rateLimitInterceptor: RateLimitInterceptor
 ) {
+
     @Bean
     fun securityFilterChain(http: HttpSecurity): SecurityFilterChain {
         http
@@ -29,6 +33,8 @@ class SecurityConfig(
                 auth
                     .requestMatchers("/api/auth/**").permitAll()
                     .requestMatchers("/api/rank/**").permitAll()
+                    .requestMatchers("/api/health").permitAll()
+                    .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                     .anyRequest().authenticated()
             }
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter::class.java)
@@ -37,6 +43,14 @@ class SecurityConfig(
 
     @Bean
     fun passwordEncoder(): PasswordEncoder = BCryptPasswordEncoder()
+
+    @Bean
+    fun webMvc(): WebMvcConfigurer = object : WebMvcConfigurer {
+        override fun addInterceptors(registry: InterceptorRegistry) {
+            registry.addInterceptor(rateLimitInterceptor)
+                .addPathPatterns("/api/**")
+        }
+    }
 
     private fun corsConfig(): CorsConfigurationSource {
         val allowedOrigins = System.getenv("CORS_ORIGINS")
@@ -49,6 +63,7 @@ class SecurityConfig(
             allowedMethods = listOf("GET", "POST", "PUT", "DELETE", "OPTIONS")
             allowedHeaders = listOf("*")
             allowCredentials = true
+            maxAge = 3600L
         }
         val source = UrlBasedCorsConfigurationSource()
         source.registerCorsConfiguration("/**", config)
