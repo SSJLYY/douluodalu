@@ -275,6 +275,22 @@ span:is(.bg-purple-600, .bg-blue-600, .bg-yellow-600, .bg-red-600, .bg-green-600
 @keyframes dl-spin {
   to { transform: rotate(360deg); }
 }
+/* 登录页氛围光斑缓慢漂移（纯装饰，GPU 合成层） */
+@keyframes dl-blob-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33% { transform: translate3d(5rem, 3rem, 0) scale(1.15); }
+  66% { transform: translate3d(-4rem, 5rem, 0) scale(0.92); }
+}
+/* 实心按钮 hover 高光扫过 */
+@keyframes dl-btn-sheen {
+  from { transform: translateX(-160%) skewX(-20deg); }
+  to { transform: translateX(280%) skewX(-20deg); }
+}
+/* 骨架屏微光扫动 */
+@keyframes dl-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
 
 .dl-fade-up { animation: dl-fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
 .dl-fade-in { animation: dl-fade-in 0.4s ease-out both; }
@@ -298,6 +314,71 @@ span:is(.bg-purple-600, .bg-blue-600, .bg-yellow-600, .bg-red-600, .bg-green-600
   animation: dl-spin 0.7s linear infinite;
 }
 
+/* ---------- 登录页：漂移光斑 / 玻璃输入 / 按钮高光 ---------- */
+.dl-blob-slow { animation: dl-blob-drift 18s ease-in-out infinite; }
+.dl-blob-slower { animation: dl-blob-drift 26s ease-in-out infinite reverse; }
+
+/* 玻璃输入框：半透明底 + 背景模糊；文字/占位符仍走 --input-fg/--placeholder，两主题均达 AA */
+.dl-glass-input {
+  background-color: color-mix(in srgb, var(--surface-soft) 55%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--line);
+  color: var(--input-fg);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+.dl-glass-input:focus {
+  background-color: color-mix(in srgb, var(--surface-soft) 75%, transparent);
+}
+
+/* 实心渐变按钮：hover 时一道高光斜扫而过 */
+.dl-btn-sheen { position: relative; overflow: hidden; }
+.dl-btn-sheen::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+  transform: translateX(-160%) skewX(-20deg);
+  pointer-events: none;
+}
+.dl-btn-sheen:not(:disabled):hover::after { animation: dl-btn-sheen 0.9s ease-out; }
+
+/* ---------- 骨架屏（排行榜首载占位，shimmer 扫动） ---------- */
+.dl-skeleton {
+  border-radius: 0.5rem;
+  background: linear-gradient(
+    90deg,
+    var(--surface-soft) 25%,
+    color-mix(in srgb, var(--surface-soft) 55%, var(--line)) 45%,
+    var(--surface-soft) 65%
+  );
+  background-size: 200% 100%;
+  animation: dl-shimmer 1.4s ease-in-out infinite;
+}
+
+/* ---------- 排行榜领奖台：前三名专属底色（调色板变量驱动） ---------- */
+.dl-podium-gold {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--pal-yellow-500) 22%, transparent),
+    color-mix(in srgb, var(--pal-yellow-500) 6%, transparent));
+  border: 1px solid color-mix(in srgb, var(--pal-yellow-500) 55%, transparent);
+}
+.dl-podium-silver {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--pal-gray-400) 24%, transparent),
+    color-mix(in srgb, var(--pal-gray-400) 6%, transparent));
+  border: 1px solid color-mix(in srgb, var(--pal-gray-400) 55%, transparent);
+}
+.dl-podium-bronze {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--pal-orange-400) 22%, transparent),
+    color-mix(in srgb, var(--pal-orange-400) 6%, transparent));
+  border: 1px solid color-mix(in srgb, var(--pal-orange-400) 55%, transparent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .dl-fade-up,
   .dl-fade-in,
@@ -305,7 +386,17 @@ span:is(.bg-purple-600, .bg-blue-600, .bg-yellow-600, .bg-red-600, .bg-green-600
   .dl-pop,
   .dl-slide-in,
   .dl-value-flash,
-  .dl-spinner {
+  .dl-spinner,
+  .dl-blob-slow,
+  .dl-blob-slower,
+  .dl-skeleton {
     animation: none;
   }
+  /* 关闭动画后骨架屏保持静态底纹 */
+  .dl-skeleton { background: var(--surface-soft); }
+  /* 按钮高光静止不可见 */
+  .dl-btn-sheen::after { display: none; }
+  /* 输入框/按钮的颜色过渡同样收敛为即时切换 */
+  .dl-glass-input,
+  .dl-btn-sheen { transition: none; }
 }
