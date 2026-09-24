@@ -195,6 +195,17 @@ data class ShopItem(
     val requiresLevel: Int = 1
 )
 
+// 普通商店：金币购买的基础商品（前期过渡用）
+object NormalShopData {
+    val items = listOf(
+        ShopItem(201, "百年魂环箱", "随机获得一个百年魂环", 500, "GOLD", "RING_BOX", "HUNDRED"),
+        ShopItem(202, "千年魂环箱", "随机获得一个千年魂环", 4000, "GOLD", "RING_BOX", "THOUSAND"),
+        ShopItem(203, "百年魂骨箱", "随机获得一个百年魂骨", 800, "GOLD", "BONE_BOX", "HUNDRED"),
+        ShopItem(204, "魂力精华(小)", "获得500魂力", 300, "GOLD", "SOUL_POWER", "500"),
+        ShopItem(205, "背包扩展券", "背包容量+5", 3000, "GOLD", "BACKPACK_EXPAND", "5")
+    )
+}
+
 object BossShopData {
     val items = listOf(
         ShopItem(1, "万年魂环箱", "随机获得一个万年魂环", 50, "BOSS_COIN", "RING_BOX", "TEN_THOUSAND"),

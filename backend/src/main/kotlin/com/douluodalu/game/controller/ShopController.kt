@@ -13,6 +13,28 @@ class ShopController(
     private val shopService: ShopService,
     private val gameService: GameService
 ) {
+    @GetMapping("/normal")
+    fun getNormalShopItems(auth: Authentication): ResponseEntity<List<ShopItem>> {
+        return ResponseEntity.ok(NormalShopData.items)
+    }
+
+    @PostMapping("/normal/buy/{itemId}")
+    fun buyNormalShopItem(
+        auth: Authentication,
+        @PathVariable itemId: Long
+    ): ResponseEntity<Any> {
+        val userId = auth.principal as Long
+        val item = NormalShopData.items.find { it.id == itemId }
+            ?: return ResponseEntity.badRequest().body(mapOf("error" to "商品不存在"))
+
+        val result = shopService.buyItem(userId, item)
+        return if (result.success) {
+            ResponseEntity.ok(mapOf("message" to "购买成功", "item" to result.item))
+        } else {
+            ResponseEntity.badRequest().body(mapOf("error" to result.error))
+        }
+    }
+
     @GetMapping("/boss")
     fun getBossShopItems(auth: Authentication): ResponseEntity<List<ShopItem>> {
         return ResponseEntity.ok(BossShopData.items)
