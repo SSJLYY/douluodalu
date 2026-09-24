@@ -168,6 +168,17 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 
 ---
 
+## 🎮 第六/七轮：数值仿真驱动的修复 + 装备战力接入（2026-09-24）
+
+1. **90 天长跑仿真**（LongRunSimulationTest，每次 mvn test 自动重生成报告）揪出：离线收益按秒计费双通胀（主动收入占比 0.0037%）、魂塔 38 层数学恒败墙、装备零战力（战斗完全不吃属性）、突破零卡点等 7 项。
+2. **装备战力系统**：新增 EquipmentPowerService，魂环/魂骨/魂核按年份/品质/成熟度折算攻防加成并接入 battle/tower（公式对齐 shared 引擎 calcAttributes，系数入 GameBalance）；响应加 power 字段。
+3. **数值修复**：离线改按小时计费（离线占比 100%→10%，回归放置类健康曲线）；塔难度 0.02→0.005（仿真 100 层登顶）；见 数值仿真报告-90天.md。
+4. **审计日志治理**：每日 03:00 定时清理（AUDIT_RETENTION_DAYS 默认 30，≤0 永久保留，test profile 关调度防抖）；AuditLogAspect 写入降级不再击穿业务。
+5. **Android**：assembleDebug/assembleRelease 全链路通过（34.7MB/26.5MB APK）；修复上轮引擎合入 commonMain 的 JVM-only API（System/Math/replaceAll 等 10+ 处），shared 的 android+js 双 target 首次真正编译通过。
+6. 未做（范围外）：魂环负荷校验系统、前端战力展示、突破卡点调参（P3 留作设计决策）。测试基线 36→46 全绿。
+
+---
+
 ## 🔮 后续建议
 
 1. **前端优化**
