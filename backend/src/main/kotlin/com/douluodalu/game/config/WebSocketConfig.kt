@@ -19,8 +19,12 @@ class WebSocketConfig : WebSocketMessageBrokerConfigurer {
 
     override fun registerStompEndpoints(registry: StompEndpointRegistry) {
         // 注册 STOMP 端点，客户端将通过此端点连接到 WebSocket 服务器
+        // SockJS 端点（提供 /ws/info 探测与各降级传输，保留兼容）
         registry.addEndpoint("/ws")
             .setAllowedOriginPatterns("*")
             .withSockJS()
+        // 原生 WebSocket 端点：前端 @stomp/stompjs 直连（ws://host/ws-native），无需 sockjs-client
+        registry.addEndpoint("/ws-native")
+            .setAllowedOriginPatterns("*")
     }
 }

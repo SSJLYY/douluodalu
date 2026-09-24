@@ -34,6 +34,10 @@ class SecurityConfig(
                     .requestMatchers("/api/auth/**").permitAll()
                     .requestMatchers("/api/rank/**").permitAll()
                     .requestMatchers("/api/health").permitAll()
+                    // WebSocket/STOMP：浏览器原生 WS 握手与 SockJS 各传输（/ws/info、
+                    // /ws/{server}/{session}/xhr 等）无法携带 Authorization 头，
+                    // 握手一律放行（SockJS 子路径 + 原生端点 /ws-native），鉴权在应用层消息处理中做
+                    .requestMatchers("/ws", "/ws/**", "/ws-native").permitAll()
                     .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                     .anyRequest().authenticated()
             }

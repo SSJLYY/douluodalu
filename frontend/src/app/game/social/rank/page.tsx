@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/lib/api';
 import { useAsync } from '@/lib/hooks';
+import { useLiveBattle } from '@/lib/live';
 
 const RANK_TYPES = [
     { id: 'level', name: '等级排行', icon: '⚡' },
@@ -21,6 +22,16 @@ export default function RankPage() {
     useEffect(() => {
         queueMicrotask(refresh);
     }, [activeRank, refresh]);
+
+    // WS 实时：任意用户的战斗广播都可能改变榜单计分，1s 窗口去重后刷新一次；
+    // 时间戳节流（leading edge），WS 断开时该订阅自然不触发，不影响手动/首屏加载
+    const lastBattleRefreshRef = useRef(0);
+    useLiveBattle(() => {
+        const now = Date.now();
+        if (now - lastBattleRefreshRef.current < 1000) return;
+        lastBattleRefreshRef.current = now;
+        queueMicrotask(refresh);
+    });
 
     const getRankIcon = (rank: number) => {
         if (rank === 1) return '🥇';
