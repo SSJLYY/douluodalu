@@ -1,6 +1,7 @@
 package com.douluodalu.game.service
 
 import com.douluodalu.game.dto.CheckInStatusDto
+import com.douluodalu.game.dto.DailyQuestsDto
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
@@ -53,6 +54,9 @@ class GameServiceTest {
 
     @Mock
     private lateinit var checkInService: CheckInService
+
+    @Mock
+    private lateinit var dailyQuestService: DailyQuestService
 
     @InjectMocks
     private lateinit var gameService: GameService
@@ -186,6 +190,9 @@ class GameServiceTest {
         whenever(checkInService.getCheckInStatus(1L)).thenReturn(
             CheckInStatusDto(signedToday = true, streak = 3, totalDays = 10, nextCycleDay = 4)
         )
+        whenever(dailyQuestService.getTodayStatus(1L)).thenReturn(
+            DailyQuestsDto(date = "2026-09-26", quests = emptyList())
+        )
 
         val response = gameService.getGameState(1L)
 
@@ -194,6 +201,9 @@ class GameServiceTest {
         assertEquals(10L, response.checkIn.totalDays)
         assertEquals(4, response.checkIn.nextCycleDay)
         verify(checkInService).getCheckInStatus(1L)
+        // 每日任务面板同样委托 DailyQuestService 只读查询
+        assertEquals("2026-09-26", response.dailyQuests.date)
+        verify(dailyQuestService).getTodayStatus(1L)
     }
 
     @Test
@@ -220,5 +230,104 @@ class GameServiceTest {
             }
         }
         assertTrue(sawRing && sawNonRing, "600 次掉落应同时覆盖魂环与非环分支")
+    }
+
+    // ==================== 每日任务挂点 ====================
+
+    @Test
+    fun `battle victory should record battle_wins daily quest`() {
+        // level=5 满血 vs 第1图第1关怪（hp 224 / atk 16）：怪伤 3 回合至多 ~57 << 350，确定性获胜
+        val p = profile()
+        p.currentHp = 350L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+
+        val response = gameService.battle(1L)
+
+        assertTrue(response.won, "level=5 满血打 1-1 怪应确定性获胜")
+        verify(dailyQuestService).recordBattleWin(1L)
+    }
+
+    @Test
+    fun `battle defeat should not record battle_wins daily quest`() {
+        // level=1 vs 7图15关怪（hp (200+2100)×2.8=6440 / atk 532）：玩家 30 回合至多打出 2160 伤，确定性战败
+        val p = PlayerProfileEntity(userId = 1L, level = 1)
+        p.currentMapId = 7
+        p.currentStage = 15
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+
+        val response = gameService.battle(1L)
+
+        assertFalse(response.won, "level=1 打 7-15 怪应确定性战败")
+        verify(dailyQuestService, never()).recordBattleWin(any())
+    }
+
+    // ==================== 塔战逐回合日志 ====================
+
+    @Test
+    fun `tower response should carry round log with hp invariants aligned to rounds`() {
+        val p = profile()
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+
+        val response = gameService.towerBattle(1L)
+
+        // 挑战即计数，不论胜负
+        verify(dailyQuestService).recordTower(1L)
+        assertTrue(response.battleLog.isNotEmpty(), "塔战必须产出逐回合日志（前端塔页复用 BattleReplay）")
+        assertEquals(response.battleLog.size, response.rounds, "rounds 应与日志回放一致")
+        var lastRound = 0
+        response.battleLog.forEach { r ->
+            assertEquals(r.playerHpBefore - r.monsterDamage, r.playerHpAfter, "第${r.round}回合玩家 HP 不变量 before-damage==after")
+            // 击杀回合怪物 HP 余量按 resolveBattle 既有语义截断为 0（与普通战斗日志形状一致）
+            assertEquals(
+                (r.monsterHpBefore - r.playerDamage).coerceAtLeast(0), r.monsterHpAfter,
+                "第${r.round}回合怪物 HP 不变量 before-damage==after（击杀回合截断为 0）"
+            )
+            assertEquals(lastRound + 1, r.round, "回合号应从 1 连续递增")
+            lastRound = r.round
+        }
+        // 首回合玩家满血口径（level=5：50×5+100=350，无装备加成）
+        assertEquals(350L, response.battleLog.first().playerHpBefore)
+        // 胜负与日志呈现一致
+        if (response.won) {
+            assertTrue(response.battleLog.last().monsterHpAfter <= 0, "won=true 的日志最后一回合怪应死亡")
+        } else {
+            assertTrue(response.battleLog.last().monsterHpAfter > 0, "won=false 的日志最后一回合怪应存活")
+        }
+    }
+
+    @Test
+    fun `tower battle log should be reproducible from userId and floor via independent seed`() {
+        // 纯函数口径：同 (userId, floor, won) 两次调用日志逐字段一致（独立种子 Random(userId*1_000_003L+floor)）
+        val logA = GameService.buildTowerBattleLog(userId = 42L, floor = 7, won = true, playerAtk = 100, playerMaxHp = 350)
+        val logB = GameService.buildTowerBattleLog(userId = 42L, floor = 7, won = true, playerAtk = 100, playerMaxHp = 350)
+        assertEquals(logA, logB)
+        assertTrue(logA.isNotEmpty())
+        assertTrue(logA.last().monsterHpAfter <= 0, "won=true 的日志应击杀怪物")
+
+        // 不同楼层 → 种子与塔怪属性都不同 → 首回合 monsterHpBefore 必然不同（防种子退化为常量）
+        val otherFloor = GameService.buildTowerBattleLog(userId = 42L, floor = 8, won = true, playerAtk = 100, playerMaxHp = 350)
+        assertNotEquals(logA, otherFloor)
+
+        // 集成口径：同一存档同一楼层重复挑战，胜负一致时日志逐字段一致（种子只由 userId+挑战时楼层决定）
+        val p = profile()
+        p.towerFloor = 5
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        val r1 = gameService.towerBattle(1L)
+        p.towerFloor = 5
+        val r2 = gameService.towerBattle(1L)
+        if (r1.won == r2.won) assertEquals(r1.battleLog, r2.battleLog, "同 (userId, floor) 同胜负应日志一致")
     }
 }

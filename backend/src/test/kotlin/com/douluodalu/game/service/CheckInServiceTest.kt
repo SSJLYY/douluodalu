@@ -23,6 +23,9 @@ class CheckInServiceTest {
     @Mock
     private lateinit var profileRepo: PlayerProfileRepository
 
+    @Mock
+    private lateinit var dailyQuestService: DailyQuestService
+
     @InjectMocks
     private lateinit var checkInService: CheckInService
 
@@ -174,5 +177,24 @@ class CheckInServiceTest {
         assertEquals(0L, status.totalDays)
         assertEquals(1, status.nextCycleDay)
         assertEquals(GameBalance.CHECK_IN_REWARDS.size, status.rewards.size)
+    }
+
+    // ==================== 每日任务挂点 ====================
+
+    @Test
+    fun `check-in should record checkin daily quest only on the successful path`() {
+        doReturn(null).whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(false).whenever(checkInRepository).existsByUserIdAndCheckDate(eq(1L), any())
+        doReturn(profile()).whenever(profileRepo).findByUserId(1L)
+
+        checkInService.checkIn(1L)
+
+        verify(dailyQuestService).recordCheckin(1L)
+
+        // 当日重复签到（早退）不再计数：仍只有首次成功那 1 次
+        doReturn(lastRecord(LocalDate.now(), streak = 1, total = 1))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        assertThrows(IllegalArgumentException::class.java) { checkInService.checkIn(1L) }
+        verify(dailyQuestService).recordCheckin(1L)
     }
 }

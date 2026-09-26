@@ -15,7 +15,8 @@ class ShopService(
     private val userRepository: UserRepository,
     private val gameService: GameService,
     private val backpackItemRepository: BackpackItemRepository,
-    private val purchaseRecordRepository: ShopPurchaseRecordRepository
+    private val purchaseRecordRepository: ShopPurchaseRecordRepository,
+    private val dailyQuestService: DailyQuestService
 ) {
     companion object {
         /** 会发放新背包物品的商品类型，购买/掉落前需校验背包容量 */
@@ -127,6 +128,9 @@ class ShopService(
         }
 
         userRepository.save(user)
+        // 每日任务挂点（副路径）：唯一成功出口，一处覆盖普通/Boss/限量/宗门 4 个商店入口
+        // （buyLimitedItem 也委托 buyItem）；失败不击穿购物主流程（见 DailyQuestService）
+        dailyQuestService.recordShopBuy(userId)
         return ShopResult(true, item = mapOf("id" to item.id, "name" to item.name, "reward" to reward))
     }
 

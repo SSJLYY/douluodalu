@@ -19,7 +19,9 @@ data class GameStateResponse(
     /** 任务#23：战力明细分解（攻击/生命按来源拆分，拆分求和与 power 严格一致） */
     val powerDetail: PowerDetailDto = PowerDetailDto(),
     /** 每日签到状态（尾部新增带默认值，向后兼容） */
-    val checkIn: CheckInStatusDto = CheckInStatusDto()
+    val checkIn: CheckInStatusDto = CheckInStatusDto(),
+    /** 每日任务面板：date=yyyy-MM-dd（与签到同一时区口径）；quests 固定返回全部任务定义（含未开始 progress=0，只读当天不建行） */
+    val dailyQuests: DailyQuestsDto = DailyQuestsDto()
 )
 
 /**
@@ -212,5 +214,34 @@ data class TowerResponse(
     val killingIntent: Int,
     val drops: List<BackpackItemDto>,
     val playerLevel: Int,
-    val power: Long = 0 // 战斗力（含装备加成），字段带默认值向后兼容，前端暂未消费
+    val power: Long = 0, // 战斗力（含装备加成），字段带默认值向后兼容，前端暂未消费
+    /** 塔战逐回合日志（呈现层，独立种子可复现回放，前端塔页复用 BattleReplay）；空列表=旧版本行为 */
+    val battleLog: List<BattleRoundLog> = emptyList()
+)
+
+// ======== 每日任务 ========
+/** 单条每日任务状态（GameStateResponse.dailyQuests.quests 固定返回全部任务定义，缺行 progress=0） */
+data class DailyQuestDto(
+    val id: String = "",
+    val description: String = "",
+    val target: Int = 0,
+    val progress: Int = 0,
+    val claimed: Boolean = false,
+    val rewardGold: Long = 0,
+    val rewardBossCoin: Long = 0,
+    val rewardSoulPower: Long = 0
+)
+
+/** 每日任务面板（GameStateResponse 尾部新增带默认值，向后兼容）。date=yyyy-MM-dd（LocalDate.now()，与签到同一时区口径） */
+data class DailyQuestsDto(
+    val date: String = "",
+    val quests: List<DailyQuestDto> = emptyList()
+)
+
+/** POST /api/game/quests/claim 成功响应 */
+data class ClaimQuestResponse(
+    val questId: String,
+    val goldGained: Long,
+    val bossCoinGained: Long,
+    val soulPowerGained: Long
 )

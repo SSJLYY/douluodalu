@@ -20,7 +20,8 @@ import java.time.LocalDateTime
 @Service
 class CheckInService(
     private val checkInRepository: CheckInRepository,
-    private val profileRepo: PlayerProfileRepository
+    private val profileRepo: PlayerProfileRepository,
+    private val dailyQuestService: DailyQuestService
 ) {
     companion object {
         /** 与 DTO 契约一致的固定文案：当日已签（含并发双击竞态）统一归一为此异常 → 400 */
@@ -65,6 +66,9 @@ class CheckInService(
         profile.soulPower += reward.soulPower
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
+
+        // 每日任务挂点（副路径）：完成今日签到即计数，失败不击穿签到主流程（见 DailyQuestService）
+        dailyQuestService.recordCheckin(userId)
 
         return CheckInResult(
             goldGained = reward.gold,

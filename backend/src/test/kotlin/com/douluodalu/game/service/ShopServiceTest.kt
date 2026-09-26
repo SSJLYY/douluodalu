@@ -33,6 +33,9 @@ class ShopServiceTest {
     @Mock
     private lateinit var purchaseRecordRepository: ShopPurchaseRecordRepository
 
+    @Mock
+    private lateinit var dailyQuestService: DailyQuestService
+
     @Captor
     private lateinit var itemCaptor: ArgumentCaptor<BackpackItemEntity>
 
@@ -308,5 +311,22 @@ class ShopServiceTest {
         assertTrue(result.success)
         assertEquals(4, existing.purchaseCount)
         assertTrue(existing.lastPurchaseAt.isAfter(before), "lastPurchaseAt 应随本次购买刷新")
+    }
+
+    // ==================== 每日任务挂点 ====================
+
+    @Test
+    fun `buyItem should record shop_buy daily quest exactly once on success path only`() {
+        val (user, profile) = userWith(gold = 1000)
+        doReturn(null).whenever(purchaseRecordRepository).findByUserIdAndItemId(1L, 204L)
+
+        val ok = shopService.buyItem(1L, ShopItem(204, "魂力精华(小)", "", 300, "GOLD", "SOUL_POWER", "500"))
+        assertTrue(ok.success)
+        verify(dailyQuestService).recordShopBuy(1L)
+
+        // 失败路径（无效货币早退）不计数：仍只有成功那 1 次
+        val failed = shopService.buyItem(1L, ShopItem(999, "奇怪商品", "", 100, "DIAMOND", "SOUL_POWER", "500"))
+        assertFalse(failed.success)
+        verify(dailyQuestService).recordShopBuy(1L)
     }
 }

@@ -57,7 +57,8 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
             <header className="bg-surface border-b border-line px-3 py-2.5">
                 <div className="max-w-7xl mx-auto flex flex-wrap items-center gap-x-3 gap-y-1.5">
                     <div className="flex items-center gap-2 min-w-0">
-                        <h1 className="text-lg sm:text-xl font-bold text-accent shrink-0">斗罗大陆</h1>
+                        {/* 全称：主页内置 header 已移除（避免双顶栏），此处补偿完整标题；溢出由外层 flex-wrap + 昵称 truncate 兜底 */}
+                        <h1 className="text-lg sm:text-xl font-bold text-accent shrink-0">斗罗大陆·放置传说</h1>
                         <span className="text-gray-400 hidden sm:inline">|</span>
                         <span className="text-gray-300 truncate max-w-[9rem] sm:max-w-none">{user.nickname}</span>
                     </div>

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import api, { TowerBattleResult } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
 import { BootState } from '@/components/StateViews';
+import BattleReplay from '@/components/BattleReplay';
 
 export default function TowerPage() {
     const { gameState, message, setMessage, actionLoading: loading, loadError, runAction, refresh } = useGameData();
@@ -86,6 +87,11 @@ export default function TowerPage() {
                             </>
                         )}
                     </div>
+                    {battleResult.battleLog && battleResult.battleLog.length > 0 ? (
+                        // 回放组件：battleLog 非空时在结果行下方展示逐回合回放（新结果自动重置回放）
+                        <BattleReplay battleLog={battleResult.battleLog} monsterName={battleResult.monsterName} />
+                    ) : null}
+                    {/* 降级路径：battleLog 缺失/为空（旧后端）→ 塔页原本无 details 日志，保持上方静态展示不变 */}
                 </div>
             )}
 

@@ -42,7 +42,7 @@ jobs:
 
   # 前端：Next.js 16，build 脚本已固定 --webpack（中文路径下 Turbopack 会 panic）
   frontend:
-    name: Frontend (lint + build)
+    name: Frontend (lint + test + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -62,6 +62,10 @@ jobs:
 
       - name: Lint
         run: npm run lint
+
+      # --run：CI 单次执行（vitest 默认 watch 模式会挂起）
+      - name: Test
+        run: npm test -- --run
 
       - name: Build
         run: npm run build

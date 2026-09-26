@@ -125,4 +125,48 @@ object GameBalance {
 
     /** 7 日循环天数上限：cycleDay = ((streak - 1) % CHECK_IN_CYCLE) + 1 */
     const val CHECK_IN_CYCLE = 7
+
+    // ======== 每日任务 ========
+    // 任务 id 是对外契约（前端按 id 渲染与领奖），不得改名；target/description/奖励可按经济锚点微调。
+    const val QUEST_BATTLE_WINS = "battle_wins"
+    const val QUEST_CULTIVATE = "cultivate"
+    const val QUEST_TOWER = "tower"
+    const val QUEST_CHECKIN = "checkin"
+    const val QUEST_SHOP_BUY = "shop_buy"
+
+    data class DailyQuestDef(
+        val id: String,
+        val description: String,
+        val target: Int,
+        val rewardGold: Long,
+        val rewardBossCoin: Long,
+        val rewardSoulPower: Long
+    )
+
+    // 数值锚点（《数值仿真报告-90天.md》：主动日收入约 7,000 金，离线 12h ≈ 2,100~4,200 金）：
+    //  - 单任务金币 60~200 ≈ 0.5~1 场塔胜（塔胜金 TOWER_GOLD_BASE + towerLevel×12：
+    //    floor=0 时 30 金、floor≈5 时 210 金），只作留存钩子、不冲击主动玩法；
+    //  - 全清合计 600 金 ≈ 签到 7 日循环（1,900 金）的 1/3，落在 500~1000 金设计区间；
+    //  - bossCoin 仅爬塔任务发 2 枚 ≤ 签到第 7 天大奖 10 枚（爬塔期望 ~0.6 枚/场、
+    //    2 次挑战 ≈ 1.2 枚，任务给 2 枚作小额提速），不破坏 bossCoin 定价；
+    //  - 魂力按比价 300 金 ≈ 500 魂力（商店魂力精华）折算，≈ 金币 × 5/3。
+    val DAILY_QUESTS = listOf(
+        DailyQuestDef(QUEST_BATTLE_WINS, "今日战斗胜利 3 次", target = 3, rewardGold = 200, rewardBossCoin = 0, rewardSoulPower = 330),
+        DailyQuestDef(QUEST_CULTIVATE, "修炼 5 次", target = 5, rewardGold = 60, rewardBossCoin = 0, rewardSoulPower = 100),
+        DailyQuestDef(QUEST_TOWER, "挑战魂塔 2 次", target = 2, rewardGold = 120, rewardBossCoin = 2, rewardSoulPower = 200),
+        DailyQuestDef(QUEST_CHECKIN, "完成今日签到", target = 1, rewardGold = 120, rewardBossCoin = 0, rewardSoulPower = 200),
+        DailyQuestDef(QUEST_SHOP_BUY, "商店购物 1 次", target = 1, rewardGold = 100, rewardBossCoin = 0, rewardSoulPower = 170)
+    )
+
+    /** id → 定义（claim 校验/发奖与 status 合成同源，防止两处数值漂移） */
+    val DAILY_QUEST_BY_ID = DAILY_QUESTS.associateBy { it.id }
+
+    // ======== 塔战日志模拟（呈现层，不参与胜负判定）========
+    // 塔怪属性从楼层推导：塔是「每层一关」的连续难度带，取推图曲线均摊值——
+    //   HP: MONSTER_HP_PER_MAP(300) / STAGES_PER_MAP(15) = 20/层 → 取 24（略收紧，战斗走廊更短）
+    //   ATK: MONSTER_ATK_PER_MAP(25) / STAGES_PER_MAP(15) ≈ 1.67 → 取 2
+    // 基数复用 MONSTER_HP_BASE(200) / MONSTER_ATK_BASE(15)：0 层 ≈ 第 1 图第 1 关量级。
+    // 仅供 GameService.buildTowerBattleLog 渲染逐回合日志；胜负仍由 towerWinChance 概率判定。
+    const val TOWER_LOG_MONSTER_HP_PER_FLOOR = 24L
+    const val TOWER_LOG_MONSTER_ATK_PER_FLOOR = 2
 }

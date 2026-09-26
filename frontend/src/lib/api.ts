@@ -112,6 +112,14 @@ class ApiClient {
         return this.request<CheckInResult>('/api/game/checkin', { method: 'POST' });
     }
 
+    // Daily Quests（每日任务）：未达标/已领取由后端 400 → request 统一抛 message
+    async claimQuest(questId: string) {
+        return this.request<ClaimQuestResult>('/api/game/quests/claim', {
+            method: 'POST',
+            body: JSON.stringify({ questId }),
+        });
+    }
+
     // Actions
     async cultivate() {
         return this.request<CultivateResult>('/api/action/cultivate', { method: 'POST' });
@@ -356,6 +364,8 @@ export interface GameState {
     powerDetail: PowerDetail;
     /** 每日签到状态（7 日循环）。后端响应升级前该字段可能缺失（undefined），消费方须判空降级 */
     checkIn: CheckInStatus;
+    /** 每日任务（固定 5 条，按日重置）。后端升级前字段缺失 → 消费方整卡隐藏（纯增量功能） */
+    dailyQuests?: DailyQuests;
 }
 
 /**
@@ -486,6 +496,8 @@ export interface TowerBattleResult {
     killingIntent: number;
     drops: BackpackItem[];
     playerLevel: number;
+    /** 战斗回合日志：后端升级前可能缺失（undefined），消费方走无回放的原展示 */
+    battleLog?: BattleRound[];
 }
 
 export interface CultivateResult {
@@ -537,6 +549,32 @@ export interface CheckInResult {
     streak: number;
     totalDays: number;
     cycleDay: number;
+}
+
+/** 每日任务单条：固定 5 条（battle_wins/cultivate/tower/checkin/shop_buy），后端按日重置 */
+export interface DailyQuest {
+    id: string;
+    description: string;
+    target: number;
+    progress: number;
+    claimed: boolean;
+    rewardGold: number;
+    rewardBossCoin: number;
+    rewardSoulPower: number;
+}
+
+/** 每日任务集合（GameState.dailyQuests）。后端升级前字段可能 undefined，消费方判空隐藏整卡 */
+export interface DailyQuests {
+    date: string;
+    quests: DailyQuest[];
+}
+
+/** POST /api/game/quests/claim 响应；未达标/今日已领取返回 400（message 由 request 统一抛出） */
+export interface ClaimQuestResult {
+    questId: string;
+    goldGained: number;
+    bossCoinGained: number;
+    soulPowerGained: number;
 }
 
 export interface RankEntry {

@@ -48,6 +48,9 @@ class EquipmentFlowTest {
     @Mock
     private lateinit var checkInService: CheckInService
 
+    @Mock
+    private lateinit var dailyQuestService: DailyQuestService
+
     @Captor
     private lateinit var savedRingCaptor: ArgumentCaptor<EquippedRing>
 

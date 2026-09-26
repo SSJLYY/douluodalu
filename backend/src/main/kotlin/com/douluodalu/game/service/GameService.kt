@@ -33,7 +33,8 @@ class GameService(
     private val equippedCoreRepo: EquippedCoreRepository,
     private val userRepository: UserRepository,
     private val webSocketService: WebSocketService,
-    private val checkInService: CheckInService
+    private val checkInService: CheckInService,
+    private val dailyQuestService: DailyQuestService
 ) {
     companion object {
         val REALM_NAMES = listOf(
@@ -97,6 +98,56 @@ class GameService(
             }
             return BattleOutcome(won = mHp <= 0, rounds = rounds, playerHpLeft = pHp, log = log)
         }
+
+        /** 塔战日志的独立模拟种子：只由 (userId, 挑战时楼层) 决定，同楼层回放天然可复现 */
+        fun towerLogSeed(userId: Long, floor: Int): Long = userId * 1_000_003L + floor
+
+        /**
+         * 塔战逐回合日志（呈现层）：胜负已由概率一锤定音（won 入参），本函数只负责把结果
+         * 渲染成与普通战斗同构的回合日志（前端塔页复用 BattleReplay）。
+         *  - 独立种子 Random(towerLogSeed(userId, floor))：绝不复用主 Random、绝不增删既有掷点，
+         *    LongRunSimulationTest 的 towerWinChance/resolveBattle 镜像契约不受影响；
+         *  - 胜负服从入参 won（概率语义与呈现解耦）：模拟结果不一致时按 ×1.5 梯度调整
+         *    塔怪 HP/ATK 重模拟（最多 8 次），仍不一致按最后一次输出（呈现层可接受）；
+         *  - 塔怪属性从楼层推导（推导依据见 GameBalance.TOWER_LOG_* 注释）；
+         *  - 玩家口径与 battle() 调 resolveBattle 时一致：攻击 = 基础 + 等级 + 装备加成；
+         *    生命用满血（塔挑战以满血状态进行，与战败后回满的既有语义一致）。
+         */
+        fun buildTowerBattleLog(
+            userId: Long,
+            floor: Int,
+            won: Boolean,
+            playerAtk: Long,
+            playerMaxHp: Long
+        ): List<BattleRoundLog> {
+            val baseHp = GameBalance.MONSTER_HP_BASE + floor * GameBalance.TOWER_LOG_MONSTER_HP_PER_FLOOR
+            val baseAtk = GameBalance.MONSTER_ATK_BASE + floor * GameBalance.TOWER_LOG_MONSTER_ATK_PER_FLOOR
+            val rng = Random(towerLogSeed(userId, floor))
+            var factor = 1.0
+            var outcome = resolveBattle(
+                playerAtk = playerAtk,
+                playerHp = playerMaxHp,
+                monsterHp = (baseHp * factor).toLong().coerceAtLeast(1),
+                monsterAtk = (baseAtk * factor).toInt().coerceAtLeast(1),
+                maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
+                rng = rng
+            )
+            var attempts = 0
+            while (outcome.won != won && attempts < 8) {
+                attempts++
+                // 期望胜 → 削怪（/1.5 递进）；期望败 → 强怪（×1.5 递进）；每轮换一批新掷点（同一种子流）
+                factor = if (won) factor / 1.5 else factor * 1.5
+                outcome = resolveBattle(
+                    playerAtk = playerAtk,
+                    playerHp = playerMaxHp,
+                    monsterHp = (baseHp * factor).toLong().coerceAtLeast(1),
+                    monsterAtk = (baseAtk * factor).toInt().coerceAtLeast(1),
+                    maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
+                    rng = rng
+                )
+            }
+            return outcome.log
+        }
     }
 
     @Transactional(readOnly = true)
@@ -129,7 +180,9 @@ class GameService(
             // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库）
             powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores),
             // 每日签到状态（CheckInService 只读查询，无循环依赖：CheckInService 不反向依赖本类）
-            checkIn = checkInService.getCheckInStatus(userId)
+            checkIn = checkInService.getCheckInStatus(userId),
+            // 每日任务面板（DailyQuestService 只读查询不建行，无循环依赖：它不反向依赖本类）
+            dailyQuests = dailyQuestService.getTodayStatus(userId)
         )
     }
 
@@ -141,6 +194,8 @@ class GameService(
         profile.soulPower += gain
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
+        // 每日任务挂点（副路径）：修炼成功即计数，失败不击穿主流程（见 DailyQuestService）
+        dailyQuestService.recordCultivate(userId)
         return CultivateResponse(gain, profile.soulPower, profile.level)
     }
 
@@ -218,6 +273,8 @@ class GameService(
             } else {
                 profile.currentStage = stage + 1
             }
+            // 每日任务挂点（副路径）：仅战斗胜利计数，战败不计数（失败不击穿主流程，见 DailyQuestService）
+            dailyQuestService.recordBattleWin(userId)
         } else {
             profile.totalBattleLosses++
             profile.currentHp = maxHp // 死亡回满血（含装备生命加成）
@@ -282,6 +339,7 @@ class GameService(
     fun towerBattle(userId: Long): TowerResponse {
         val profile = getProfile(userId)
         val towerLevel = profile.towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
+        val foughtFloor = profile.towerFloor // 塔战日志种子取挑战时楼层（胜利分支随后会 +1）
         // P2+P7 修复：胜率 = 1-(0.25+floor×0.005) 基础值 + 装备战力加成（floor=99 仍 >0，换装可登顶）
         val equip = EquipmentPowerService.bonus(
             profile.level,
@@ -318,11 +376,25 @@ class GameService(
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
 
+        // 每日任务挂点（副路径）：挑战即计数，不论胜负（失败不击穿主流程，见 DailyQuestService）
+        dailyQuestService.recordTower(userId)
+
+        // 塔战逐回合日志：插在全部既有掷点之后、用独立种子模拟（不改胜负判定、不动 RNG 次序，
+        // LongRunSimulationTest 的 towerWinChance/resolveBattle 镜像契约不受影响）。
+        // 玩家属性口径与 battle() 调 resolveBattle 时一致；生命用满血（塔挑战以满血进行，与战败回满语义一致）。
+        val towerPlayerAtk = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL + equip.atkBonus
+        val towerPlayerMaxHp = getMaxHp(profile.level) + equip.hpBonus
+        val battleLog = buildTowerBattleLog(userId, foughtFloor, won, towerPlayerAtk, towerPlayerMaxHp)
+
         return TowerResponse(
-            won = won, rounds = rounds, monsterName = monsterName,
+            won = won,
+            // battleLog 非空时与回放对齐（旧行为是 4+rand(6) 假值）；空时维持旧值兜底
+            rounds = if (battleLog.isNotEmpty()) battleLog.size else rounds,
+            monsterName = monsterName,
             expGained = expGained, goldGained = goldGained, bossCoinGained = bossCoinGained,
             towerFloor = profile.towerFloor, killingIntent = profile.killingIntent,
-            drops = drops, playerLevel = profile.level, power = power
+            drops = drops, playerLevel = profile.level, power = power,
+            battleLog = battleLog
         )
     }
 
