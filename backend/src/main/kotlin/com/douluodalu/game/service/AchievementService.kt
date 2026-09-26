@@ -121,8 +121,8 @@ class AchievementService(
     }
 
     /**
-     * 已解锁成就的 hp/atk 属性加成求和（供 GameService.getGameState 状态组装；
-     * 与解锁记录行天然同源、幂等无双花）。matk/pdef/mdef/crit 数据保留但第一版不消费。
+     * 已解锁成就的七字段属性加成求和（供 GameService.getGameState 状态组装；
+     * 与解锁记录行天然同源、幂等无双花）。第十七轮战斗模型扩展起七字段全消费。
      */
     fun unlockedBonus(userId: Long): EquipmentBonus =
         EquipmentPowerService.achievementBonus(achievementRepo.findByUserId(userId).map { it.achievementId })

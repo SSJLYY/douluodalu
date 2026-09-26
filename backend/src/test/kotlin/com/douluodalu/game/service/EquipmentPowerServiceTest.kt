@@ -87,14 +87,20 @@ class EquipmentPowerServiceTest {
         assertTrue(strong.atkBonus > weak.atkBonus)
 
         val playerHp = 10_000L
-        val monsterHp = 6_000L
-        val monsterAtk = 250
+        // 第十七轮扩展：本用例只验证「装备更好 → 结果单调」，怪物防御置 0 使 defFactor=1.0，
+        // 与旧数学（纯减算互拍）语义对齐
+        val monster = GameService.MonsterStats(hp = 6_000, atk = 250, matk = 250, pdef = 0, mdef = 0)
         val baseAtk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
 
-        val weakOutcome = GameService.resolveBattle(baseAtk + weak.atkBonus, playerHp, monsterHp, monsterAtk, 30, Random(42))
-        val strongOutcome = GameService.resolveBattle(baseAtk + strong.atkBonus, playerHp, monsterHp, monsterAtk, 30, Random(42))
-        // 弱装备数学上不可能在 30 回合内击杀 6000 HP（每回合上限 150+29）；强装备必然击杀
-        assertFalse(weakOutcome.won, "无装备加成的 150 攻击应在 30 回合内打不死 6000 HP")
+        val weakOutcome = GameService.resolveBattle(
+            GameService.CombatStats(atk = baseAtk + weak.atkBonus), playerHp, monster, 30, Random(42)
+        )
+        val strongOutcome = GameService.resolveBattle(
+            GameService.CombatStats(atk = baseAtk + strong.atkBonus), playerHp, monster, 30, Random(42)
+        )
+        // 弱装备数学上不可能在 30 回合内击杀 6500 HP（atk 172 → 每回合上限 206、30 回合上限 6180）；
+        // 强装备（atk ≈ 2658）必然击杀
+        assertFalse(weakOutcome.won, "无有效装备加成的 172 攻击应在 30 回合内打不死 6000 HP")
         assertTrue(strongOutcome.won, "换装后应击杀同一怪物 —— 换装变强必须可感")
         assertTrue(strongOutcome.playerHpLeft > weakOutcome.playerHpLeft)
     }
@@ -276,6 +282,71 @@ class EquipmentPowerServiceTest {
         assertEquals(EquipmentPowerService.powerOf(level, combined),
             d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
             "0 转时五行求和必须等于总战力（旧行为不变）")
+    }
+
+    // ======== 第十七轮战斗模型扩展：五属性加成与 powerOf 新权重 ========
+
+    @Test
+    fun `achievement bonus sums all seven reward fields`() {
+        // cult_30: hp 300/atk 15/pdef 5/mdef 5；ring_1: matk 10/critRate 1；prestige_1: hp 500/pdef 20/mdef 20
+        val ach = EquipmentPowerService.achievementBonus(listOf("cult_30", "ring_1", "prestige_1"))
+        assertEquals(800L, ach.hpBonus, "hp = 300 + 500")
+        assertEquals(15L, ach.atkBonus, "atk = cult_30 15")
+        assertEquals(10L, ach.matkBonus, "matk = ring_1 10")
+        assertEquals(25L, ach.pdefBonus, "pdef = cult_30 5 + prestige_1 20（cult_30 的 pdef=5 必须计入）")
+        assertEquals(25L, ach.mdefBonus, "mdef = cult_30 5 + prestige_1 20")
+        assertEquals(1L, ach.critRateBonus, "critRate = ring_1 1")
+        assertEquals(0L, ach.critDmgBonus)
+    }
+
+    @Test
+    fun `powerOf folds five attributes with calibrated weights`() {
+        val base = EquipmentPowerService.powerOf(50, EquipmentBonus(0, 0))
+        // matk×0.5(50) + pdef×0.2(2) + mdef×0.2(2) + critRate×5(5) + critDmg×0.2(2) = +61
+        val b = EquipmentBonus(
+            atkBonus = 0, hpBonus = 0, matkBonus = 100, pdefBonus = 10, mdefBonus = 10,
+            critRateBonus = 1, critDmgBonus = 10
+        )
+        assertEquals(base + 61L, EquipmentPowerService.powerOf(50, b),
+            "critRate 1 点 ≈ 5 战力、防御 10 点 ≈ 2 战力、matk 2 点 ≈ 1 战力（权重标定见 GameBalance）")
+        // 单调性：任一五属性字段增加 → 战力不减（严格增加，除非增量被截断抹平）
+        assertTrue(EquipmentPowerService.powerOf(50, b.copy(critRateBonus = 2)) >
+                EquipmentPowerService.powerOf(50, b))
+        assertTrue(EquipmentPowerService.powerOf(50, b.copy(pdefBonus = 20)) >
+                EquipmentPowerService.powerOf(50, b))
+    }
+
+    @Test
+    fun `power detail six-row invariant holds with five-attribute achievement bonuses`() {
+        // 第十七轮扩展回归：五属性成就加成经 newAttrPower 并入成就行后，六行求和恒等仍严格成立
+        val rng = Random(20260926)
+        repeat(200) {
+            val level = rng.nextInt(1, 121)
+            val prestigeCount = rng.nextInt(0, 6)
+            val rings = List(rng.nextInt(0, 7)) {
+                ring(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), percentage = rng.nextInt(0, 1000))
+            }
+            val bones = List(rng.nextInt(0, 5)) {
+                bone(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), enhance = rng.nextInt(0, 13))
+            }
+            val cores = List(rng.nextInt(0, 3)) {
+                core(rarity = rng.nextInt(0, 5), value = rng.nextInt(1, 300))
+            }
+            val ach = EquipmentBonus(
+                atkBonus = rng.nextLong(0, 500), hpBonus = rng.nextLong(0, 5000),
+                matkBonus = rng.nextLong(0, 300), pdefBonus = rng.nextLong(0, 100),
+                mdefBonus = rng.nextLong(0, 100), critRateBonus = rng.nextLong(0, 20),
+                critDmgBonus = rng.nextLong(0, 60)
+            )
+            val b = EquipmentPowerService.bonus(level, rings, bones, cores, ach)
+            val d = EquipmentPowerService.detail(level, rings, bones, cores, ach, prestigeCount)
+            assertEquals(
+                EquipmentPowerService.powerOf(level, EquipmentPowerService.applyPrestige(b, prestigeCount)),
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
+                "含五属性成就加成的六行战力求和必须等于总战力: level=$level prestige=$prestigeCount ach=$ach"
+            )
+            if (prestigeCount == 0) assertEquals(0L, d.prestige, "0 转时倍率增量行必须为 0")
+        }
     }
 
     // ======== P2：塔胜率修复 ========

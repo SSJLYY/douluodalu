@@ -22,7 +22,21 @@ data class GameStateResponse(
     /** 每日签到状态（尾部新增带默认值，向后兼容） */
     val checkIn: CheckInStatusDto = CheckInStatusDto(),
     /** 每日任务面板：date=yyyy-MM-dd（与签到同一时区口径）；quests 固定返回全部任务定义（含未开始 progress=0，只读当天不建行） */
-    val dailyQuests: DailyQuestsDto = DailyQuestsDto()
+    val dailyQuests: DailyQuestsDto = DailyQuestsDto(),
+    /** 第十七轮战斗模型扩展：玩家有效战斗属性（matk/pdef/mdef/critRate/critDmg，与 battle 结算
+     *  入参同源 playerCombatStats，含成就/装备加成与转生倍率）。尾部新增全默认值，向后兼容 */
+    val combatStats: CombatStatsDto = CombatStatsDto()
+)
+
+/** 玩家有效战斗属性（GameStateResponse.combatStats）。全默认值向后兼容；
+ *  critRate/critDmg 为百分点数（critRate 5 = 5%、critDmg 150 = 1.5 倍），atk/hp 不在此重复
+ *  （已由 profile.currentHp / powerDetail.baseAtk 承载） */
+data class CombatStatsDto(
+    val matk: Long = 0,
+    val pdef: Long = 0,
+    val mdef: Long = 0,
+    val critRate: Int = 0,
+    val critDmg: Int = 0
 )
 
 /**

@@ -42,6 +42,19 @@ const WIKI_CATEGORIES = [
         ]
     },
     {
+        id: 'combat',
+        title: '战斗系统',
+        icon: '⚔️',
+        content: [
+            // 真实口径：与后端战斗结算同源（物理/魔法 85%/15%，防御减伤 1−def/(def+200) 下限 10%，怪物不暴击）
+            { name: '伤害结算', description: '伤害按物理 85% / 魔法 15% 混合结算；防御减伤 = 1 − 防御÷(防御+200)，下限 10%——防御再高也至少造成 10% 伤害，不会完全免疫' },
+            { name: '暴击', description: '玩家攻击按暴击率（百分点）概率触发暴击，暴击伤害 = 基础伤害 × 暴伤倍率（默认 150%）；怪物不会暴击，堆防御/生命即可稳定扛伤' },
+            { name: '属性来源', description: '基础属性随等级成长；成就加成在「成就」页（/game/achievements）解锁后永久生效；武魂加成将在后续版本实装。魔攻 = 基础魔攻 + 成就魔攻' },
+            { name: '减伤示例', description: '物防 200：1 − 200÷(200+200) = 1 − 50% → 减伤 50%；物防 46：1 − 46÷(46+200) = 1 − 18.7% → 减伤约 18.7%（可代入公式验算）' },
+            { name: '查看途径', description: '战力明细面板（主页 ⚔️ 战力明细展开）底部展示魔攻/物防/魔防/暴击/爆伤摘要；物攻已并入「基础」行的攻击值内' },
+        ]
+    },
+    {
         id: 'rings',
         title: '魂环系统',
         icon: '💍',
@@ -101,7 +114,7 @@ export default function WikiPage() {
         <div className="space-y-6">
             <h1 className="text-2xl font-bold text-yellow-400">百科</h1>
 
-            {/* 分类标签（6 个 tab：375px 下用横向滚动收纳为一行，避免换行挤压内容区） */}
+            {/* 分类标签（7 个 tab：375px 下用横向滚动收纳为一行，避免换行挤压内容区） */}
             <div className="flex gap-2 dl-scroll-x pb-1">
                 {WIKI_CATEGORIES.map((category) => (
                     <button

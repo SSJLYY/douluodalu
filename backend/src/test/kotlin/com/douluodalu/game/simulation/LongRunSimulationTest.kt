@@ -95,10 +95,11 @@ class LongRunSimulationTest {
     }
 
     /**
-     * 成就属性加成镜像：按镜像玩家状态算已解锁集合，hp/atk 计入战斗属性。
+     * 成就属性加成镜像：按镜像玩家状态算已解锁集合，七字段加成计入战斗属性
+     * （第十七轮战斗模型扩展起 matk/pdef/mdef/critRate/critDmg 随 EquipmentBonus 全量生效）。
      * 口径映射与求和**直接调用生产纯函数**（AchievementService.progressOf +
-     * EquipmentPowerService.achievementBonus），不手抄；matk/pdef/mdef/crit 不计入——与生产
-     * 「只兑现 hp/atk」口径一致。SimPlayer 不穿装 → 环数按 0 计；EquipSimPlayer 传实际槽位数。
+     * EquipmentPowerService.achievementBonus），不手抄。SimPlayer 不穿装 → 环数按 0 计；
+     * EquipSimPlayer 传实际槽位数。
      */
     private fun achievementBonusOf(
         level: Int, totalBattleWins: Long, towerFloor: Int, equippedRingCount: Int, prestigeCount: Int
@@ -139,11 +140,8 @@ class LongRunSimulationTest {
         private fun rndLong(bound: Long): Long = if (bound <= 0) 0 else rng.nextLong(bound)
         private fun rndInt(bound: Int): Int = if (bound <= 0) 0 else rng.nextInt(bound)
 
-        // ---- 转生倍率镜像（GameService.scaledBaseAtk/scaledBaseMaxHp 同源：基础部分 ×倍率，加成部分已在 bonusFor 侧乘过）----
-        private fun scaledBaseAtk(): Long {
-            val base = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
-            return if (prestigeCount <= 0) base else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
-        }
+        // ---- 转生倍率镜像（GameService.scaledBaseMaxHp 同源：基础部分 ×倍率，加成部分已在 bonusFor 侧乘过；
+        //      基础 atk/matk/双防的缩放已并入生产纯函数 playerCombatStats，不再单独镜像）----
         private fun scaledBaseMaxHp(): Long {
             val base = getMaxHp()
             return if (prestigeCount <= 0) base else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
@@ -191,19 +189,20 @@ class LongRunSimulationTest {
             // towerFloor/currentMapId/codexKills/bossCoin 保留；talentPoints+1 不建模（无数值反馈）
         }
 
-        // ---- battle 镜像：直接调用生产纯函数 GameService.monsterStats/resolveBattle（P7 修复后同源）----
+        // ---- battle 镜像：直接调用生产纯函数 GameService.monsterStats/playerCombatStats/resolveBattle ----
         fun battle(s: DayStats) {
             // 镜像 bonusFor(userId, level, prestigeCount)：装备(0)+成就 合计 ×转生倍率
             val ach = EquipmentPowerService.applyPrestige(achBonus(), prestigeCount)
             val oldMap = mapId
             val oldStage = stage          // 生产代码掉落/奖励均用战前快照
-            val (monsterHp, monsterAtk) = GameService.monsterStats(oldMap, oldStage)
-            // 画像不模拟穿装 → 装备攻击加成恒为 0（P7 修复效果在报告「已修复项」中说明）；
-            // 成就 hp/atk 加成按已解锁集合并入（与生产 bonusFor 口径一致，含转生倍率）
-            val playerAtk = scaledBaseAtk() + ach.atkBonus
+            val monster = GameService.monsterStats(oldMap, oldStage)
+            // 画像不模拟穿装 → 装备加成恒为 0（P7 修复效果在报告「已修复项」中说明）；
+            // 成就七字段加成按已解锁集合并入（与生产 bonusFor 口径一致，含转生倍率）；
+            // 战斗属性（含五属性）直接调生产纯函数 playerCombatStats 组装，与 battle() 逐位同源
+            val player = GameService.playerCombatStats(level, prestigeCount, ach)
             val maxHp = scaledBaseMaxHp() + ach.hpBonus
             val outcome = GameService.resolveBattle(
-                playerAtk, hp, monsterHp, monsterAtk, GameBalance.MAX_BATTLE_ROUNDS, rng
+                player, hp, monster, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
             if (!outcome.won) {                                                // 30 回合未杀 → 败
                 s.battleLosses++
@@ -544,11 +543,7 @@ class LongRunSimulationTest {
         }
 
         // ---- 以下与 SimPlayer 同源镜像（cultivate/breakthrough/prestige/offline/sell/expand）----
-        // ---- 转生倍率镜像（GameService.scaledBaseAtk/scaledBaseMaxHp 同源）----
-        private fun scaledBaseAtk(): Long {
-            val base = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
-            return if (prestigeCount <= 0) base else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
-        }
+        // ---- 转生倍率镜像（GameService.scaledBaseMaxHp 同源；基础 atk/matk/双防缩放已并入 playerCombatStats）----
         private fun scaledBaseMaxHp(): Long {
             val base = getMaxHp(level)
             return if (prestigeCount <= 0) base else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
@@ -599,16 +594,15 @@ class LongRunSimulationTest {
             val ach = achBonus()
             val oldMap = mapId
             val oldStage = stage
-            val (monsterHp, monsterAtk) = GameService.monsterStats(oldMap, oldStage)
-            // 镜像 bonusFor(userId, level, prestigeCount)：装备+成就合计 ×转生倍率
+            val monster = GameService.monsterStats(oldMap, oldStage)
+            // 镜像 bonusFor(userId, level, prestigeCount)：装备+成就七字段合计 ×转生倍率
             val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
-            val equip = EquipmentPowerService.applyPrestige(
-                EquipmentBonus(raw.atkBonus + ach.atkBonus, raw.hpBonus + ach.hpBonus), prestigeCount
-            )
-            val playerAtk = scaledBaseAtk() + equip.atkBonus
+            val equip = EquipmentPowerService.applyPrestige(EquipmentPowerService.plus(raw, ach), prestigeCount)
+            // 战斗属性（含五属性）直接调生产纯函数 playerCombatStats 组装，与生产 battle() 逐位同源
+            val player = GameService.playerCombatStats(level, prestigeCount, equip)
             val maxHp = scaledBaseMaxHp() + equip.hpBonus
             val outcome = GameService.resolveBattle(
-                playerAtk, min(hp, maxHp), monsterHp, monsterAtk, GameBalance.MAX_BATTLE_ROUNDS, rng
+                player, min(hp, maxHp), monster, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
             if (!outcome.won) {
                 s.battleLosses++
@@ -653,10 +647,10 @@ class LongRunSimulationTest {
         fun tower(s: DayStats) {
             val ach = achBonus()
             val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
-            // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就合计 ×转生倍率）
+            // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就七字段合计 ×转生倍率；powerOf 含五属性折算）
             val power = EquipmentPowerService.powerOf(
                 level,
-                EquipmentPowerService.applyPrestige(EquipmentBonus(raw.atkBonus + ach.atkBonus, raw.hpBonus + ach.hpBonus), prestigeCount)
+                EquipmentPowerService.applyPrestige(EquipmentPowerService.plus(raw, ach), prestigeCount)
             )
             val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
             rndInt(GameBalance.TOWER_MONSTERS.size) // 镜像 monsterName 抽卡（保持 RNG 流同构）
@@ -1178,7 +1172,7 @@ class LongRunSimulationTest {
         appendLine("> 收入/属性分项来源说明（每日固定收入 + 成就属性加成镜像，与生产端同源）：")
         appendLine("> ① 每日签到：逐日按 `CHECK_IN_REWARDS[((day-1)%7)]`（CHECK_IN_CYCLE=7，day 从 1 起）计入 gold/soulPower/bossCoin；")
         appendLine("> ② 每日任务：全清上界假设（直接读 `DAILY_QUESTS` 求和，当前 ${QUEST_GOLD_PER_DAY} 金/${QUEST_BOSS_COIN_PER_DAY} Boss币/${QUEST_SOUL_POWER_PER_DAY} 魂力/日）——上界假设：经济在全清上界下不崩即安全；")
-        appendLine("> ③ 成就属性加成：按镜像玩家状态（level/totalBattleWins/towerFloor/已装备环数/prestige）算已解锁集合（生产纯函数 AchievementService.progressOf + EquipmentPowerService.achievementBonus），hp/atk 计入战斗属性镜像（matk/pdef/mdef/crit 不计入——与生产只兑现 hp/atk 的口径一致）。")
+        appendLine("> ③ 成就属性加成：按镜像玩家状态（level/totalBattleWins/towerFloor/已装备环数/prestige）算已解锁集合（生产纯函数 AchievementService.progressOf + EquipmentPowerService.achievementBonus），七字段加成计入战斗属性镜像（第十七轮战斗模型扩展起 hp/atk 之外 matk/pdef/mdef/critRate/critDmg 经 playerCombatStats 一并生效）。")
         appendLine()
         appendLine("## 30 天时间线（独立跑批，同种子）")
         appendLine()

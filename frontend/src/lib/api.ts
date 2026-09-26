@@ -376,6 +376,20 @@ export interface GameState {
     checkIn: CheckInStatus;
     /** 每日任务（固定 5 条，按日重置）。后端升级前字段缺失 → 消费方整卡隐藏（纯增量功能） */
     dailyQuests?: DailyQuests;
+    /**
+     * 战斗属性摘要（战力面板底部一行展示）。旧后端缺失（undefined）→ 消费方整行隐藏；
+     * critRate/critDmg 为百分点（5 = 5%、150 = 150%）。
+     */
+    combatStats?: CombatStats;
+}
+
+/** 战斗属性摘要（GameState.combatStats，后端 CombatStatsDto 同源）。物攻已含在 powerDetail.baseAtk 内，不单独下发 */
+export interface CombatStats {
+    matk: number;      // 魔攻
+    pdef: number;      // 物防
+    mdef: number;      // 魔防
+    critRate: number;  // 暴击率（百分点，如 5 = 5%）
+    critDmg: number;   // 暴击伤害（百分点，如 150 = 150%）
 }
 
     /**

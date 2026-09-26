@@ -23,6 +23,38 @@ object GameBalance {
     const val PLAYER_ATK_PER_LEVEL = 10L
     const val MAX_BATTLE_ROUNDS = 30
 
+    // ======== 战斗：防御与暴击（第十七轮战斗模型扩展）========
+    // 公式出处（shared 引擎只读参照，GameEngine.kt:1216~1267 defFactor/暴击/爆伤）：
+    //   defFactor = (1.0 - def/(def+DEF_K)).coerceIn(0.1, 1.0)：def=0 → 1.0（无减免）、def→∞ → 0.1 下限；
+    //   暴击判定 Random.nextInt(100) < critRate（critRate 为百分点数，18 = 18%）；爆伤 dmg × critDmg/100；
+    //   普攻物理/魔法混合 85%/15%（ATTACK_MAGIC_SHARE=15）。
+    // 数值锚点：玩家 matk 镜像物攻基础的一半（PLAYER_MATK_BASE_FACTOR）；玩家双防 = level × PLAYER_DEF_PER_LEVEL
+    // （校准杠杆）；怪 pdef/mdef = 怪 atk × MONSTER_DEF_FACTOR（校准杠杆）。90 天仿真校准记录见各常量注释。
+    //
+    // 【第十七轮校准记录】仿真第 1 次跑（LongRunSimulationTest，主种子 20260914，初值
+    // PLAYER_DEF_PER_LEVEL=2 / MONSTER_DEF_FACTOR=0.35 / 怪物 hp·atk 系数未动）即全部收敛，未再调参：
+    //  - 穿装画像（转生关闭口径）90 天末等级 78（基线 77，允许带 ≥60）、推图 8-15（mapId=7，目标 ≥5）；
+    //  - 每日胜率量级不塌方：零装备基线第 10/90 天推图 3-2 / 5-9（基线 4-4 / 5-6 同量级），
+    //    穿装组第 10 天仍抵达 8-15 终局（装备攻击加成使 defFactor 减免被碾压）；
+    //  - 收敛锁全过：主种子 9/9 槽、后 60 天死环率 0.0%、后期利用率 72.6%（带 40~92 内）、单跑 2.9s<60s；
+    //  - 结构性原因：玩家双防（2/级）与怪 atk（+25/图）同量级线性，且 pdef 减伤只作用于怪的
+    //    +0~20% 浮动基础伤，攻防两端减免大致对冲，胜率曲线无系统性偏移。
+    const val DEF_K = 200.0                // 减伤曲线常数（shared GameEngine defFactor 同源）
+    const val ATTACK_MAGIC_SHARE = 15      // 普攻魔法占比（百分点）：15 = 85% 物理 / 15% 魔法
+    const val PLAYER_MATK_BASE_FACTOR = 0.5 // 玩家魔攻 = 物攻基础 × 0.5（25 + level×5）
+    const val PLAYER_DEF_PER_LEVEL = 2     // 玩家物防/魔防每级成长（校准杠杆；仿真第 1 跑初值即收敛，见上区块校准记录）
+    const val PLAYER_CRIT_RATE_BASE = 0    // 玩家基础暴击率（百分点；零基础保证无暴击加成时与旧数学零漂移）
+    const val PLAYER_CRIT_DMG_BASE = 150   // 玩家基础暴击伤害（百分点，150 = 1.5 倍）
+    const val MONSTER_DEF_FACTOR = 0.35    // 怪物双防 = 怪 atk × 0.35（校准杠杆；仿真第 1 跑初值即收敛，见上区块校准记录）
+
+    // 五属性战力折算权重（powerOf）：matk×0.5、pdef/mdef×0.2、critRate×5、critDmg×0.2，逐项截断取整后求和。
+    // 量级标定（与 atk 1 点 = 1 战力对齐感知）：critRate 1 点 ≈ 5 战力（1% 暴击 ≈ 期望 +0.5%×1.5 倍伤），
+    // 防御 10 点 ≈ 2 战力（defFactor 边际收益在 200~400 防区间 ≈ 每点 0.2% 减伤），matk 折半（魔攻占比 15%）。
+    const val POWER_MATK_WEIGHT = 0.5
+    const val POWER_DEF_WEIGHT = 0.2
+    const val POWER_CRIT_RATE_WEIGHT = 5.0
+    const val POWER_CRIT_DMG_WEIGHT = 0.2
+
     // ======== 装备战力（P7 修复，任务#20）========
     // 公式精神对齐 shared GameEngine.calcAttributes()：
     //   魂环 = 年份档位 × 品质倍率 × 成熟度倍率(1 + percentage/1000，对应 shared 的 1.1~2.0 区间)
@@ -190,9 +222,9 @@ object GameBalance {
     fun prestigeMultiplier(count: Int): Double = 1.0 + count * PRESTIGE_STAT_BONUS
 
     // ======== 成就 ========
-    // 奖励兑现口径：第一版战斗模型只消费 hp/atk（resolveBattle 仅吃 atk/hp）；
-    // matk/pdef/mdef/critRate/critDmg 数据保留但口径暂不消费，属性系统扩展后生效
-    // （DTO 照带全字段，前端只展示 hp/atk）。
+    // 奖励兑现口径：第十七轮战斗模型扩展起七字段全消费（hp/atk 之外，matk/pdef/mdef/critRate/critDmg
+    // 经 EquipmentBonus 五属性字段进 resolveBattle 与 powerOf）；装备侧暂无五属性数据（affixesJson
+    // 未生成），转生武魂下轮接入。
     // 进度口径：CULTIVATION→level、BATTLE→totalBattleWins、TOWER→towerFloor、
     // SOUL_RING→已装备魂环数（equippedRingRepo.findByUserId(userId).size，描述用「装备」而非
     // 「获得」——背包里的环不算）、PRESTIGE→prestigeCount（写点：GameService.prestige）。

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { PowerDetail } from '@/lib/api';
+import type { CombatStats, PowerDetail } from '@/lib/api';
 
 /**
  * 任务#23：战力明细可折叠面板（默认收起），从 game/page.tsx 抽出以便单测
@@ -10,6 +10,8 @@ import type { PowerDetail } from '@/lib/api';
  * 每行显示攻击/生命贡献与占总战力百分比；颜色全部走主题调色板变量，亮暗两色主题均可读。
  * 后端补 achievement 字段后追加第 5 行「🏆 成就」、补 prestige 字段后追加第 6 行「🔄 转生」（五行/六行求和 == 总战力）；
  * 旧后端缺字段 → undefined 按 0 处理、行隐藏，脚注在「四行/五行/六行」间动态回退。
+ * 脚注下方追加一行战斗属性摘要（魔攻/物防/魔防/暴击）：combatStats 缺失（旧后端）→ 整行隐藏；
+ * 暴击率 0 也显示「暴击 0%」（新手可见成长空间）。物攻已含在「基础」行的 baseAtk 内，不单独下发。
  */
 interface PowerRow {
     key: string;
@@ -23,7 +25,16 @@ interface PowerRow {
     ariaLabel: string;
 }
 
-export default function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetail }) {
+export default function PowerDetailPanel({
+    power,
+    detail,
+    combatStats,
+}: {
+    power: number;
+    detail: PowerDetail;
+    /** 战斗属性摘要（GameState.combatStats）。旧后端缺失（undefined）→ 摘要行整行隐藏 */
+    combatStats?: CombatStats;
+}) {
     const [open, setOpen] = useState(false);
     const achPower = detail.achievement ?? 0;
     const prestigePower = detail.prestige ?? 0;
@@ -91,6 +102,25 @@ export default function PowerDetailPanel({ power, detail }: { power: number; det
                     <p className="text-[11px] text-gray-500 leading-relaxed">
                         战力 = 基础 + 装备攻击加成 + 装备生命÷10{achPower > 0 ? ' + 成就加成' : ''}{prestigePower > 0 ? ' + 转生加成' : ''}；{rowCountLabel}行求和恒等于总战力（后端同源拆分）。
                     </p>
+                    {combatStats && (
+                        <div
+                            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-500 leading-relaxed"
+                            data-testid="combat-stats"
+                        >
+                            <span className="whitespace-nowrap"><span aria-hidden>⚔</span> 物攻已含基础</span>
+                            <span aria-hidden className="text-gray-600">·</span>
+                            <span className="whitespace-nowrap tabular-nums"><span aria-hidden>✨</span> 魔攻 {combatStats.matk.toLocaleString()}</span>
+                            <span aria-hidden className="text-gray-600">·</span>
+                            <span className="whitespace-nowrap tabular-nums"><span aria-hidden>🛡</span> 物防 {combatStats.pdef.toLocaleString()}</span>
+                            <span aria-hidden className="text-gray-600">·</span>
+                            <span className="whitespace-nowrap tabular-nums"><span aria-hidden>🔮</span> 魔防 {combatStats.mdef.toLocaleString()}</span>
+                            <span aria-hidden className="text-gray-600">·</span>
+                            {/* 暴击率/爆伤为百分点：critRate=0 也显示「暴击 0%」，让新手看到成长空间 */}
+                            <span className="whitespace-nowrap tabular-nums"><span aria-hidden>💥</span> 暴击 {combatStats.critRate.toLocaleString()}%</span>
+                            <span aria-hidden className="text-gray-600">·</span>
+                            <span className="whitespace-nowrap tabular-nums">爆伤 {combatStats.critDmg.toLocaleString()}%</span>
+                        </div>
+                    )}
                 </div>
             )}
         </div>

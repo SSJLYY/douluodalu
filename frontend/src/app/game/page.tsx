@@ -194,8 +194,9 @@ export default function GamePage() {
                     </div>
                 </div>
 
-                {/* 任务#23：战力明细（可折叠，默认收起；放在状态栏下方，与 ⚔️ 战力 同一视觉区） */}
-                <PowerDetailPanel power={gameState.power} detail={gameState.powerDetail} />
+                {/* 任务#23：战力明细（可折叠，默认收起；放在状态栏下方，与 ⚔️ 战力 同一视觉区）。
+                    战斗属性摘要行：后端升级前 combatStats 缺失 → 面板内整行隐藏 */}
+                <PowerDetailPanel power={gameState.power} detail={gameState.powerDetail} combatStats={gameState.combatStats} />
 
                 {/* 每日签到（后端未升级时 checkIn 缺失 → 卡内降级为空态） */}
                 <CheckinCard checkIn={gameState.checkIn} actionLoading={actionLoading} onCheckin={handleCheckin} />

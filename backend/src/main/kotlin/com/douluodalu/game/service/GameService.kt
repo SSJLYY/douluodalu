@@ -38,6 +38,35 @@ class GameService(
     private val equipmentPowerService: EquipmentPowerService,
     private val achievementService: AchievementService
 ) {
+    /**
+     * 玩家有效战斗属性包（第十七轮战斗模型扩展）。resolveBattle 新签名入参：
+     * 参数对象而非 7 个散参——battle/塔日志/getGameState/仿真四处同源组装（playerCombatStats），
+     * 后续加属性只扩对象不改签名。hp 不入包：传参的是运行时 currentHp（可低于上限），非静态属性。
+     * （挂在 GameService 而非 companion：companion 内嵌类无法以 GameService.X 短名从测试解析）
+     */
+    data class CombatStats(
+        val atk: Long,
+        val matk: Long = 0,
+        val pdef: Long = 0,
+        val mdef: Long = 0,
+        /** 暴击率（百分点：1 = 1%）与暴击伤害（百分点：150 = 1.5 倍） */
+        val critRate: Int = 0,
+        val critDmg: Int = 0
+    )
+
+    /**
+     * 怪物战斗属性（monsterStats 产出，由 Pair 升级为数据类；component1..component5 顺序
+     * hp/atk/matk/pdef/mdef，旧 `val (hp, atk) = monsterStats(...)` 解构仍编译通过）。
+     * 怪 matk = atk（魔法普攻同量级，只影响吃玩家哪项防御）；怪不暴击（v1）。
+     */
+    data class MonsterStats(
+        val hp: Long,
+        val atk: Int,
+        val matk: Int,
+        val pdef: Int,
+        val mdef: Int
+    )
+
     companion object {
         val REALM_NAMES = listOf(
             "魂士", "魂师", "大魂师", "魂尊", "魂宗",
@@ -57,29 +86,70 @@ class GameService(
             val log: List<BattleRoundLog>
         )
 
-        /** 按地图/关卡生成怪物 (hp, atk)。镜像约定：仿真端调用同一函数。 */
-        fun monsterStats(mapId: Int, stage: Int): Pair<Long, Int> {
+        /** 按地图/关卡生成怪物 (hp/atk/matk/pdef/mdef)。镜像约定：仿真端调用同一函数。 */
+        fun monsterStats(mapId: Int, stage: Int): MonsterStats {
             val monsterHp = ((GameBalance.MONSTER_HP_BASE + mapId * GameBalance.MONSTER_HP_PER_MAP) *
                     (1.0 + stage * GameBalance.MONSTER_STAGE_GROWTH)).toLong()
             val monsterAtk = ((GameBalance.MONSTER_ATK_BASE + mapId * GameBalance.MONSTER_ATK_PER_MAP) *
                     (1.0 + stage * GameBalance.MONSTER_STAGE_GROWTH)).toInt()
-            return monsterHp to monsterAtk
+            // 第十七轮扩展：怪 matk = atk；怪双防 = atk × MONSTER_DEF_FACTOR（校准杠杆，随图/关单调）
+            val def = (monsterAtk * GameBalance.MONSTER_DEF_FACTOR).toInt()
+            return MonsterStats(monsterHp, monsterAtk, monsterAtk, def, def)
         }
 
         /**
-         * 纯函数回合结算：玩家先手，攻击浮动 ±20%（atk + rng[0, atk/5)），30 回合内击杀即胜。
-         * rng 显式注入，便于测试用固定种子断言「装备更好 → 结果单调不减」。
+         * 玩家有效战斗属性组装（battle/塔日志/getGameState 与 LongRunSimulationTest 镜像共用纯函数）：
+         *  - atk = 基础(×转生倍率) + 加成；matk 镜像物攻基础 ×PLAYER_MATK_BASE_FACTOR（加成另计）；
+         *  - pdef/mdef 基础 = level × PLAYER_DEF_PER_LEVEL（基础部分同样乘转生倍率——「全属性+10%/转」
+         *    双口径，与 scaledBaseAtk/scaledBaseMaxHp 一致）；加成部分已由 bonusFor/applyPrestige 乘过倍率；
+         *  - critRate/critDmg = 常数基础 + 加成（基础不乘转生倍率：非常量成长项，无等级维度）。
+         */
+        fun playerCombatStats(level: Int, prestigeCount: Int, equip: EquipmentBonus): CombatStats {
+            fun scale(base: Long): Long =
+                if (prestigeCount <= 0) base
+                else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
+            val baseMatk = (GameBalance.PLAYER_ATK_BASE * GameBalance.PLAYER_MATK_BASE_FACTOR).toLong() +
+                    (level * GameBalance.PLAYER_ATK_PER_LEVEL * GameBalance.PLAYER_MATK_BASE_FACTOR).toLong()
+            val baseDef = level.toLong() * GameBalance.PLAYER_DEF_PER_LEVEL
+            return CombatStats(
+                atk = scale(GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL) + equip.atkBonus,
+                matk = scale(baseMatk) + equip.matkBonus,
+                pdef = scale(baseDef) + equip.pdefBonus,
+                mdef = scale(baseDef) + equip.mdefBonus,
+                critRate = GameBalance.PLAYER_CRIT_RATE_BASE + equip.critRateBonus.toInt(),
+                critDmg = GameBalance.PLAYER_CRIT_DMG_BASE + equip.critDmgBonus.toInt()
+            )
+        }
+
+        /**
+         * shared 引擎同源减伤因子（GameEngine.kt defFactor）：def=0 → 1.0（无减免），
+         * def→∞ → 0.1 下限夹取。防御的边际收益递减（DEF_K=200 时每 +200 防翻倍难度）。
+         */
+        private fun defFactor(def: Long): Double =
+            (1.0 - def.toDouble() / (def + GameBalance.DEF_K)).coerceIn(0.1, 1.0)
+
+        /**
+         * 纯函数回合结算（第十七轮战斗模型扩展：防御/暴击/魔物理混合接入）：
+         *  - 玩家先手，30 回合（maxRounds）内击杀即胜；rng 显式注入便于固定种子断言；
+         *  - 每回合掷点次序【写死，勿动】——玩家三掷：①攻击类型（nextInt(100) < ATTACK_MAGIC_SHARE
+         *    → 魔法，用 matk vs 怪 mdef；否则物理，用 atk vs 怪 pdef）→ ②暴击（nextInt(100) <
+         *    critRate → 伤害 ×critDmg/100；怪物 v1 不暴击、不掷）→ ③浮动（nextLong(攻击力/5)，
+         *    保留既有 +0~20%）；
+         *  - 怪物回合两掷：①攻击类型（85/15 同构，怪 matk = atk → 玩家 pdef/mdef 都有消费）
+         *    → ②浮动（对怪 atk 取浮动，与旧版逐位同源）；
+         *  - 伤害算式：dmg = (攻击力 + 浮动) × defFactor(对方对应防御)，暴击再乘 critDmg/100，
+         *    最后截断取整、下限 1（defFactor 命中 0.1 下限的极端防御也保底 1 点伤害）；
+         *  - 内部掷点自洽契约：塔日志回放用独立种子重模拟，只要求本函数内部次序一致。
          */
         fun resolveBattle(
-            playerAtk: Long,
+            player: CombatStats,
             playerHp: Long,
-            monsterHp: Long,
-            monsterAtk: Int,
+            monster: MonsterStats,
             maxRounds: Int,
             rng: Random
         ): BattleOutcome {
             var pHp = playerHp
-            var mHp = monsterHp
+            var mHp = monster.hp
             var rounds = 0
             val log = mutableListOf<BattleRoundLog>()
             while (rounds < maxRounds && pHp > 0 && mHp > 0) {
@@ -87,14 +157,26 @@ class GameService(
                 val playerHpBefore = pHp
                 val monsterHpBefore = mHp
 
-                val pDmg = playerAtk + rng.nextLong(playerAtk / 5)
+                // —— 玩家回合（三掷：类型 → 暴击 → 浮动）——
+                val pMagic = rng.nextInt(100) < GameBalance.ATTACK_MAGIC_SHARE
+                val pCrit = rng.nextInt(100) < player.critRate
+                val pBase = if (pMagic) player.matk else player.atk
+                val pVariance = rng.nextLong((pBase / 5).coerceAtLeast(1))
+                var pDmgD = (pBase + pVariance) * defFactor((if (pMagic) monster.mdef else monster.pdef).toLong())
+                if (pCrit) pDmgD *= player.critDmg / 100.0
+                val pDmg = pDmgD.toLong().coerceAtLeast(1)
                 mHp -= pDmg
                 if (mHp <= 0) {
                     log.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, 0, pHp, 0))
                     break
                 }
 
-                val mDmg = monsterAtk.toLong() + rng.nextLong((monsterAtk / 5).coerceAtLeast(1).toLong())
+                // —— 怪物回合（两掷：类型 → 浮动；v1 怪物不暴击）——
+                val mMagic = rng.nextInt(100) < GameBalance.ATTACK_MAGIC_SHARE
+                val mBase = if (mMagic) monster.matk.toLong() else monster.atk.toLong()
+                val mVariance = rng.nextLong((monster.atk / 5).coerceAtLeast(1).toLong())
+                val mDmg = ((mBase + mVariance) * defFactor(if (mMagic) player.mdef else player.pdef))
+                    .toLong().coerceAtLeast(1)
                 pHp -= mDmg
                 log.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, mDmg, pHp, mHp))
             }
@@ -111,26 +193,35 @@ class GameService(
          *    LongRunSimulationTest 的 towerWinChance/resolveBattle 镜像契约不受影响；
          *  - 胜负服从入参 won（概率语义与呈现解耦）：模拟结果不一致时按 ×1.5 梯度调整
          *    塔怪 HP/ATK 重模拟（最多 8 次），仍不一致按最后一次输出（呈现层可接受）；
-         *  - 塔怪属性从楼层推导（推导依据见 GameBalance.TOWER_LOG_* 注释）；
-         *  - 玩家口径与 battle() 调 resolveBattle 时一致：攻击 = 基础 + 等级 + 装备加成；
-         *    生命用满血（塔挑战以满血状态进行，与战败后回满的既有语义一致）。
+         *  - 塔怪属性从楼层推导（推导依据见 GameBalance.TOWER_LOG_* 注释；双防随 atk 同步
+         *    ×MONSTER_DEF_FACTOR，与 monsterStats 同构）；
+         *  - 玩家口径与 battle() 调 resolveBattle 时一致：完整 CombatStats（第十七轮扩展，
+         *    含五属性——塔日志重模拟必须与主路径入参同口径）；生命用满血（塔挑战以满血状态
+         *    进行，与战败后回满的既有语义一致）。
          */
         fun buildTowerBattleLog(
             userId: Long,
             floor: Int,
             won: Boolean,
-            playerAtk: Long,
+            player: CombatStats,
             playerMaxHp: Long
         ): List<BattleRoundLog> {
             val baseHp = GameBalance.MONSTER_HP_BASE + floor * GameBalance.TOWER_LOG_MONSTER_HP_PER_FLOOR
             val baseAtk = GameBalance.MONSTER_ATK_BASE + floor * GameBalance.TOWER_LOG_MONSTER_ATK_PER_FLOOR
+            val baseDef = (baseAtk * GameBalance.MONSTER_DEF_FACTOR).toInt()
+            fun towerMonster(factor: Double) = MonsterStats(
+                hp = (baseHp * factor).toLong().coerceAtLeast(1),
+                atk = (baseAtk * factor).toInt().coerceAtLeast(1),
+                matk = (baseAtk * factor).toInt().coerceAtLeast(1),
+                pdef = (baseDef * factor).toInt(),
+                mdef = (baseDef * factor).toInt()
+            )
             val rng = Random(towerLogSeed(userId, floor))
             var factor = 1.0
             var outcome = resolveBattle(
-                playerAtk = playerAtk,
+                player = player,
                 playerHp = playerMaxHp,
-                monsterHp = (baseHp * factor).toLong().coerceAtLeast(1),
-                monsterAtk = (baseAtk * factor).toInt().coerceAtLeast(1),
+                monster = towerMonster(factor),
                 maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
                 rng = rng
             )
@@ -140,10 +231,9 @@ class GameService(
                 // 期望胜 → 削怪（/1.5 递进）；期望败 → 强怪（×1.5 递进）；每轮换一批新掷点（同一种子流）
                 factor = if (won) factor / 1.5 else factor * 1.5
                 outcome = resolveBattle(
-                    playerAtk = playerAtk,
+                    player = player,
                     playerHp = playerMaxHp,
-                    monsterHp = (baseHp * factor).toLong().coerceAtLeast(1),
-                    monsterAtk = (baseAtk * factor).toInt().coerceAtLeast(1),
+                    monster = towerMonster(factor),
                     maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
                     rng = rng
                 )
@@ -174,6 +264,8 @@ class GameService(
         val achBonus = achievementService.unlockedBonus(userId)
         val rawBonus = EquipmentPowerService.bonus(profile.level, rings, bones, cores, achBonus)
         val bonus = EquipmentPowerService.applyPrestige(rawBonus, profile.prestigeCount)
+        // 第十七轮战斗模型扩展：玩家有效战斗属性（与 battle() 结算入参同源，含转生倍率）
+        val combat = playerCombatStats(profile.level, profile.prestigeCount, bonus)
         return GameStateResponse(
             profile = toProfileDto(profile),
             equippedRings = equippedRings,
@@ -188,6 +280,12 @@ class GameService(
             // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库；
             // 六行含成就行与转生倍率增量行，六行求和 == power）
             powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores, achBonus, profile.prestigeCount),
+            // 第十七轮战斗模型扩展：玩家有效战斗属性（含成就/装备五属性加成与转生倍率，与 battle
+            // 结算入参同源 playerCombatStats）；尾部新增带默认值，向后兼容
+            combatStats = CombatStatsDto(
+                matk = combat.matk, pdef = combat.pdef, mdef = combat.mdef,
+                critRate = combat.critRate, critDmg = combat.critDmg
+            ),
             // 每日签到状态（CheckInService 只读查询，无循环依赖：CheckInService 不反向依赖本类）
             checkIn = checkInService.getCheckInStatus(userId),
             // 每日任务面板（DailyQuestService 只读查询不建行，无循环依赖：它不反向依赖本类）
@@ -314,18 +412,17 @@ class GameService(
         val equip = equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount)
         val power = EquipmentPowerService.powerOf(profile.level, equip)
 
-        // 生成怪物
-        val (monsterHp, monsterAtk) = monsterStats(mapId, stage)
+        // 生成怪物（第十七轮扩展：数据类含 matk/pdef/mdef）
+        val monster = monsterStats(mapId, stage)
         val monsterName = "${MAP_NAMES.getOrElse(mapId) { "未知" }}·${stage}层怪物"
 
-        // 战斗计算：攻击力 = 等级基础(×转生倍率) + 装备加成(已含倍率)；生命上限同口径（战败回满时生效）
-        val playerAtk = scaledBaseAtk(profile) + equip.atkBonus
+        // 战斗计算：完整战斗属性 = 等级基础(×转生倍率) + 装备/成就加成(已含倍率，五属性全量)
         val maxHp = scaledBaseMaxHp(profile) + equip.hpBonus
+        val player = playerCombatStats(profile.level, profile.prestigeCount, equip)
         val outcome = resolveBattle(
-            playerAtk = playerAtk,
+            player = player,
             playerHp = profile.currentHp.coerceAtMost(maxHp),
-            monsterHp = monsterHp,
-            monsterAtk = monsterAtk,
+            monster = monster,
             maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
             rng = Random
         )
@@ -413,7 +510,7 @@ class GameService(
         achievementService.sync(userId)
 
         return BattleResponse(
-            won = won, rounds = rounds, monsterName = monsterName, monsterMaxHp = monsterHp,
+            won = won, rounds = rounds, monsterName = monsterName, monsterMaxHp = monster.hp,
             expGained = expGained, goldGained = goldGained,
             drops = drops, playerHp = profile.currentHp,
             playerLevel = profile.level, playerGold = profile.gold,
@@ -472,9 +569,13 @@ class GameService(
         // LongRunSimulationTest 的 towerWinChance/resolveBattle 镜像契约不受影响）。
         // 玩家属性口径与 battle() 调 resolveBattle 时一致（含转生倍率）；生命用满血
         // （塔挑战以满血进行，与战败回满语义一致）。
-        val towerPlayerAtk = scaledBaseAtk(profile) + equip.atkBonus
+        // 第十七轮扩展：塔日志重模拟的玩家属性与 battle() 完全同口径（playerCombatStats，
+        // 含五属性与转生倍率——独立种子只复现掷点，属性入参必须与主路径一致）
         val towerPlayerMaxHp = scaledBaseMaxHp(profile) + equip.hpBonus
-        val battleLog = buildTowerBattleLog(userId, foughtFloor, won, towerPlayerAtk, towerPlayerMaxHp)
+        val battleLog = buildTowerBattleLog(
+            userId, foughtFloor, won,
+            playerCombatStats(profile.level, profile.prestigeCount, equip), towerPlayerMaxHp
+        )
 
         return TowerResponse(
             won = won,
@@ -584,15 +685,10 @@ class GameService(
 
     private fun getMaxHp(level: Int): Long = 50L * level + 100L
 
-    /** 转生倍率下的基础攻击（等级部分）：加成部分已在 bonusFor 内乘倍率，两处合计等效于总和乘倍率。
-     *  prestigeCount=0 时恒等于原式（既有数值零漂移）；取整沿用 .toLong() 截断风格 */
-    private fun scaledBaseAtk(profile: PlayerProfileEntity): Long {
-        val base = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL
-        return if (profile.prestigeCount <= 0) base
-        else (base * GameBalance.prestigeMultiplier(profile.prestigeCount)).toLong()
-    }
+    // 注：基础攻击的转生倍率缩放已并入 playerCombatStats（第十七轮战斗模型扩展，battle/塔/状态
+    // 组装三处同源）；scaledBaseMaxHp 仍独立保留（prestige/战败回满等非战斗路径使用）。
 
-    /** 转生倍率下的基础生命上限（等级部分），口径同 scaledBaseAtk */
+    /** 转生倍率下的基础生命上限（等级部分），口径同 playerCombatStats 的基础属性缩放 */
     private fun scaledBaseMaxHp(profile: PlayerProfileEntity): Long {
         val base = getMaxHp(profile.level)
         return if (profile.prestigeCount <= 0) base
@@ -622,7 +718,9 @@ class GameService(
         load = if (e.itemType == "RING") RingLoadCalculator.ringLoad(e.yearOrdinal, e.qualityOrdinal, e.percentage) else 0
     )
 
-    /** 玩家魂环吸收容量：根骨×GameBalance.RING_CAPACITY_ROOT_MULT。攻击/生命与战斗结算同源（含装备加成），matk/pdef/mdef 后端未建模取 0 */
+    /** 玩家魂环吸收容量：根骨×GameBalance.RING_CAPACITY_ROOT_MULT。第十七轮战斗模型扩展后
+     *  matk/pdef/mdef 已进战斗结算，但容量口径【有意】维持 atk/hp 两维（负荷公式不动，避免容量带
+     *  漂移扰动任务#22 校准好的 40~92% 利用率带）——matk/pdef/mdef 传 0 并在此留档 */
     private fun absorptionCapacityFor(profile: PlayerProfileEntity, bonus: EquipmentBonus): Long =
         RingLoadCalculator.absorptionCapacity(
             RingLoadCalculator.calcRootBone(

@@ -239,6 +239,13 @@ class GameServiceTest {
         assertEquals(0L, d.prestige)
         assertEquals(response.power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
             "getGameState 的 power 与六行明细必须严格一致（含成就行与转生倍率行）")
+        // 第十七轮战斗模型扩展：combatStats 组装（level=5 无装备 → matk = (50+5×10)×0.5 = 50，
+        // pdef/mdef = 5×2 = 10，critRate/critDmg = 基础 0/150；成就加成此 mock 无五属性字段）
+        assertEquals(50L, response.combatStats.matk)
+        assertEquals(10L, response.combatStats.pdef)
+        assertEquals(10L, response.combatStats.mdef)
+        assertEquals(0, response.combatStats.critRate)
+        assertEquals(150, response.combatStats.critDmg)
     }
 
     @Test
@@ -349,14 +356,15 @@ class GameServiceTest {
     @Test
     fun `tower battle log should be reproducible from userId and floor via independent seed`() {
         // 纯函数口径：同 (userId, floor, won) 两次调用日志逐字段一致（独立种子 Random(userId*1_000_003L+floor)）
-        val logA = GameService.buildTowerBattleLog(userId = 42L, floor = 7, won = true, playerAtk = 100, playerMaxHp = 350)
-        val logB = GameService.buildTowerBattleLog(userId = 42L, floor = 7, won = true, playerAtk = 100, playerMaxHp = 350)
+        val player = GameService.CombatStats(atk = 100)
+        val logA = GameService.buildTowerBattleLog(userId = 42L, floor = 7, won = true, player = player, playerMaxHp = 350)
+        val logB = GameService.buildTowerBattleLog(userId = 42L, floor = 7, won = true, player = player, playerMaxHp = 350)
         assertEquals(logA, logB)
         assertTrue(logA.isNotEmpty())
         assertTrue(logA.last().monsterHpAfter <= 0, "won=true 的日志应击杀怪物")
 
         // 不同楼层 → 种子与塔怪属性都不同 → 首回合 monsterHpBefore 必然不同（防种子退化为常量）
-        val otherFloor = GameService.buildTowerBattleLog(userId = 42L, floor = 8, won = true, playerAtk = 100, playerMaxHp = 350)
+        val otherFloor = GameService.buildTowerBattleLog(userId = 42L, floor = 8, won = true, player = player, playerMaxHp = 350)
         assertNotEquals(logA, otherFloor)
 
         // 集成口径：同一存档同一楼层重复挑战，胜负一致时日志逐字段一致（种子只由 userId+挑战时楼层决定）
