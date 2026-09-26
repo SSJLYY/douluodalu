@@ -21,23 +21,25 @@ const NAV_ITEMS = [
 ];
 
 export default function GameLayout({ children }: { children: React.ReactNode }) {
-    const { user, isLoading, logout } = useAuth();
+    const { user, isLoading, authChecked, logout } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
     const { gameState, refresh } = useGameData();
 
+    // 只在 token 校验完成后才判定「未登录」：authChecked 之前一律骨架屏，
+    // 防止已登录用户在 getMe 返回前被误踢回登录页（见 AuthContext authChecked 注释）。
     useEffect(() => {
-        if (!isLoading && !user) {
+        if (authChecked && !isLoading && !user) {
             router.push('/');
         }
-    }, [user, isLoading, router]);
+    }, [authChecked, user, isLoading, router]);
 
     // 切换子页面时刷新顶部资源栏（金币/魂力/Boss币）
     useEffect(() => {
         queueMicrotask(refresh);
     }, [pathname, refresh]);
 
-    if (isLoading || !user) {
+    if (!authChecked || isLoading || !user) {
         // 鉴权回源期间给整页框架骨架，替代纯文本「加载中...」
         return (
             <div className="min-h-screen flex flex-col">

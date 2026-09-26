@@ -63,6 +63,9 @@ export function useGameData(pollMs: number | false = POLL_INTERVAL_MS) {
     const [loadError, setLoadError] = useState('');
 
     const refresh = useCallback(async () => {
+        // 未登录（无 token）时不发 /api/game/state：匿名直接访问 /game/* 时布局骨架屏阶段
+        // 就会被 authChecked 门控重定向回登录页，无需数据；跳过可避免控制台出现 403 资源报错。
+        if (!api.getToken()) return;
         try {
             setGameState(await api.getGameState());
             setLoadError('');

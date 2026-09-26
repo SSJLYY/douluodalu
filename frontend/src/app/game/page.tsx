@@ -114,7 +114,9 @@ export default function GamePage() {
     // 未做完整焦点圈禁（Tab 仍可离开弹窗），与离线收益弹窗同级、不强拦截键盘路径。
     useEffect(() => {
         if (!prestigeOpen) return;
-        prestigeCancelRef.current?.focus();
+        // preventScroll：内容超高的弹窗（流派 6 卡）focus 时会被浏览器滚到取消钮所在处，
+        // 打开即看不到标题与第一个选项——保持聚焦兜底但不滚动容器
+        prestigeCancelRef.current?.focus({ preventScroll: true });
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') setPrestigeOpen(false);
         };
@@ -143,7 +145,7 @@ export default function GamePage() {
     // 重醒确认弹窗可达性：照转生弹窗模板——打开聚焦「取消」，Escape 关闭，遮罩点击关闭。
     useEffect(() => {
         if (!reawakenOpen) return;
-        reawakenCancelRef.current?.focus();
+        reawakenCancelRef.current?.focus({ preventScroll: true });
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') setReawakenOpen(false);
         };
@@ -166,7 +168,7 @@ export default function GamePage() {
     // 流派选择弹窗可达性：照重醒弹窗模板——打开聚焦「取消」，Escape 关闭，遮罩点击关闭。
     useEffect(() => {
         if (!schoolOpen) return;
-        schoolCancelRef.current?.focus();
+        schoolCancelRef.current?.focus({ preventScroll: true });
         const onKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') setSchoolOpen(false);
         };
