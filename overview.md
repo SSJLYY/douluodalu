@@ -316,6 +316,15 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 6. **集成验证**：mvn test 基线 226→**247 全绿**；真库冒烟：makeupAvailable 三态/补签扣金连签 1→2→3/21 项成就含 5 新项/计数器进 Prometheus 端点；浏览器 E2E：断签态补签条渲染→点击→扣金 2000→500→按钮消失、成就页 21 行含 5 新项、375px 零溢出、console 0 error。
 7. **遗留**：makeupAvailable 需要的昨日 exists 查询在 signedToday 分支多一次查询（量级可忽略）；备份未实跑恢复演练（脚本逻辑 bash -n 级验证）；监控栈未在真 Docker 实跑（本机无引擎，与第五轮 Docker 化同款诚实声明）。
 
+## 🗺️ 第二十二轮：地图扩展 8→11 张 + 宗门 Boss 周榜（2026-09-26）
+
+1. **地图扩展**：MAP_NAMES 追加神王殿(8)/至高神庭(9)/创世之巅(10)（续神界线提案，设计文档无第 9 张后设定），MAX_MAP_ID 7→10；monsterStats/掉落/Boss币公式线性自适应零改动。**前置纠偏**：此前以为「越界显示未知」，实测 MAP_NAMES 本有 8 条（第 8 张神界废墟）、「8-10」是 1-based 展示——真实缺口是玩家满图驻留（7 图 15 关永久踏步），扩展后 90 天仿真推图 11-15 抵达创世之巅终局。
+2. **战斗掉落年份封顶 `BATTLE_RING_DROP_YEAR_CAP = 3`**（本轮唯一生产平衡改动）：地图 8-10 使战斗掉落进入 tier-4 百万年环（负荷 60 万~999 万），90 天仿真容量结构性装不下 → 死掉落率 66.8% 破锁；按 TOWER_RING_DROP_YEAR_CAP=2 先例封顶 3（与 GameBalance「3~4 档保留为终局/轮回内容」设计注释一致）。**地图 0-7 逐位零漂移**（第十七轮校准成果未动），封顶后收敛锁全绿（死掉落率 0%、利用率 72.5%、10 种子）。智能体曾尝试 AskUserQuestion 征询未获回复（自主模式），按最小伤害原则执行并留档一行可回退。
+3. **宗门 Boss 周榜**：V10 迁移 guild_member.weekly_boss_damage；challengeBoss 同处累加；`GuildWeeklyResetService` 每周一 03:03 结算前 3 名（第 1 名 Boss币+50/金币+5000…第 3 名 +20/+2000，GuildBalance 常量化）后全量清零；`GET /api/guild/boss/rank`（降序/只含>0/上限 10/昵称批查防 N+1/myRank）；**SchedulingConfig 放宽**——@EnableScheduling 从 audit.cleanup-enabled 条件解绑为无条件（各调度 Bean 自带条件），application-test.yml 补 guild.weekly-reset-enabled=false。
+4. **前端**：MAP_NAMES 抽至 lib/maps.ts 单一事实源（Next 16 路由导出限制，page.tsx 导入）+ mapNames.test 钉契约；wiki 地图分类 +3；宗门页 Boss 卡新增「本周伤害榜」（BossRankPanel 纯组件：Top3 领奖台/不足 3 条全列表/自己行高亮(我)/空榜灰字/失败静默）；拉取时机=进宗门页+挑战成功后。测试 82→**91**。
+5. **集成验证**：mvn test 基线 247→**261 全绿**；真库冒烟：神界废墟 15 关胜利→推进神王殿、战斗名「神王殿·1层怪物」、双账号 Boss 挑战→周榜降序+myRank 互为 1/2+DB 累加；浏览器 E2E：周榜面板（我的排名 #2、(我) 高亮、2 人不立台）、地图 8 显示「神王殿」（期间一个假 bug：拿新号看新地图名，数据本身没到位）、375px 零溢出、console 0 error。
+6. **遗留**：设计文档 6.1 的地图解锁等级/费用从未实现（推进无门槛，历史行为保持）；周重置未实跑（cron 周一 03:03，逻辑由单测覆盖）；新图怪物仍为线性数值+无技能（文档无更高层设定）。
+
 ---
 
 ## 🔮 后续建议
