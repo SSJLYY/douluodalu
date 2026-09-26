@@ -159,7 +159,8 @@ class AchievementServiceTest {
 
     @Test
     fun `prestige progress should map to prestigeCount`() {
-        // prestigeCount 当前无写点（待转生玩法）：0 进度不解锁；手造 1 次即解锁 prestige_1
+        // 写点：GameService.prestige（端到端管线由 GameServiceTest.prestige should trigger... 覆盖）；
+        // 此处单测口径映射：0 进度不解锁，prestigeCount=1 即解锁 prestige_1
         doReturn(profile(prestige = 1)).whenever(profileRepo).findByUserId(1L)
 
         achievementService.sync(1L)

@@ -3,6 +3,9 @@ package com.douluodalu.game.service
 import com.douluodalu.game.dto.AchievementDto
 import com.douluodalu.game.dto.CheckInStatusDto
 import com.douluodalu.game.dto.DailyQuestsDto
+import com.douluodalu.game.entity.AchievementEntity
+import com.douluodalu.game.entity.EquippedBone
+import com.douluodalu.game.entity.EquippedCore
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
@@ -18,9 +21,11 @@ import com.douluodalu.game.repository.UserRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.ArgumentCaptor
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.any
+import org.mockito.kotlin.argThat
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
@@ -228,11 +233,12 @@ class GameServiceTest {
         assertEquals("cult_10", response.achievements[0].id)
         assertTrue(response.achievements[0].unlocked)
         assertEquals("2026-09-26", response.achievements[0].unlockedAt)
-        // 五行求和不变量：base + ring + core + bone + achievement == power（成就行 = atk 5 + hp 100/10）
+        // 六行求和不变量：base + ring + core + bone + achievement + prestige == power（成就行 = atk 5 + hp 100/10；0 转时 prestige 行恒 0）
         val d = response.powerDetail
         assertEquals(15L, d.achievement)
-        assertEquals(response.power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
-            "getGameState 的 power 与五行明细必须严格一致（含成就行）")
+        assertEquals(0L, d.prestige)
+        assertEquals(response.power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
+            "getGameState 的 power 与六行明细必须严格一致（含成就行与转生倍率行）")
     }
 
     @Test
@@ -364,5 +370,181 @@ class GameServiceTest {
         p.towerFloor = 5
         val r2 = gameService.towerBattle(1L)
         if (r1.won == r2.won) assertEquals(r1.battleLog, r2.battleLog, "同 (userId, floor) 同胜负应日志一致")
+    }
+
+    // ==================== 转生（神位传承） ====================
+
+    @Test
+    fun `prestige below min level should fail with success false and zero state change`() {
+        // 与 breakthrough 同款失败语义：HTTP 200 + success=false，不抛异常、存档零改动
+        val p = PlayerProfileEntity(userId = 1L, level = GameBalance.PRESTIGE_MIN_LEVEL - 1)
+        p.gold = 500L
+        p.soulPower = 999L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+
+        val response = gameService.prestige(1L)
+
+        assertFalse(response.success)
+        assertEquals(0, response.prestigeCount)
+        assertTrue(response.message.contains("Lv.${GameBalance.PRESTIGE_MIN_LEVEL}"), "提示应含门槛等级：${response.message}")
+        assertTrue(response.message.contains("Lv.${p.level}"), "提示应含当前等级：${response.message}")
+        assertEquals(GameBalance.PRESTIGE_MIN_LEVEL - 1, p.level)
+        assertEquals(500L, p.gold)
+        assertEquals(999L, p.soulPower)
+        verify(profileRepo, never()).save(any())
+        verify(achievementService, never()).sync(any())
+        verify(equippedRingRepo, never()).delete(any())
+        verify(equippedBoneRepo, never()).delete(any())
+    }
+
+    @Test
+    fun `prestige at threshold should reset level gold soulPower and unequip rings and bones but keep cores`() {
+        val p = PlayerProfileEntity(userId = 1L, level = GameBalance.PRESTIGE_MIN_LEVEL)
+        p.gold = 12345L
+        p.soulPower = 99_999L
+        p.currentHp = 9999L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        val ring = EquippedRing(userId = 1L, slotIndex = 0, ringId = 11L, yearOrdinal = 2, qualityOrdinal = 3, percentage = 555)
+        val bone = EquippedBone(userId = 1L, slotIndex = 1, boneId = 22L, yearOrdinal = 1, qualityOrdinal = 2, boneTypeOrdinal = 3, enhanceLevel = 5)
+        val core = EquippedCore(userId = 1L, slotType = "LEFT", coreId = 33L, rarityOrdinal = 2, coreName = "攻击魂核", coreValue = 100, coreLevel = 2)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(listOf(ring))
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(listOf(bone))
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(listOf(core))
+
+        val response = gameService.prestige(1L)
+
+        assertTrue(response.success)
+        // 重置项：level/gold/soulPower 归零、满血按重置后等级（getMaxHp(1)=150）
+        assertEquals(1, p.level)
+        assertEquals(0L, p.gold)
+        assertEquals(0L, p.soulPower)
+        assertEquals(150L, p.currentHp)
+        // 卸装走现有 unequip 同源数据操作：equipped 行属性拷贝回背包新行 + 删除 equipped 行
+        verify(backpackRepo).save(argThat<com.douluodalu.game.entity.BackpackItemEntity> {
+            itemType == "RING" && yearOrdinal == 2 && qualityOrdinal == 3 && percentage == 555
+        })
+        verify(backpackRepo).save(argThat<com.douluodalu.game.entity.BackpackItemEntity> {
+            itemType == "BONE" && yearOrdinal == 1 && qualityOrdinal == 2 && boneTypeOrdinal == 3 && enhanceLevel == 5
+        })
+        verify(equippedRingRepo).delete(ring)
+        verify(equippedBoneRepo).delete(bone)
+        // 魂核保留已装备（设计文档重置项只列魂环魂骨）
+        verify(equippedCoreRepo, never()).delete(any())
+    }
+
+    @Test
+    fun `prestige should preserve progress fields and grant prestigeCount and talentPoint`() {
+        val p = PlayerProfileEntity(userId = 1L, level = GameBalance.PRESTIGE_MIN_LEVEL + 5)
+        p.currentMapId = 3
+        p.currentStage = 15
+        p.towerFloor = 33
+        p.codexKills = 88L
+        p.bossCoin = 12L
+        p.totalBattleWins = 210L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+
+        val response = gameService.prestige(1L)
+
+        assertTrue(response.success)
+        assertEquals(1, response.prestigeCount)
+        // prestigeCount+1 / talentPoints+1
+        assertEquals(1, p.prestigeCount)
+        assertEquals(1, p.talentPoints)
+        // 保留项：推图/塔/图鉴/Boss币/胜场不动
+        assertEquals(3, p.currentMapId)
+        assertEquals(33, p.towerFloor)
+        assertEquals(88L, p.codexKills)
+        assertEquals(12L, p.bossCoin)
+        assertEquals(210L, p.totalBattleWins)
+        // 成就挂点：sync 在成功出口被调用
+        verify(achievementService).sync(1L)
+        // 成功消息含转数与属性增幅
+        assertTrue(response.message.contains("1转"), "${response.message}")
+        assertTrue(response.message.contains("10%"), "${response.message}")
+        verify(profileRepo).save(p)
+    }
+
+    @Test
+    fun `prestige should trigger achievement sync that unlocks prestige_1 record`() {
+        // 真实 AchievementService 管线（wire 同一组 mock 仓库）：prestige → sync → prestige_1 解锁落库
+        val realAchievementService = AchievementService(achievementRepo, profileRepo, equippedRingRepo)
+        val svc = GameService(
+            profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
+            userRepository, webSocketService, checkInService, dailyQuestService,
+            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
+            realAchievementService
+        )
+        val p = PlayerProfileEntity(userId = 1L, level = GameBalance.PRESTIGE_MIN_LEVEL)
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(achievementRepo.findByUserId(1L)).thenReturn(emptyList())
+
+        val response = svc.prestige(1L)
+
+        assertTrue(response.success)
+        val captor = ArgumentCaptor.forClass(AchievementEntity::class.java)
+        verify(achievementRepo).save(captor.capture())
+        assertEquals("prestige_1", captor.value.achievementId, "转生后 sync 应解锁初次转生成就")
+    }
+
+    // ==================== 转生倍率 ====================
+
+    @Test
+    fun `prestige multiplier formula should be 1 plus count times bonus`() {
+        assertEquals(1.0, GameBalance.prestigeMultiplier(0), 1e-9)
+        assertEquals(1.2, GameBalance.prestigeMultiplier(2), 1e-9)
+        assertEquals(1.5, GameBalance.prestigeMultiplier(5), 1e-9)
+    }
+
+    @Test
+    fun `battle gold and exp should scale with prestige multiplier at 2 prestiges`() {
+        // 2 转倍率 1.2：map0/stage1 基础 gold 30+0+8=38 → 45、exp 50+0+10=60 → 72
+        val p = PlayerProfileEntity(userId = 1L, level = 5, prestigeCount = 2)
+        p.currentHp = 350L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+
+        val response = gameService.battle(1L)
+
+        assertTrue(response.won, "level=5 满血（2转基础属性上浮）打 1-1 怪应确定性获胜")
+        assertEquals((38 * 1.2).toLong(), response.goldGained)
+        assertEquals((60 * 1.2).toLong(), response.expGained)
+    }
+
+    @Test
+    fun `battle at zero prestiges should keep legacy gold exp and attribute values`() {
+        // 回归保证：prestigeCount=0 时倍率恒 1.0，既有数值逐位不变（基础值 38/60）
+        val p = profile() // level=5, prestigeCount=0
+        p.currentHp = 350L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+
+        val response = gameService.battle(1L)
+
+        assertTrue(response.won)
+        assertEquals(38L, response.goldGained)
+        assertEquals(60L, response.expGained)
+    }
+
+    @Test
+    fun `cultivate gain should scale with prestige multiplier at 2 prestiges`() {
+        // level=5 → baseGain=20、随机 [0,5)：0 转时 gain∈[20,25)；2 转 ×1.2 → gain∈[24,30)
+        val p = PlayerProfileEntity(userId = 1L, level = 5, prestigeCount = 2)
+        p.soulPower = 100L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+
+        val response = gameService.cultivate(1L)
+
+        assertTrue(response.soulPowerGained >= 24L && response.soulPowerGained < 30L,
+            "2 转修炼产出应为基础区间 [20,25)×1.2=[24,30)（实测 ${response.soulPowerGained}）")
+        assertEquals(100L + response.soulPowerGained, response.totalSoulPower)
     }
 }

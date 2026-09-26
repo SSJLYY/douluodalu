@@ -167,9 +167,13 @@ class GameService(
         val equippedBones = bones.map { EquippedBoneDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.enhanceLevel, null, null) }
         val equippedCores = cores.map { EquippedCoreDto(it.slotType, it.coreName, it.rarityOrdinal, null, it.coreValue, it.coreLevel) }
         // 任务#21：战力 + 魂环负荷/容量（公式同源：EquipmentPowerService / RingLoadCalculator）
-        // 成就系统集成：已解锁成就的 hp/atk 加成并入 bonus（power/容量/明细五行同口径即时生效）
+        // 成就系统集成：已解锁成就的 hp/atk 加成并入 bonus（power/容量/明细同口径即时生效）
+        // 转生集成：power/明细吃「装备+成就加成 ×转生倍率」；容量口径维持不随倍率放大——
+        // 与 equipRing 校验同源（校验本就按不含成就加成的装备口径，保守方向），契约范围仅
+        // 收入/战斗属性/bonusFor，负荷体系不动
         val achBonus = achievementService.unlockedBonus(userId)
-        val bonus = EquipmentPowerService.bonus(profile.level, rings, bones, cores, achBonus)
+        val rawBonus = EquipmentPowerService.bonus(profile.level, rings, bones, cores, achBonus)
+        val bonus = EquipmentPowerService.applyPrestige(rawBonus, profile.prestigeCount)
         return GameStateResponse(
             profile = toProfileDto(profile),
             equippedRings = equippedRings,
@@ -180,9 +184,10 @@ class GameService(
             achievements = achievementService.getStatus(userId),
             power = EquipmentPowerService.powerOf(profile.level, bonus),
             ringLoad = RingLoadCalculator.totalRingLoad(rings),
-            capacity = absorptionCapacityFor(profile, bonus),
-            // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库；五行含成就行）
-            powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores, achBonus),
+            capacity = absorptionCapacityFor(profile, rawBonus),
+            // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库；
+            // 六行含成就行与转生倍率增量行，六行求和 == power）
+            powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores, achBonus, profile.prestigeCount),
             // 每日签到状态（CheckInService 只读查询，无循环依赖：CheckInService 不反向依赖本类）
             checkIn = checkInService.getCheckInStatus(userId),
             // 每日任务面板（DailyQuestService 只读查询不建行，无循环依赖：它不反向依赖本类）
@@ -194,7 +199,10 @@ class GameService(
     fun cultivate(userId: Long): CultivateResponse {
         val profile = getProfile(userId)
         val baseGain = GameBalance.CULTIVATE_BASE_GAIN + profile.level * GameBalance.CULTIVATE_LEVEL_GAIN_FACTOR
-        val gain = baseGain + Random.nextLong(baseGain / GameBalance.CULTIVATE_RANDOM_DIVISOR)
+        // 转生倍率（收入口径①）：修炼产出 ×(1+转数×0.1)；RNG 掷点次序不变，倍率只在掷点后缩放
+        // （prestigeCount=0 时倍率 1.0，取整逐位不变）
+        val gain = ((baseGain + Random.nextLong(baseGain / GameBalance.CULTIVATE_RANDOM_DIVISOR)) *
+                GameBalance.prestigeMultiplier(profile.prestigeCount)).toLong()
         profile.soulPower += gain
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
@@ -224,6 +232,77 @@ class GameService(
         return BreakthroughResponse(true, profile.level, "突破成功！当前境界：${getRealmName(profile.level)} Lv.${profile.level}")
     }
 
+    // ======== 转生（神位传承） ========
+    /**
+     * 转生：达到 GameBalance.PRESTIGE_MIN_LEVEL（=50）后把 level 重置为 1，
+     * 换取永久属性/收入倍率（+10%/转）与 1 天赋点。
+     * 与 breakthrough 同款失败语义：门槛不足返回 success=false（HTTP 200），不抛异常。
+     */
+    // 转生重置 level（等级榜分数）→ 清空榜单缓存（同 breakthrough，任务#29：allEntries，键含 limit 无法定点失效）
+    @CacheEvict(cacheNames = ["rank"], allEntries = true)
+    @Transactional
+    fun prestige(userId: Long): PrestigeResponse {
+        val profile = getProfile(userId)
+        if (profile.level < GameBalance.PRESTIGE_MIN_LEVEL) {
+            return PrestigeResponse(
+                false, profile.prestigeCount,
+                "等级不足，转生需要 Lv.${GameBalance.PRESTIGE_MIN_LEVEL}（当前 Lv.${profile.level}）"
+            )
+        }
+        // 卸装（数据操作与 unequipRing/unequipBone 完全同源）：equipped 表是独立行——装备时
+        // backpack 行被删除、属性拷贝进 equipped 行，卸下 = 按属性拷贝新建 backpack 行 + 删除
+        // equipped 行（ringId 引用的原背包行不复活，与现有 unequip 行为一致）。
+        // unequip 路径本就无背包容量校验（只有「获得新掉落」路径才校验 hasBackpackSpace），
+        // 转生卸回的物件本就来自背包，无需容量兜底（背包可能临时超容，与玩家手动全部卸下一致）。
+        // 魂核保留已装备——设计文档重置项只列魂环魂骨。
+        for (ring in equippedRingRepo.findByUserId(userId)) {
+            backpackRepo.save(
+                BackpackItemEntity(
+                    userId = userId,
+                    itemType = "RING",
+                    yearOrdinal = ring.yearOrdinal,
+                    qualityOrdinal = ring.qualityOrdinal,
+                    percentage = ring.percentage
+                )
+            )
+            equippedRingRepo.delete(ring)
+        }
+        for (bone in equippedBoneRepo.findByUserId(userId)) {
+            backpackRepo.save(
+                BackpackItemEntity(
+                    userId = userId,
+                    itemType = "BONE",
+                    yearOrdinal = bone.yearOrdinal,
+                    qualityOrdinal = bone.qualityOrdinal,
+                    boneTypeOrdinal = bone.boneTypeOrdinal,
+                    enhanceLevel = bone.enhanceLevel
+                )
+            )
+            equippedBoneRepo.delete(bone)
+        }
+        // 重置范围（文档 §15.2 + 防刷修正）：level/gold/soulPower 清零——soulPower 不清零可拿
+        // 存量魂力秒升回原等级（零成本刷属性漏洞），shared doPrestige 同款清零；
+        // currentStage 回 1（shared「始终重置」字段：保留地图、从该图第 1 关重新推，与战败退回
+        // 第 1 关的既有语义自洽）；currentHp 按重置后等级回满。
+        // 保留：prestigeCount/talentPoints（+1）、towerFloor、currentMapId（推图进度）、
+        // codexKills、bossCoin、成就、天赋等级、背包、totalBattleWins/Losses。
+        profile.level = 1
+        profile.gold = 0
+        profile.soulPower = 0
+        profile.currentStage = 1
+        profile.currentHp = getMaxHp(1)
+        profile.prestigeCount += 1
+        profile.talentPoints += 1
+        profile.updatedAt = LocalDateTime.now()
+        profileRepo.save(profile)
+        // 成就挂点（副路径）：prestigeCount 跳变 → prestige_1/prestige_3 解锁
+        achievementService.sync(userId)
+        return PrestigeResponse(
+            true, profile.prestigeCount,
+            "转生成功！现为 ${profile.prestigeCount}转，全属性+${profile.prestigeCount * 10}%，天赋点+1"
+        )
+    }
+
     @Transactional
     fun battle(userId: Long): BattleResponse {
         val profile = getProfile(userId)
@@ -231,16 +310,17 @@ class GameService(
         val stage = profile.currentStage
 
         // 装备战力接入（P7 修复）+ 成就属性加成（bonusFor 唯一 choke point，即时生效）
-        val equip = equipmentPowerService.bonusFor(userId, profile.level)
+        // 转生集成：bonusFor 返回的装备+成就合计加成已乘转生倍率（转数入参）
+        val equip = equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount)
         val power = EquipmentPowerService.powerOf(profile.level, equip)
 
         // 生成怪物
         val (monsterHp, monsterAtk) = monsterStats(mapId, stage)
         val monsterName = "${MAP_NAMES.getOrElse(mapId) { "未知" }}·${stage}层怪物"
 
-        // 战斗计算：攻击力 = 等级基础 + 装备加成；生命上限同样吃装备 hpBonus（战败回满时生效）
-        val playerAtk = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL + equip.atkBonus
-        val maxHp = getMaxHp(profile.level) + equip.hpBonus
+        // 战斗计算：攻击力 = 等级基础(×转生倍率) + 装备加成(已含倍率)；生命上限同口径（战败回满时生效）
+        val playerAtk = scaledBaseAtk(profile) + equip.atkBonus
+        val maxHp = scaledBaseMaxHp(profile) + equip.hpBonus
         val outcome = resolveBattle(
             playerAtk = playerAtk,
             playerHp = profile.currentHp.coerceAtMost(maxHp),
@@ -253,11 +333,13 @@ class GameService(
         val playerHp = outcome.playerHpLeft
         val rounds = outcome.rounds
         val battleLog = outcome.log
+        // 转生倍率（收入口径②）：战斗胜利产出 ×(1+转数×0.1)（prestigeCount=0 时取整逐位不变）
+        val mult = GameBalance.prestigeMultiplier(profile.prestigeCount)
         val expGained = if (won)
-            (GameBalance.WIN_EXP_BASE + mapId * GameBalance.WIN_EXP_PER_MAP + stage * GameBalance.WIN_EXP_PER_STAGE)
+            ((GameBalance.WIN_EXP_BASE + mapId * GameBalance.WIN_EXP_PER_MAP + stage * GameBalance.WIN_EXP_PER_STAGE) * mult).toLong()
         else 0L
         val goldGained = if (won)
-            (GameBalance.WIN_GOLD_BASE + mapId * GameBalance.WIN_GOLD_PER_MAP + stage * GameBalance.WIN_GOLD_PER_STAGE)
+            ((GameBalance.WIN_GOLD_BASE + mapId * GameBalance.WIN_GOLD_PER_MAP + stage * GameBalance.WIN_GOLD_PER_STAGE) * mult).toLong()
         else 0L
 
         if (won) {
@@ -348,14 +430,16 @@ class GameService(
         val towerLevel = profile.towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
         val foughtFloor = profile.towerFloor // 塔战日志种子取挑战时楼层（胜利分支随后会 +1）
         // P2+P7 修复：胜率 = 1-(0.25+floor×0.005) 基础值 + 装备战力加成（floor=99 仍 >0，换装可登顶）
-        // 成就属性加成经 bonusFor 并入（唯一 choke point，即时生效）
-        val equip = equipmentPowerService.bonusFor(userId, profile.level)
+        // 成就属性加成经 bonusFor 并入（唯一 choke point，即时生效）；转生集成：加成已乘转生倍率
+        val equip = equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount)
         val power = EquipmentPowerService.powerOf(profile.level, equip)
         val won = Random.nextDouble() < EquipmentPowerService.towerWinChance(profile.towerFloor, power)
         val monsterName = GameBalance.TOWER_MONSTERS[Random.nextInt(GameBalance.TOWER_MONSTERS.size)]
         val rounds = 4 + Random.nextInt(6)
-        val expGained = if (won) GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL else 0L
-        val goldGained = if (won) GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL else 0L
+        // 转生倍率（收入口径③）：塔胜产出 ×(1+转数×0.1)（prestigeCount=0 时取整逐位不变）
+        val mult = GameBalance.prestigeMultiplier(profile.prestigeCount)
+        val expGained = if (won) ((GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL) * mult).toLong() else 0L
+        val goldGained = if (won) ((GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL) * mult).toLong() else 0L
         val bossCoinGained = if (won && Random.nextDouble() < GameBalance.TOWER_BOSS_COIN_CHANCE) 1L else 0L
         val killingGained = if (won) 1 + profile.towerFloor / GameBalance.TOWER_KILLING_PER_FLOORS else 0
         val drops = if (won && Random.nextDouble() < GameBalance.TOWER_DROP_CHANCE) {
@@ -374,7 +458,7 @@ class GameService(
             profile.codexKills += 1
         } else {
             profile.totalBattleLosses += 1
-            profile.currentHp = getMaxHp(profile.level) + equip.hpBonus
+            profile.currentHp = scaledBaseMaxHp(profile) + equip.hpBonus
         }
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
@@ -386,9 +470,10 @@ class GameService(
 
         // 塔战逐回合日志：插在全部既有掷点之后、用独立种子模拟（不改胜负判定、不动 RNG 次序，
         // LongRunSimulationTest 的 towerWinChance/resolveBattle 镜像契约不受影响）。
-        // 玩家属性口径与 battle() 调 resolveBattle 时一致；生命用满血（塔挑战以满血进行，与战败回满语义一致）。
-        val towerPlayerAtk = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL + equip.atkBonus
-        val towerPlayerMaxHp = getMaxHp(profile.level) + equip.hpBonus
+        // 玩家属性口径与 battle() 调 resolveBattle 时一致（含转生倍率）；生命用满血
+        // （塔挑战以满血进行，与战败回满语义一致）。
+        val towerPlayerAtk = scaledBaseAtk(profile) + equip.atkBonus
+        val towerPlayerMaxHp = scaledBaseMaxHp(profile) + equip.hpBonus
         val battleLog = buildTowerBattleLog(userId, foughtFloor, won, towerPlayerAtk, towerPlayerMaxHp)
 
         return TowerResponse(
@@ -452,11 +537,13 @@ class GameService(
 
         // P1 修复：OFFLINE_*_BASE/PER_LEVEL 语义为「每小时」，按小时计费（不足 1h 按比例折算）。
         // 旧实现按秒计费导致 12h=43,200 秒直接日入数十万~数千万金币（见仿真报告 P1）。
+        // 转生倍率（收入口径④）：离线 gold/exp 产出 ×(1+转数×0.1)（prestigeCount=0 时逐位不变）
+        val mult = GameBalance.prestigeMultiplier(profile.prestigeCount)
         val effectiveHours = effectiveSeconds / 3600.0
         val goldPerHour = (GameBalance.OFFLINE_GOLD_BASE + profile.level * GameBalance.OFFLINE_GOLD_PER_LEVEL) *
-                GameBalance.OFFLINE_EFFICIENCY
+                GameBalance.OFFLINE_EFFICIENCY * mult
         val expPerHour = (GameBalance.OFFLINE_EXP_BASE + profile.level * GameBalance.OFFLINE_EXP_PER_LEVEL) *
-                GameBalance.OFFLINE_EFFICIENCY
+                GameBalance.OFFLINE_EFFICIENCY * mult
         val goldGained = (goldPerHour * effectiveHours).toLong()
         val expGained = (expPerHour * effectiveHours).toLong()
         val battleWins = effectiveSeconds / GameBalance.OFFLINE_SECONDS_PER_BATTLE_WIN
@@ -496,6 +583,21 @@ class GameService(
     }
 
     private fun getMaxHp(level: Int): Long = 50L * level + 100L
+
+    /** 转生倍率下的基础攻击（等级部分）：加成部分已在 bonusFor 内乘倍率，两处合计等效于总和乘倍率。
+     *  prestigeCount=0 时恒等于原式（既有数值零漂移）；取整沿用 .toLong() 截断风格 */
+    private fun scaledBaseAtk(profile: PlayerProfileEntity): Long {
+        val base = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL
+        return if (profile.prestigeCount <= 0) base
+        else (base * GameBalance.prestigeMultiplier(profile.prestigeCount)).toLong()
+    }
+
+    /** 转生倍率下的基础生命上限（等级部分），口径同 scaledBaseAtk */
+    private fun scaledBaseMaxHp(profile: PlayerProfileEntity): Long {
+        val base = getMaxHp(profile.level)
+        return if (profile.prestigeCount <= 0) base
+        else (base * GameBalance.prestigeMultiplier(profile.prestigeCount)).toLong()
+    }
 
     private fun toProfileDto(p: PlayerProfileEntity) = ProfileDto(
         level = p.level, gold = p.gold, soulPower = p.soulPower, bossCoin = p.bossCoin,

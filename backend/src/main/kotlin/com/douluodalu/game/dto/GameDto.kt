@@ -31,8 +31,9 @@ data class GameStateResponse(
  *  - ringAtk + boneAtk + coreAtk == EquipmentBonus.atkBonus（不含成就加成）
  *  - ringHp + boneHp == EquipmentBonus.hpBonus（魂核只加攻击百分比，coreHp 恒为 0；
  *    玩家模型无基础生命维度，baseHp 恒为 0，均为真实来源语义）
- *  - basePower + ringPower + bonePower + corePower + achievement == power（powerOf 同式，
- *    成就加成单列一行：achievement = 成就 atk + 成就 hp/POWER_HP_DIVISOR 折算）
+ *  - basePower + ringPower + bonePower + corePower + achievement + prestige == power（powerOf 同式，
+ *    成就加成单列一行：achievement = 成就 atk + 成就 hp/POWER_HP_DIVISOR 折算；
+ *    转生倍率增量单列第 6 行 prestige，转数 0 时恒为 0）
  */
 data class PowerDetailDto(
     /** 基础攻击 = PLAYER_ATK_BASE + level × PLAYER_ATK_PER_LEVEL */
@@ -42,7 +43,7 @@ data class PowerDetailDto(
     val basePower: Long = 0,
     val ringAtk: Long = 0,
     val ringHp: Long = 0,
-    /** 魂环战力贡献 = ringAtk + 魂环生命折算（余数按最大余数法分配，保证五行求和==power） */
+    /** 魂环战力贡献 = ringAtk + 魂环生命折算（余数按最大余数法分配，保证求和==power） */
     val ringPower: Long = 0,
     val boneAtk: Long = 0,
     val boneHp: Long = 0,
@@ -51,7 +52,9 @@ data class PowerDetailDto(
     val coreHp: Long = 0,
     val corePower: Long = 0,
     /** 成就加成战力行（已解锁成就 hp/atk 求和折算；未解锁任何成就时为 0） */
-    val achievement: Long = 0
+    val achievement: Long = 0,
+    /** 转生倍率战力增量行（装备+成就加成 ×(1+转数×0.1) 相对 1.0 倍的增量；未转生恒为 0） */
+    val prestige: Long = 0
 )
 
 // ======== 成就 ========
@@ -218,6 +221,13 @@ data class CultivateResponse(
 data class BreakthroughResponse(
     val success: Boolean,
     val newLevel: Int,
+    val message: String
+)
+
+/** POST /api/action/prestige 的转生结果（失败返回 success=false + 原因，HTTP 200，与 breakthrough 一致） */
+data class PrestigeResponse(
+    val success: Boolean,
+    val prestigeCount: Int,
     val message: String
 )
 

@@ -8,22 +8,37 @@ const WIKI_CATEGORIES = [
         title: '境界系统',
         icon: '⚡',
         content: [
+            // 真实口径：16 境界每 10 级一档，level 为该境界的起始等级（与后端境界换算同源）
             { name: '魂士', level: 1, description: '初始境界，刚觉醒武魂' },
-            { name: '魂师', level: 2, description: '获得第一个魂环' },
-            { name: '大魂师', level: 3, description: '获得第二个魂环' },
-            { name: '魂尊', level: 4, description: '获得第三个魂环' },
-            { name: '魂宗', level: 5, description: '获得第四个魂环' },
-            { name: '魂王', level: 6, description: '获得第五个魂环' },
-            { name: '魂帝', level: 7, description: '获得第六个魂环' },
-            { name: '魂圣', level: 8, description: '获得第七个魂环' },
-            { name: '魂斗罗', level: 9, description: '获得第八个魂环' },
-            { name: '封号斗罗', level: 10, description: '获得第九个魂环' },
-            { name: '极限斗罗', level: 11, description: '突破人类极限' },
-            { name: '半神', level: 12, description: '半神之境' },
-            { name: '神祇', level: 13, description: '成为神祇' },
-            { name: '神王', level: 14, description: '神王之境' },
-            { name: '至高神王', level: 15, description: '至高神王' },
-            { name: '创世神', level: 16, description: '创世神之境' },
+            { name: '魂师', level: 11, description: '获得第一个魂环' },
+            { name: '大魂师', level: 21, description: '获得第二个魂环' },
+            { name: '魂尊', level: 31, description: '获得第三个魂环' },
+            { name: '魂宗', level: 41, description: '获得第四个魂环' },
+            { name: '魂王', level: 51, description: '获得第五个魂环' },
+            { name: '魂帝', level: 61, description: '获得第六个魂环' },
+            { name: '魂圣', level: 71, description: '获得第七个魂环' },
+            { name: '魂斗罗', level: 81, description: '获得第八个魂环' },
+            { name: '封号斗罗', level: 91, description: '获得第九个魂环' },
+            { name: '极限斗罗', level: 101, description: '突破人类极限' },
+            { name: '半神', level: 111, description: '半神之境' },
+            { name: '神祇', level: 121, description: '成为神祇' },
+            { name: '神王', level: 131, description: '神王之境' },
+            { name: '至高神王', level: 141, description: '至高神王' },
+            { name: '创世神', level: 151, description: '创世神之境' },
+            { name: '突破消耗', description: '每次突破消耗魂力 120×等级^1.55（Lv.1 需 120，Lv.50 约需 5.16 万）' },
+        ]
+    },
+    {
+        id: 'prestige',
+        title: '转生系统',
+        icon: '🔄',
+        content: [
+            { name: '神位传承', description: '达到 Lv.50 后可在主页进行转生；转生不可逆，操作前会弹出确认清单供核对' },
+            { name: '转生收益', description: '每转全属性 +10%、收入 +10%；每次转生额外获得 1 点天赋点' },
+            { name: '重置项', description: '等级回到 Lv.1、金币清零、魂力清零、已装备魂环/魂骨卸回背包' },
+            { name: '保留项', description: '装备与背包、天赋等级（并 +1 天赋点）、成就、杀戮之都进度、推图进度、图鉴、Boss币' },
+            { name: '与天赋联动', description: '转生获得的天赋点在「天赋」页（/game/talent）分配，永久强化角色属性' },
+            { name: '与成就联动', description: 'prestige 类成就在「成就」页（/game/achievements）按累计转生次数解锁，属性奖励永久生效' },
         ]
     },
     {
@@ -86,15 +101,15 @@ export default function WikiPage() {
         <div className="space-y-6">
             <h1 className="text-2xl font-bold text-yellow-400">百科</h1>
 
-            {/* 分类标签 */}
-            <div className="flex flex-wrap gap-2">
+            {/* 分类标签（6 个 tab：375px 下用横向滚动收纳为一行，避免换行挤压内容区） */}
+            <div className="flex gap-2 dl-scroll-x pb-1">
                 {WIKI_CATEGORIES.map((category) => (
                     <button
                         key={category.id}
                         type="button"
                         aria-pressed={activeCategory === category.id}
                         onClick={() => setActiveCategory(category.id)}
-                        className={`px-4 min-h-11 rounded-lg text-sm font-semibold transition-colors inline-flex items-center ${
+                        className={`px-4 min-h-11 shrink-0 whitespace-nowrap rounded-lg text-sm font-semibold transition-colors inline-flex items-center ${
                             activeCategory === category.id
                                 ? 'bg-yellow-600 text-white'
                                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
@@ -124,7 +139,7 @@ export default function WikiPage() {
                                     </div>
                                     {'level' in item && (
                                         <span className="bg-yellow-600 px-2 py-1 rounded text-sm shrink-0">
-                                            等级 {item.level}
+                                            Lv.{item.level}+
                                         </span>
                                     )}
                                     {'year' in item && (
@@ -155,6 +170,7 @@ export default function WikiPage() {
                 <ul className="text-sm text-gray-300 space-y-1">
                     <li>• 百科提供游戏内各种系统的详细介绍</li>
                     <li>• 了解境界系统，规划修炼路线</li>
+                    <li>• 了解转生系统，规划长期成长路线</li>
                     <li>• 了解装备系统，选择合适装备</li>
                     <li>• 了解地图系统，选择合适修炼地点</li>
                 </ul>

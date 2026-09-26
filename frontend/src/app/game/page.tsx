@@ -3,101 +3,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import api, { BattleResult, OfflineReward, PowerDetail, normalizeAchievements } from '@/lib/api';
+import api, { BattleResult, OfflineReward, normalizeAchievements } from '@/lib/api';
+import { PRESTIGE_MIN_LEVEL, prestigeHint } from '@/lib/prestige';
 import { useGameData } from '@/lib/hooks';
 import { BootState } from '@/components/StateViews';
 import BattleReplay from '@/components/BattleReplay';
 import CheckinCard from '@/components/CheckinCard';
 import DailyQuestsCard from '@/components/DailyQuestsCard';
+import PowerDetailPanel from '@/components/PowerDetailPanel';
 
 const MAP_NAMES = ['圣魂村', '诺丁城外', '星斗外围', '落日森林', '极北之地', '海神岛', '杀戮之都外域', '神界废墟'];
 const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣', '魂斗罗', '封号斗罗', '极限斗罗', '半神', '神祇', '神王', '至高神王', '创世神'];
-
-/**
- * 任务#23：战力明细可折叠面板（默认收起）。
- * 后端 PowerDetailDto 保证 basePower+ringPower+bonePower+corePower == 总战力（拆分求和恒等），
- * 每行显示攻击/生命贡献与占总战力百分比；颜色全部走主题调色板变量，亮暗两色主题均可读。
- * 后端补 achievement 字段后追加第 5 行「🏆 成就」（五行求和 == 总战力）；
- * 旧后端无此字段 → undefined 按 0 处理、行隐藏，脚注回退「四行」。
- */
-interface PowerRow {
-    key: string;
-    icon: string;
-    label: string;
-    /** 成就行无独立攻/生拆分（契约只有折算战力）→ null，行内不渲染攻/生子标签 */
-    atk: number | null;
-    hp: number | null;
-    share: number;
-    bar: string;
-    ariaLabel: string;
-}
-
-function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetail }) {
-    const [open, setOpen] = useState(false);
-    const achPower = detail.achievement ?? 0;
-    const rows: PowerRow[] = [
-        { key: 'base', icon: '🛡️', label: '基础（等级+攻击）', atk: detail.baseAtk, hp: detail.baseHp, share: detail.basePower, bar: 'bg-gray-500', ariaLabel: '基础（等级+攻击）战力贡献' },
-        { key: 'ring', icon: '💜', label: '魂环', atk: detail.ringAtk, hp: detail.ringHp, share: detail.ringPower, bar: 'bg-blue-500', ariaLabel: '魂环战力贡献' },
-        { key: 'bone', icon: '🦴', label: '魂骨', atk: detail.boneAtk, hp: detail.boneHp, share: detail.bonePower, bar: 'bg-purple-500', ariaLabel: '魂骨战力贡献' },
-        { key: 'core', icon: '🔮', label: '魂核', atk: detail.coreAtk, hp: detail.coreHp, share: detail.corePower, bar: 'bg-yellow-500', ariaLabel: '魂核战力贡献' },
-        ...(achPower > 0 ? [{
-            key: 'achievement', icon: '🏆', label: '成就', atk: null, hp: null,
-            share: achPower, bar: 'bg-amber-500', ariaLabel: '成就加成',
-        }] : []),
-    ];
-    return (
-        <div className="dl-fade-up bg-surface/80 rounded-xl border border-line" data-testid="power-detail-panel">
-            <button
-                type="button"
-                aria-expanded={open}
-                onClick={() => setOpen((v) => !v)}
-                className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-surface-soft/60 transition rounded-xl"
-            >
-                <span className="text-sm font-semibold text-orange-400">⚔️ 战力明细</span>
-                <span className="flex items-center gap-2 text-sm text-gray-400 min-w-0">
-                    <span className="hidden sm:inline">总战力</span>
-                    <span key={power} className="dl-value-flash font-bold text-orange-400 tabular-nums">{power.toLocaleString()}</span>
-                    <span className={`inline-block transition-transform duration-300 ${open ? 'rotate-180' : ''}`} aria-hidden>▾</span>
-                </span>
-            </button>
-            {open && (
-                <div className="px-4 pb-4 space-y-3">
-                    {rows.map((r) => {
-                        const pct = power > 0 ? Math.min(100, (r.share / power) * 100) : 0;
-                        return (
-                            <div key={r.key} data-power-row={r.key}>
-                                <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-xs mb-1">
-                                    <span className="text-gray-300 min-w-0">
-                                        {r.icon} {r.label}
-                                        {r.atk != null && r.hp != null && (
-                                            <span className="text-gray-500 ml-2">攻 +{r.atk.toLocaleString()} · 生 +{r.hp.toLocaleString()}</span>
-                                        )}
-                                    </span>
-                                    <span className="text-gray-400 tabular-nums shrink-0">
-                                        {r.share.toLocaleString()}（{pct.toFixed(1)}%）
-                                    </span>
-                                </div>
-                                <div
-                                    className="h-2 bg-gray-700 rounded-full overflow-hidden"
-                                    role="progressbar"
-                                    aria-valuemin={0}
-                                    aria-valuemax={Math.max(power, 1)}
-                                    aria-valuenow={r.share}
-                                    aria-label={r.ariaLabel}
-                                >
-                                    <div className={`h-full ${r.bar} rounded-full transition-all duration-700 ease-out`} style={{ width: `${pct}%` }} />
-                                </div>
-                            </div>
-                        );
-                    })}
-                    <p className="text-[11px] text-gray-500 leading-relaxed">
-                        战力 = 基础 + 装备攻击加成 + 装备生命÷10{achPower > 0 ? ' + 成就加成' : ''}；{achPower > 0 ? '五' : '四'}行求和恒等于总战力（后端同源拆分）。
-                    </p>
-                </div>
-            )}
-        </div>
-    );
-}
 
 // 模块级标记：跨组件StrictMode双挂载/客户端导航只领取一次离线收益（刷新页面会重新领取，符合放置游戏惯例）
 let offlineClaimAttempted = false;
@@ -109,6 +25,9 @@ export default function GamePage() {
     const { gameState, message, setMessage, actionLoading, loadError, runAction, refresh } = useGameData();
     const [battleResult, setBattleResult] = useState<BattleResult | null>(null);
     const [offline, setOffline] = useState<OfflineReward | null>(null);
+    // 转生确认弹窗：按钮只负责打开，真正请求在弹窗内「确认转生」触发
+    const [prestigeOpen, setPrestigeOpen] = useState(false);
+    const prestigeCancelRef = useRef<HTMLButtonElement>(null);
 
     // 进入主页领取一次离线收益：有实际产出才弹窗，0 收益静默关闭
     useEffect(() => {
@@ -171,6 +90,29 @@ export default function GamePage() {
         (result) => setMessage(result.message),
         '突破失败',
     );
+
+    // 转生（神位传承）：等级不足时后端也是 200 + success:false（照 breakthrough 惯例）→ 透传 message。
+    // 成功/失败路径都关闭弹窗（message 在战斗卡内展示），失败不打断用户修正后重试。
+    const handlePrestige = async () => {
+        await runAction(
+            () => api.prestige(),
+            (result) => setMessage(result.message),
+            '转生失败',
+        );
+        setPrestigeOpen(false);
+    };
+
+    // 转生确认弹窗可达性：打开时聚焦「取消」（破坏性操作的安全默认），Escape 关闭；
+    // 未做完整焦点圈禁（Tab 仍可离开弹窗），与离线收益弹窗同级、不强拦截键盘路径。
+    useEffect(() => {
+        if (!prestigeOpen) return;
+        prestigeCancelRef.current?.focus();
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setPrestigeOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [prestigeOpen]);
 
     // 每日签到：runAction 成功回调 + 自动 refresh 拉新签到状态；已签由后端 400 → message 提示
     const handleCheckin = () => runAction(
@@ -322,8 +264,8 @@ export default function GamePage() {
                         </div>
                     )}
 
-                    {/* 操作按钮 */}
-                    <div className="grid grid-cols-3 gap-3">
+                    {/* 操作按钮（第 4 钮转生：375px 下 2×2 两行、sm 起一行四钮，零水平溢出） */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                         <button
                             onClick={handleBattle}
                             disabled={actionLoading}
@@ -345,9 +287,20 @@ export default function GamePage() {
                         >
                             突破
                         </button>
+                        <button
+                            data-testid="prestige-btn"
+                            onClick={() => setPrestigeOpen(true)}
+                            disabled={actionLoading || p.level < PRESTIGE_MIN_LEVEL}
+                            title={prestigeHint(p.level, p.prestigeCount)}
+                            aria-label={`转生（${prestigeHint(p.level, p.prestigeCount)}）`}
+                            className="py-3 bg-gradient-to-r from-red-600 to-yellow-600 hover:from-red-500 hover:to-yellow-500 rounded-lg font-bold transition disabled:opacity-50"
+                        >
+                            🔄 转生
+                        </button>
                     </div>
-                    <div className="text-center text-xs text-gray-500 mt-2">
-                        突破需要 {breakthroughCost} 魂力 (当前: {p.soulPower})
+                    <div className="text-center text-xs text-gray-500 mt-2 space-y-0.5">
+                        <div>突破需要 {breakthroughCost} 魂力 (当前: {p.soulPower})</div>
+                        <div data-testid="prestige-hint">{prestigeHint(p.level, p.prestigeCount)}</div>
                     </div>
                 </div>
 
@@ -395,6 +348,76 @@ export default function GamePage() {
                         >
                             收下
                         </button>
+                    </div>
+                </div>
+            )}
+
+            {/* 转生确认弹窗（神位传承）：不直接执行，先列明重置项/保留项；点遮罩或取消关闭，确认才发请求 */}
+            {prestigeOpen && (
+                <div
+                    className="dl-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="神位传承确认"
+                    data-testid="prestige-dialog"
+                    onClick={() => setPrestigeOpen(false)}
+                >
+                    <div
+                        className="dl-pop bg-surface border border-yellow-500/50 rounded-2xl p-6 max-w-sm w-full shadow-2xl max-h-[85vh] overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3 className="text-lg font-bold text-yellow-400 mb-3">
+                            <span aria-hidden>⚠️</span> 神位传承
+                        </h3>
+                        <p className="text-sm text-gray-400 mb-3">
+                            转生是不可逆的重大抉择（当前 {p.prestigeCount} 转 → 转生后 {p.prestigeCount + 1} 转），请确认以下变化：
+                        </p>
+                        {/* 两栏清单：375px 下单列堆叠保证可读，sm 起并排 */}
+                        <div className="grid sm:grid-cols-2 gap-3 text-xs mb-3">
+                            <div className="bg-red-900/30 border border-red-600/50 rounded-lg p-3">
+                                <div className="font-semibold text-red-300 mb-1">重置项</div>
+                                <ul className="space-y-0.5 text-gray-300">
+                                    <li>• 等级回到 Lv.1</li>
+                                    <li>• 金币清零</li>
+                                    <li>• 魂力清零</li>
+                                    <li>• 已装备魂环/魂骨卸回背包</li>
+                                </ul>
+                            </div>
+                            <div className="bg-green-900/30 border border-green-600/50 rounded-lg p-3">
+                                <div className="font-semibold text-green-300 mb-1">保留项</div>
+                                <ul className="space-y-0.5 text-gray-300">
+                                    <li>• 装备与背包</li>
+                                    <li>• 天赋等级并 +1 天赋点</li>
+                                    <li>• 成就</li>
+                                    <li>• 杀戮之都进度</li>
+                                    <li>• 推图进度</li>
+                                    <li>• 图鉴</li>
+                                    <li>• Boss币</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <p className="text-xs text-gray-400 mb-4">
+                            转生后每转全属性+10%、收入+10%；本次转生后全属性+{(p.prestigeCount + 1) * 10}%。
+                        </p>
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                ref={prestigeCancelRef}
+                                data-testid="prestige-cancel"
+                                onClick={() => setPrestigeOpen(false)}
+                                disabled={actionLoading}
+                                className="py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-bold transition disabled:opacity-50"
+                            >
+                                取消
+                            </button>
+                            <button
+                                data-testid="prestige-confirm"
+                                onClick={handlePrestige}
+                                disabled={actionLoading}
+                                className="py-2 bg-gradient-to-r from-red-600 to-yellow-600 hover:from-red-500 hover:to-yellow-500 rounded-lg font-bold transition disabled:opacity-50"
+                            >
+                                {actionLoading ? '转生中...' : '确认转生'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}

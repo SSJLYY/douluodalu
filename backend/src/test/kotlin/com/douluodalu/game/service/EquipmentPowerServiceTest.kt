@@ -21,7 +21,8 @@ import kotlin.random.Random
 /**
  * 任务#20：装备战力公式（P7）与塔胜率（P2）的纯函数断言。
  * 全部走 EquipmentPowerService / GameService 的 companion 纯函数，不依赖 Spring。
- * 成就系统集成：bonusFor 并入已解锁成就 hp/atk；detail 五行求和不变量（base+ring+core+bone+achievement）。
+ * 成就系统集成：bonusFor 并入已解锁成就 hp/atk；转生集成：bonusFor 乘转生倍率、
+ * detail 六行求和不变量（base+ring+core+bone+achievement+prestige）。
  */
 class EquipmentPowerServiceTest {
 
@@ -127,6 +128,34 @@ class EquipmentPowerServiceTest {
         assertEquals(defSumHp, ach.hpBonus)
     }
 
+    @Test
+    fun `bonusFor should scale combined equipment and achievement bonus by prestige multiplier`() {
+        val ringRepo = mock<EquippedRingRepository>()
+        val boneRepo = mock<EquippedBoneRepository>()
+        val coreRepo = mock<EquippedCoreRepository>()
+        val achRepo = mock<AchievementRepository>()
+        whenever(ringRepo.findByUserId(1L)).thenReturn(listOf(ring(year = 2, quality = 1, percentage = 500)))
+        whenever(boneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(coreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(achRepo.findByUserId(1L)).thenReturn(
+            listOf(AchievementEntity(userId = 1L, achievementId = "cult_10"), AchievementEntity(userId = 1L, achievementId = "battle_10"))
+        )
+        val svc = EquipmentPowerService(ringRepo, boneRepo, coreRepo, achRepo)
+
+        // 0 转回归：倍率 1.0，与不加参的旧行为逐位一致
+        val b0 = svc.bonusFor(1L, 10, prestigeCount = 0)
+        assertEquals(svc.bonusFor(1L, 10), b0, "0 转时 bonusFor 应与旧签名行为完全一致")
+
+        // 2 转：装备+成就合计加成 ×1.2（取整 .toLong() 截断）
+        val b2 = svc.bonusFor(1L, 10, prestigeCount = 2)
+        val equipOnly = EquipmentPowerService.bonus(10, listOf(ring(year = 2, quality = 1, percentage = 500)), emptyList(), emptyList())
+        val ach = EquipmentPowerService.achievementBonus(listOf("cult_10", "battle_10"))
+        val mult = GameBalance.prestigeMultiplier(2)
+        assertEquals(((equipOnly.atkBonus + ach.atkBonus) * mult).toLong(), b2.atkBonus)
+        assertEquals(((equipOnly.hpBonus + ach.hpBonus) * mult).toLong(), b2.hpBonus)
+        assertTrue(b2.atkBonus > b0.atkBonus && b2.hpBonus > b0.hpBonus, "2 转加成应严格大于 0 转")
+    }
+
     // ======== 任务#23：战力明细拆分（拆分求和 == bonus/power 总值） ========
 
     @Test
@@ -174,6 +203,7 @@ class EquipmentPowerServiceTest {
         val rng = Random(20260923)
         repeat(200) {
             val level = rng.nextInt(1, 121)
+            val prestigeCount = rng.nextInt(0, 6) // 0~5 转：六行不变量覆盖含倍率场景
             val rings = List(rng.nextInt(0, 7)) {
                 ring(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), percentage = rng.nextInt(0, 1000))
             }
@@ -184,41 +214,68 @@ class EquipmentPowerServiceTest {
                 core(rarity = rng.nextInt(0, 5), value = rng.nextInt(1, 300))
             }
             val b = EquipmentPowerService.bonus(level, rings, bones, cores)
-            val d = EquipmentPowerService.detail(level, rings, bones, cores)
+            val d = EquipmentPowerService.detail(level, rings, bones, cores, EquipmentBonus(0, 0), prestigeCount)
             assertEquals(b.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "atk 拆分失衡: level=$level $rings $bones $cores")
             assertEquals(b.hpBonus, d.ringHp + d.boneHp, "hp 拆分失衡: level=$level $rings $bones $cores")
+            // 六行求和 == 含转生倍率的总战力（0 转时倍率 1.0，退化为原五行恒等）
             assertEquals(
-                EquipmentPowerService.powerOf(level, b),
-                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
-                "战力拆分失衡: level=$level $rings $bones $cores"
+                EquipmentPowerService.powerOf(level, EquipmentPowerService.applyPrestige(b, prestigeCount)),
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
+                "战力拆分失衡: level=$level prestige=$prestigeCount $rings $bones $cores"
             )
+            if (prestigeCount == 0) assertEquals(0L, d.prestige, "0 转时倍率增量行必须为 0")
         }
     }
 
     @Test
-    fun `power detail with achievement bonus keeps five-row sum invariant`() {
+    fun `power detail with achievement bonus keeps six-row sum invariant with prestige multiplier`() {
         val level = 47
         val rings = listOf(ring(year = 1, quality = 2, percentage = 137), ring(year = 3, quality = 1, percentage = 903))
         val bones = listOf(bone(year = 2, quality = 3, enhance = 5))
         val cores = listOf(core(rarity = 3, value = 173))
         // 成就加成（cult_50 + battle_50 + tower_50 + tower_30 量级）：atk 245 / hp 4600（可被 10 整除便于精确断言）
         val ach = EquipmentBonus(atkBonus = 245, hpBonus = 4600)
+        val prestigeCount = 3
 
         val combined = EquipmentPowerService.bonus(level, rings, bones, cores, ach)
-        val d = EquipmentPowerService.detail(level, rings, bones, cores, ach)
-        val power = EquipmentPowerService.powerOf(level, combined)
+        val d = EquipmentPowerService.detail(level, rings, bones, cores, ach, prestigeCount)
+        val eff = EquipmentPowerService.applyPrestige(combined, prestigeCount)
+        val power = EquipmentPowerService.powerOf(level, eff)
 
-        // 五行求和不变量：base + ring + core + bone + achievement == power
-        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
-            "含成就加成的五行战力求和必须等于总战力")
+        // 六行求和不变量：base + ring + core + bone + achievement + prestige == 含倍率总战力
+        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
+            "含成就与转生倍率的六行战力求和必须等于总战力")
+        // prestige 行 = 倍率增量（含倍率战力 − 1.0 倍战力），单列不污染五行拆分
+        val powerWithoutPrestige = EquipmentPowerService.powerOf(level, combined)
+        assertEquals(powerWithoutPrestige, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
+            "前五行之和应保持 1.0 倍口径战力")
+        assertEquals(power - powerWithoutPrestige, d.prestige)
+        assertTrue(d.prestige > 0L, "3 转倍率必须产生正增量")
         // 成独行 = 成就 atk + 成就 hp 折算（hp 可被 POWER_HP_DIVISOR 整除 → 精确）
         assertEquals(ach.atkBonus + (ach.hpBonus / GameBalance.POWER_HP_DIVISOR).toLong(), d.achievement)
-        // 装备拆分行保持装备口径（不含成就加成）
+        // 装备拆分行保持装备口径（不含成就加成、不含倍率）
         val equipOnly = EquipmentPowerService.bonus(level, rings, bones, cores)
         assertEquals(equipOnly.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk)
         assertEquals(equipOnly.hpBonus, d.ringHp + d.boneHp)
         assertEquals(combined.atkBonus, equipOnly.atkBonus + ach.atkBonus)
         assertEquals(combined.hpBonus, equipOnly.hpBonus + ach.hpBonus)
+    }
+
+    @Test
+    fun `power detail at zero prestiges keeps legacy five-row invariant`() {
+        // 回归保证：prestigeCount=0（默认）时 prestige 行恒 0，五行恒等与旧版逐位一致
+        val level = 47
+        val rings = listOf(ring(year = 1, quality = 2, percentage = 137), ring(year = 3, quality = 1, percentage = 903))
+        val bones = listOf(bone(year = 2, quality = 3, enhance = 5))
+        val cores = listOf(core(rarity = 3, value = 173))
+        val ach = EquipmentBonus(atkBonus = 245, hpBonus = 4600)
+
+        val combined = EquipmentPowerService.bonus(level, rings, bones, cores, ach)
+        val d = EquipmentPowerService.detail(level, rings, bones, cores, ach)
+        assertEquals(0L, d.prestige)
+        assertEquals(EquipmentPowerService.powerOf(level, combined),
+            d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
+            "0 转时五行求和必须等于总战力（旧行为不变）")
     }
 
     // ======== P2：塔胜率修复 ========

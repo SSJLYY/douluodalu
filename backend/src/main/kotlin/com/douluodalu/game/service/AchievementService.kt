@@ -28,8 +28,7 @@ import java.time.LocalDateTime
  *    GameService/EquipmentPowerService 实例（加成求和走 EquipmentPowerService 的 companion
  *    纯函数 achievementBonus，非 Bean 注入）。
  *  - 进度口径映射收敛在 companion 纯函数 progressOf：CULTIVATION→level、BATTLE→totalBattleWins、
- *    TOWER→towerFloor、SOUL_RING→已装备魂环数、PRESTIGE→prestigeCount（当前无写点，
- *    进度恒 0 不解锁，待转生玩法落地）。
+ *    TOWER→towerFloor、SOUL_RING→已装备魂环数、PRESTIGE→prestigeCount（写点：GameService.prestige）。
  */
 @Service
 class AchievementService(

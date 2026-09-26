@@ -170,13 +170,32 @@ object GameBalance {
     const val TOWER_LOG_MONSTER_HP_PER_FLOOR = 24L
     const val TOWER_LOG_MONSTER_ATK_PER_FLOOR = 2
 
+    // ======== 转生（神位传承） ========
+    // 门槛校准依据：设计文档原文 Lv.100、策略指南 Lv.90，但后端无经验系统、level 唯一提升途径是
+    // breakthrough（魂力消耗 120·L^1.55，与文档加速曲线不同源），90 天中活跃仿真
+    // （LongRunSimulationTest）纯修画像仅到 Lv.77、穿装画像更高但重置后回爬仍需数周。
+    // 照搬文档门槛会让本玩法上线后 ~5 个月不可达，故按后端节奏校准为 Lv.50
+    // （90 天内可完成 1~2 转，与成就 prestige_1/prestige_3 的节奏对齐）。
+    // 收益 = 双口径（shared GameEngine.prestigeMultiplier = 1.0 + count×0.1 先例）：
+    //  1) 属性：基础 atk/maxHp（GameService battle/tower 结算处）与 EquipmentPowerService.bonusFor
+    //     返回的装备+成就加成部分都乘倍率（等效于 (基础+装备+成就)×倍率，符合文档 §15.2）；
+    //  2) 收入：cultivate 产出、battle 胜 gold/exp、towerBattle 胜 gold/exp、claimOfflineReward
+    //     gold/exp 四处乘倍率（依据 shared GameEngine.kt:2607 修为产出 ×prestigeMultiplier——
+    //     转生后收入更快回爬，否则重置纯亏）。签到/任务/宗门/商店固定表**不乘**（留存钩子与
+    //     交易口径不膨胀）；Boss 币口径不乘。
+    const val PRESTIGE_MIN_LEVEL = 50
+    const val PRESTIGE_STAT_BONUS = 0.10
+
+    /** 转生倍率：全属性/主动收入 ×(1 + 转数×PRESTIGE_STAT_BONUS)。count=0 恒为 1.0，既有数值零漂移 */
+    fun prestigeMultiplier(count: Int): Double = 1.0 + count * PRESTIGE_STAT_BONUS
+
     // ======== 成就 ========
     // 奖励兑现口径：第一版战斗模型只消费 hp/atk（resolveBattle 仅吃 atk/hp）；
     // matk/pdef/mdef/critRate/critDmg 数据保留但口径暂不消费，属性系统扩展后生效
     // （DTO 照带全字段，前端只展示 hp/atk）。
     // 进度口径：CULTIVATION→level、BATTLE→totalBattleWins、TOWER→towerFloor、
     // SOUL_RING→已装备魂环数（equippedRingRepo.findByUserId(userId).size，描述用「装备」而非
-    // 「获得」——背包里的环不算）、PRESTIGE→prestigeCount（当前无写点，待转生玩法，进度恒 0 不解锁）。
+    // 「获得」——背包里的环不算）、PRESTIGE→prestigeCount（写点：GameService.prestige）。
     data class AchievementRewards(
         val hp: Long = 0, val atk: Int = 0, val matk: Int = 0,
         val pdef: Int = 0, val mdef: Int = 0, val critRate: Int = 0, val critDmg: Int = 0

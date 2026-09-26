@@ -26,6 +26,8 @@ import org.springframework.stereotype.Service
  * 成就系统集成：bonusFor（实例方法，战斗/塔/状态组装的唯一 choke point）把已解锁成就的
  * hp/atk 加成并入返回值；只依赖 AchievementRepository（查已解锁 id 集合→按定义求和），
  * 不依赖 AchievementService（防循环）。
+ * 转生系统集成：bonusFor 增加转数参数（默认 0），装备+成就合计加成乘转生倍率（applyPrestige）；
+ * detail 同步增加第 6 行 prestige（倍率增量单列），求和恒等从五行升级为六行。
  */
 /** 单件装备折出的攻击/生命加成（成就加成复用同一形状） */
 data class EquipmentBonus(val atkBonus: Long, val hpBonus: Long)
@@ -38,8 +40,9 @@ class EquipmentPowerService(
     private val achievementRepo: AchievementRepository
 ) {
 
-    /** 读取该玩家已装备的魂环/魂骨/魂核 + 已解锁成就，计算攻防加成与战斗力（成就加成即时生效） */
-    fun bonusFor(userId: Long, level: Int): EquipmentBonus {
+    /** 读取该玩家已装备的魂环/魂骨/魂核 + 已解锁成就，计算攻防加成与战斗力（成就加成即时生效）。
+     *  转生集成：装备+成就合计加成乘转生倍率（prestigeCount=0 时倍率恒 1.0，与旧版行为逐位一致）。 */
+    fun bonusFor(userId: Long, level: Int, prestigeCount: Int = 0): EquipmentBonus {
         val equip = bonus(
             level,
             equippedRingRepo.findByUserId(userId),
@@ -47,7 +50,7 @@ class EquipmentPowerService(
             equippedCoreRepo.findByUserId(userId)
         )
         val ach = achievementBonus(achievementRepo.findByUserId(userId).map { it.achievementId })
-        return EquipmentBonus(equip.atkBonus + ach.atkBonus, equip.hpBonus + ach.hpBonus)
+        return applyPrestige(EquipmentBonus(equip.atkBonus + ach.atkBonus, equip.hpBonus + ach.hpBonus), prestigeCount)
     }
 
     companion object {
@@ -137,20 +140,35 @@ class EquipmentPowerService(
             GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
 
         /**
-         * 纯函数：战力明细拆分（任务#23；成就系统集成后五行不变量）。复用与 bonus() 完全相同的
-         * 单件公式，取整用最大余数法（largest remainder）保证拆分求和与 EquipmentBonus / powerOf 严格相等：
+         * 转生倍率作用于「装备+成就」加成部分（shared GameEngine.prestigeMultiplier 双口径之属性侧；
+         * 基础 atk/maxHp 部分由 GameService 缩放，两处合计等效于总和乘倍率）。
+         * 取整沿用既有 .toLong() 截断风格；prestigeCount<=0 时原样返回，保证既有数值零漂移。
+         */
+        fun applyPrestige(b: EquipmentBonus, prestigeCount: Int): EquipmentBonus {
+            if (prestigeCount <= 0) return b
+            val mult = GameBalance.prestigeMultiplier(prestigeCount)
+            return EquipmentBonus((b.atkBonus * mult).toLong(), (b.hpBonus * mult).toLong())
+        }
+
+        /**
+         * 纯函数：战力明细拆分（任务#23；成就系统集成后五行不变量；转生集成后六行不变量）。
+         * 复用与 bonus() 完全相同的单件公式，取整用最大余数法（largest remainder）保证拆分求和与
+         * EquipmentBonus / powerOf 严格相等：
          *  - ringAtk + boneAtk + coreAtk == 装备部分的 atkBonus（不含成就加成）
          *  - ringHp + boneHp == 装备部分的 hpBonus（魂核只加攻击、玩家无基础生命 → coreHp/baseHp 恒 0）
          *  - basePower + ringPower + bonePower + corePower + achievement ==
-         *    powerOf(level, bonus(level, rings, bones, cores, achievementBonus))
-         *  achievementBonus 为默认零时退化为原四行拆分（既有调用不破坏）。
+         *    powerOf(level, bonus(level, rings, bones, cores, achievementBonus))（1.0 倍口径）
+         *  - 上式五行 + prestige == powerOf(level, applyPrestige(装备+成就合计, prestigeCount))
+         *    （转生倍率产生的全部增量单列第 6 行；prestigeCount=0 时该行恒 0，退化为原五行拆分）
+         *  achievementBonus / prestigeCount 均为默认零时与既有四参调用行为完全一致。
          */
         fun detail(
             level: Int,
             rings: List<EquippedRing>,
             bones: List<EquippedBone>,
             cores: List<EquippedCore>,
-            achievementBonus: EquipmentBonus = EquipmentBonus(0, 0)
+            achievementBonus: EquipmentBonus = EquipmentBonus(0, 0),
+            prestigeCount: Int = 0
         ): PowerDetailDto {
             val b = bonus(level, rings, bones, cores)
             val baseAtk = baseAttack(level)
@@ -178,6 +196,12 @@ class EquipmentPowerService(
                         achievementBonus.hpBonus / GameBalance.POWER_HP_DIVISOR),
                 hpPowerTotal
             )
+            val achievementRow = achievementBonus.atkBonus + hpPowerAlloc[2]
+            // 第 6 行 prestige = 含倍率战力 − 五行（1.0 倍口径）战力：倍率产生的增量全部归此行，
+            // 六行求和与 getGameState 展示的 power（powerOf(applyPrestige(合计加成))）严格一致
+            val fiveRowSum = basePower + ringAtk + hpPowerAlloc[0] + boneAtk + hpPowerAlloc[1] + coreAtk + achievementRow
+            val combined = EquipmentBonus(b.atkBonus + achievementBonus.atkBonus, b.hpBonus + achievementBonus.hpBonus)
+            val prestigeRow = powerOf(level, applyPrestige(combined, prestigeCount)) - fiveRowSum
             return PowerDetailDto(
                 baseAtk = baseAtk,
                 baseHp = 0,
@@ -191,7 +215,8 @@ class EquipmentPowerService(
                 coreAtk = coreAtk,
                 coreHp = 0,
                 corePower = coreAtk,
-                achievement = achievementBonus.atkBonus + hpPowerAlloc[2]
+                achievement = achievementRow,
+                prestige = prestigeRow
             )
         }
 

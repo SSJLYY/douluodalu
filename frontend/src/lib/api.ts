@@ -129,6 +129,15 @@ class ApiClient {
         return this.request<BreakthroughResult>('/api/action/breakthrough', { method: 'POST' });
     }
 
+    /**
+     * 转生（神位传承）：门槛 Lv.50（后端 GameBalance.PRESTIGE_MIN_LEVEL）。
+     * 等级不足时也是 200 + success:false（照 breakthrough 惯例，message 说明门槛）；
+     * 成功：等级回 1、金币/魂力清零、已装备魂环/魂骨卸回背包，其余（装备背包/天赋/成就/塔/推图/图鉴/Boss币）保留。
+     */
+    async prestige() {
+        return this.request<PrestigeResult>('/api/action/prestige', { method: 'POST' });
+    }
+
     async battle() {
         return this.request<BattleResult>('/api/action/battle', { method: 'POST' });
     }
@@ -372,7 +381,7 @@ export interface GameState {
     /**
      * 对应后端 PowerDetailDto（任务#23）。
      * 后端保证：ringAtk+boneAtk+coreAtk == 攻击加成总值、ringHp+boneHp == 生命加成总值、
-     * 四行 power* 求和 == power（后端补 achievement 字段后为五行：+ achievement）。
+     * 四行 power* 求和 == power（后端补 achievement/prestige 字段后为五行/六行：+ achievement + prestige）。
      * 魂核只加攻击（coreHp=0），玩家模型无基础生命（baseHp=0）。
      */
 export interface PowerDetail {
@@ -390,6 +399,8 @@ export interface PowerDetail {
     corePower: number;
     /** 成就属性加成折算战力（第 5 行）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量：base+ring+core+bone+achievement == power */
     achievement?: number;
+    /** 转生加成折算战力（第 6 行，每转全属性+10% 的折算）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：base+ring+core+bone+achievement+prestige == power */
+    prestige?: number;
 }
 
 /** 成就属性奖励（Achievement.rewards）。matk/pdef/mdef/critRate/critDmg 后端暂未生效，前端只展示 hp/atk */
@@ -550,6 +561,13 @@ export interface CultivateResult {
 export interface BreakthroughResult {
     success: boolean;
     newLevel: number;
+    message: string;
+}
+
+/** POST /api/action/prestige 响应：等级不足时也是 200 + success:false（message 说明门槛），前端只透传 message */
+export interface PrestigeResult {
+    success: boolean;
+    prestigeCount: number;
     message: string;
 }
 

@@ -32,6 +32,10 @@ import kotlin.random.Random
  *   - dailyIncome()          签到（CHECK_IN_REWARDS 7 日循环）+ 每日任务（DAILY_QUESTS 全清上界假设），改动需同步
  *   - achievementBonusOf()   成就属性加成（调用生产纯函数 AchievementService.progressOf +
  *                            EquipmentPowerService.achievementBonus，按镜像玩家状态算已解锁集合）
+ *   - prestige/doPrestige()  转生镜像（GameService.prestige + GameBalance.prestigeMultiplier）：
+ *                            breakthroughAll 达到 PRESTIGE_MIN_LEVEL 即转生——level/gold/soulPower 清零、
+ *                            stage 回 1、环骨卸回背包（魂核保留）、towerFloor/mapId 保留；
+ *                            收入与属性按双口径 ×(1+转数×0.1)，改动需同步
  * 平衡常量直接引用 GameBalance（单一事实来源），但公式结构如有改动需同步本文件。
  *
  * 断言刻意只放软性的健康检查（跑通、数量级不离谱）；主要产出是根目录
@@ -62,6 +66,7 @@ class LongRunSimulationTest {
         var sellGold = 0L; var bossCoins = 0L
         var dropsGained = 0L; var dropsLost = 0L
         var breakthroughs = 0
+        var prestiges = 0
         // 签到+任务（每日固定收入镜像，经济占比核算用）
         var checkInGold = 0L; var questGold = 0L
         var checkInQuestBossCoin = 0L; var checkInQuestSoulPower = 0L
@@ -126,58 +131,94 @@ class LongRunSimulationTest {
         var offlineBattleWins = 0L       // 离线收益折算的 totalBattleWins
         var offlineWastedSeconds = 0L    // 因 12h 上限被截断的离线秒数
         var totalBattleWins = 0L         // 镜像 profile.totalBattleWins（战斗胜 + 塔胜 + 离线折算，成就 BATTLE 口径）
+        var prestigeCount = 0            // 镜像 profile.prestigeCount（talentPoints 不建模：对属性/收入曲线无反馈）
 
-        /** 成就属性加成（SimPlayer 不穿装 → 环数按 0 计；prestige 无玩法恒 0） */
-        fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, 0, 0)
+        /** 成就属性加成（SimPlayer 不穿装 → 环数按 0 计；prestigeCount 参与成就解锁口径） */
+        fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, 0, prestigeCount)
 
         private fun rndLong(bound: Long): Long = if (bound <= 0) 0 else rng.nextLong(bound)
         private fun rndInt(bound: Int): Int = if (bound <= 0) 0 else rng.nextInt(bound)
 
-        // ---- 公式镜像自 GameService.cultivate ----
+        // ---- 转生倍率镜像（GameService.scaledBaseAtk/scaledBaseMaxHp 同源：基础部分 ×倍率，加成部分已在 bonusFor 侧乘过）----
+        private fun scaledBaseAtk(): Long {
+            val base = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
+            return if (prestigeCount <= 0) base else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
+        }
+        private fun scaledBaseMaxHp(): Long {
+            val base = getMaxHp()
+            return if (prestigeCount <= 0) base else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
+        }
+
+        // ---- 公式镜像自 GameService.cultivate（转生倍率：掷点后 ×(1+转数×0.1)）----
         fun cultivate() {
             val baseGain = GameBalance.CULTIVATE_BASE_GAIN + level * GameBalance.CULTIVATE_LEVEL_GAIN_FACTOR
-            soulPower += baseGain + rndLong(baseGain / GameBalance.CULTIVATE_RANDOM_DIVISOR)
+            soulPower += ((baseGain + rndLong(baseGain / GameBalance.CULTIVATE_RANDOM_DIVISOR)) *
+                    GameBalance.prestigeMultiplier(prestigeCount)).toLong()
         }
 
         // ---- 公式镜像自 GameService.getBreakthroughCost / breakthrough ----
         fun breakthroughCost(l: Int): Long = (120.0 * Math.pow(l.toDouble(), 1.55)).toLong()
 
-        /** autoBreakthrough=true 的客户端行为：魂力够就一直点。返回突破次数 */
-        fun breakthroughAll(): Int {
+        /**
+         * autoBreakthrough=true 的客户端行为：魂力够就一直点；达到转生门槛即转生
+         * （转生清空魂力 → 循环自然终止）。prestigeEnabled=false 为对照组（转生镜像落地前行为）。
+         * 返回突破次数。
+         */
+        fun breakthroughAll(s: DayStats, prestigeEnabled: Boolean = true): Int {
             var n = 0
             while (n < 100_000 && soulPower >= breakthroughCost(level)) {
                 soulPower -= breakthroughCost(level)
                 level += 1
                 n++
+                // 转生镜像（GameService.prestige 玩家策略：达标即转）：门槛读 GameBalance.PRESTIGE_MIN_LEVEL
+                if (prestigeEnabled && level >= GameBalance.PRESTIGE_MIN_LEVEL) {
+                    doPrestige()
+                    s.prestiges += 1
+                    break
+                }
             }
             return n
         }
 
+        /** 转生数据镜像（GameService.prestige 逐项对照；SimPlayer 无装备，卸装部分为空操作） */
+        fun doPrestige() {
+            prestigeCount += 1
+            level = 1
+            gold = 0
+            soulPower = 0                    // 防存量魂力秒升回原等级（shared doPrestige 同款清零）
+            stage = 1                        // 镜像生产：保留地图、从第 1 关重新推
+            hp = 50L * 1 + 100L              // 镜像生产 currentHp = getMaxHp(1)
+            // towerFloor/currentMapId/codexKills/bossCoin 保留；talentPoints+1 不建模（无数值反馈）
+        }
+
         // ---- battle 镜像：直接调用生产纯函数 GameService.monsterStats/resolveBattle（P7 修复后同源）----
         fun battle(s: DayStats) {
-            val ach = achBonus()
+            // 镜像 bonusFor(userId, level, prestigeCount)：装备(0)+成就 合计 ×转生倍率
+            val ach = EquipmentPowerService.applyPrestige(achBonus(), prestigeCount)
             val oldMap = mapId
             val oldStage = stage          // 生产代码掉落/奖励均用战前快照
             val (monsterHp, monsterAtk) = GameService.monsterStats(oldMap, oldStage)
             // 画像不模拟穿装 → 装备攻击加成恒为 0（P7 修复效果在报告「已修复项」中说明）；
-            // 成就 hp/atk 加成按已解锁集合并入（与生产 bonusFor 口径一致）
-            val playerAtk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL + ach.atkBonus
-            val maxHp = getMaxHp() + ach.hpBonus
+            // 成就 hp/atk 加成按已解锁集合并入（与生产 bonusFor 口径一致，含转生倍率）
+            val playerAtk = scaledBaseAtk() + ach.atkBonus
+            val maxHp = scaledBaseMaxHp() + ach.hpBonus
             val outcome = GameService.resolveBattle(
                 playerAtk, hp, monsterHp, monsterAtk, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
             if (!outcome.won) {                                                // 30 回合未杀 → 败
                 s.battleLosses++
-                hp = maxHp                                                     // 死亡回满血（含成就生命加成）
+                hp = maxHp                                                     // 死亡回满血（含成就生命加成×倍率）
                 stage = 1                                                       // 退回第 1 关
                 return
             }
             s.battleWins++
             totalBattleWins++
-            val goldGained = GameBalance.WIN_GOLD_BASE + oldMap * GameBalance.WIN_GOLD_PER_MAP +
-                    oldStage * GameBalance.WIN_GOLD_PER_STAGE
-            val expGained = GameBalance.WIN_EXP_BASE + oldMap * GameBalance.WIN_EXP_PER_MAP +
-                    oldStage * GameBalance.WIN_EXP_PER_STAGE
+            // 转生倍率镜像（GameService.battle：胜利产出 ×(1+转数×0.1)）
+            val mult = GameBalance.prestigeMultiplier(prestigeCount)
+            val goldGained = ((GameBalance.WIN_GOLD_BASE + oldMap * GameBalance.WIN_GOLD_PER_MAP +
+                    oldStage * GameBalance.WIN_GOLD_PER_STAGE) * mult).toLong()
+            val expGained = ((GameBalance.WIN_EXP_BASE + oldMap * GameBalance.WIN_EXP_PER_MAP +
+                    oldStage * GameBalance.WIN_EXP_PER_STAGE) * mult).toLong()
             gold += goldGained; s.battleGold += goldGained
             soulPower += expGained
             hp = outcome.playerHpLeft.coerceAtLeast(1)                          // HP 跨场次保留
@@ -199,15 +240,18 @@ class LongRunSimulationTest {
 
         // ---- 塔镜像：胜率直接调用生产纯函数 EquipmentPowerService.towerWinChance（P2+P7 修复后同源）----
         fun tower(s: DayStats) {
-            val power = EquipmentPowerService.powerOf(level, achBonus())
+            // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就合计 ×转生倍率）
+            val power = EquipmentPowerService.powerOf(level, EquipmentPowerService.applyPrestige(achBonus(), prestigeCount))
             val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
             if (!won) { s.towerLosses++; return }
             s.towerWins++
             totalBattleWins++                                                  // 生产 towerBattle：胜场 +1
             val towerLevel = towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
-            val goldGained = GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL
+            // 转生倍率镜像（GameService.towerBattle：塔胜产出 ×(1+转数×0.1)）
+            val mult = GameBalance.prestigeMultiplier(prestigeCount)
+            val goldGained = ((GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL) * mult).toLong()
             gold += goldGained; s.towerGold += goldGained
-            soulPower += GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL
+            soulPower += ((GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL) * mult).toLong()
             if (rng.nextDouble() < GameBalance.TOWER_BOSS_COIN_CHANCE) { bossCoin += 1; s.bossCoins += 1 }
             towerFloor = min(GameBalance.TOWER_MAX_FLOOR, towerFloor + 1)
             if (rng.nextDouble() < GameBalance.TOWER_DROP_CHANCE) {
@@ -218,7 +262,7 @@ class LongRunSimulationTest {
             }
         }
 
-        // ---- 公式镜像自 GameService.claimOfflineReward（P1 修复：按小时计费 + 12h 截断）----
+        // ---- 公式镜像自 GameService.claimOfflineReward（P1 修复：按小时计费 + 12h 截断；转生倍率产出）----
         fun claimOffline(nowHours: Double, s: DayStats) {
             val offlineSeconds = ((nowHours - lastLogoutHours) * 3600).toLong().coerceAtLeast(0)
             lastLogoutHours = nowHours
@@ -226,10 +270,11 @@ class LongRunSimulationTest {
             offlineWastedSeconds += offlineSeconds - eff
             if (eff < 60) return
             val effHours = eff / 3600.0
+            val mult = GameBalance.prestigeMultiplier(prestigeCount)
             val goldPerHour = (GameBalance.OFFLINE_GOLD_BASE + level * GameBalance.OFFLINE_GOLD_PER_LEVEL) *
-                    GameBalance.OFFLINE_EFFICIENCY
+                    GameBalance.OFFLINE_EFFICIENCY * mult
             val expPerHour = (GameBalance.OFFLINE_EXP_BASE + level * GameBalance.OFFLINE_EXP_PER_LEVEL) *
-                    GameBalance.OFFLINE_EFFICIENCY
+                    GameBalance.OFFLINE_EFFICIENCY * mult
             val goldGained = (goldPerHour * effHours).toLong()
             gold += goldGained; s.offlineGold += goldGained
             val expGained = (expPerHour * effHours).toLong()
@@ -268,6 +313,7 @@ class LongRunSimulationTest {
         val level: Int, val gold: Long, val soulPower: Long, val bossCoin: Long,
         val mapId: Int, val stage: Int, val towerFloor: Int,
         val bagCount: Int, val capacity: Int, val stuckStreak: Int,
+        val prestigeCount: Int = 0,
     )
 
     private class SimOutcome(
@@ -309,7 +355,7 @@ class LongRunSimulationTest {
      * 每次登录：领离线 → 修炼 8 次 → 突破到魂力不足 → 战斗(6/8/6 次) + 魂塔(5/5/8 次) →
      * 整理背包（卖低质保 5 格）→ 金币充裕即买 3000 金币的背包扩展券（至 80 格）。
      */
-    private fun run(days: Int, seed: Long): SimOutcome {
+    private fun run(days: Int, seed: Long, prestigeEnabled: Boolean = true): SimOutcome {
         val p = SimPlayer(seed)
         val rows = ArrayList<DayRow>(days)
         var gained = 0L
@@ -329,7 +375,7 @@ class LongRunSimulationTest {
                 val t = (d - 1) * 24.0 + loginHours[i]
                 p.claimOffline(t, s)
                 repeat(8) { p.cultivate() }
-                s.breakthroughs += p.breakthroughAll()
+                s.breakthroughs += p.breakthroughAll(s, prestigeEnabled)
                 repeat(battlesPerSession[i]) { p.battle(s) }
                 repeat(towersPerSession[i]) { p.tower(s) }
                 s.sellGold += p.sellJunk()
@@ -339,7 +385,7 @@ class LongRunSimulationTest {
             // "突破卡点"定义：当日一次突破都没成功
             stuckStreak = if (s.breakthroughs == 0) stuckStreak + 1 else 0
             rows.add(DayRow(d, s, p.level, p.gold, p.soulPower, p.bossCoin,
-                p.mapId, p.stage, p.towerFloor, p.items.size, p.capacity, stuckStreak))
+                p.mapId, p.stage, p.towerFloor, p.items.size, p.capacity, stuckStreak, p.prestigeCount))
         }
         return SimOutcome(rows, p.dropLostTotal, gained, p.offlineWastedSeconds / 3600.0)
     }
@@ -405,8 +451,9 @@ class LongRunSimulationTest {
         var firstRejectDay = 0; var firstRejectMap = -1; var firstRejectLevel = 0; var firstRejectLoad = 0L; var firstRejectYear = -1
         var rejectsToday = 0
         var totalBattleWins = 0L         // 镜像 profile.totalBattleWins（战斗胜 + 塔胜 + 离线折算，成就 BATTLE 口径）
-        /** 成就属性加成（SOUL_RING 口径 = 已装备槽位数；prestige 无玩法恒 0） */
-        fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, slotsFilled(), 0)
+        var prestigeCount = 0            // 镜像 profile.prestigeCount（talentPoints 不建模：对属性/收入曲线无反馈）
+        /** 成就属性加成（SOUL_RING 口径 = 已装备槽位数；prestigeCount 参与成就解锁口径） */
+        fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, slotsFilled(), prestigeCount)
         /** 成功穿上的最高年份档位随时间的演进：档位 y → 首次穿上该档位环的天 */
         val firstEquipDayByYear = mutableMapOf<Int, Int>()
         var currentDay = 0
@@ -496,22 +543,56 @@ class LongRunSimulationTest {
             }
         }
 
-        // ---- 以下与 SimPlayer 同源镜像（cultivate/breakthrough/offline/sell/expand）----
+        // ---- 以下与 SimPlayer 同源镜像（cultivate/breakthrough/prestige/offline/sell/expand）----
+        // ---- 转生倍率镜像（GameService.scaledBaseAtk/scaledBaseMaxHp 同源）----
+        private fun scaledBaseAtk(): Long {
+            val base = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
+            return if (prestigeCount <= 0) base else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
+        }
+        private fun scaledBaseMaxHp(): Long {
+            val base = getMaxHp(level)
+            return if (prestigeCount <= 0) base else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
+        }
+
         fun cultivate() {
             val baseGain = GameBalance.CULTIVATE_BASE_GAIN + level * GameBalance.CULTIVATE_LEVEL_GAIN_FACTOR
-            soulPower += baseGain + rndLong(baseGain / GameBalance.CULTIVATE_RANDOM_DIVISOR)
+            soulPower += ((baseGain + rndLong(baseGain / GameBalance.CULTIVATE_RANDOM_DIVISOR)) *
+                    GameBalance.prestigeMultiplier(prestigeCount)).toLong()
         }
 
         fun breakthroughCost(l: Int): Long = (120.0 * Math.pow(l.toDouble(), 1.55)).toLong()
 
-        fun breakthroughAll(): Int {
+        /** 与 SimPlayer 同策略：达标即转生（转生清空魂力 → 循环自然终止）。返回突破次数 */
+        fun breakthroughAll(s: DayStats, prestigeEnabled: Boolean = true): Int {
             var n = 0
             while (n < 100_000 && soulPower >= breakthroughCost(level)) {
                 soulPower -= breakthroughCost(level)
                 level += 1
                 n++
+                if (prestigeEnabled && level >= GameBalance.PRESTIGE_MIN_LEVEL) {
+                    doPrestige()
+                    s.prestiges += 1
+                    break
+                }
             }
             return n
+        }
+
+        /**
+         * 转生数据镜像（GameService.prestige 逐项对照）：环/骨全部卸回背包（与 unequip 同源——
+         * 属性随行回背包， EquipSimPlayer 的 SimItem 即完整属性）、魂核保留已装备；
+         * level/gold/soulPower 清零、stage 回 1、hp 按 Lv.1 回满；towerFloor/mapId 保留。
+         * 卸装后由既有 equipPass 按容量回装（骨/核无负荷校验下个登录即回装，环随容量增长逐步回装）。
+         */
+        fun doPrestige() {
+            prestigeCount += 1
+            level = 1
+            gold = 0
+            soulPower = 0
+            stage = 1
+            hp = 50L * 1 + 100L
+            rings.forEachIndexed { slot, item -> item?.let { rings[slot] = null; bag.add(it) } }
+            bones.forEachIndexed { slot, item -> item?.let { bones[slot] = null; bag.add(it) } }
         }
 
         fun battle(s: DayStats) {
@@ -519,9 +600,13 @@ class LongRunSimulationTest {
             val oldMap = mapId
             val oldStage = stage
             val (monsterHp, monsterAtk) = GameService.monsterStats(oldMap, oldStage)
-            val equip = bonus()
-            val playerAtk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL + equip.atkBonus + ach.atkBonus
-            val maxHp = getMaxHp(level) + equip.hpBonus + ach.hpBonus
+            // 镜像 bonusFor(userId, level, prestigeCount)：装备+成就合计 ×转生倍率
+            val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
+            val equip = EquipmentPowerService.applyPrestige(
+                EquipmentBonus(raw.atkBonus + ach.atkBonus, raw.hpBonus + ach.hpBonus), prestigeCount
+            )
+            val playerAtk = scaledBaseAtk() + equip.atkBonus
+            val maxHp = scaledBaseMaxHp() + equip.hpBonus
             val outcome = GameService.resolveBattle(
                 playerAtk, min(hp, maxHp), monsterHp, monsterAtk, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
@@ -533,10 +618,12 @@ class LongRunSimulationTest {
             }
             s.battleWins++
             totalBattleWins++
-            val goldGained = GameBalance.WIN_GOLD_BASE + oldMap * GameBalance.WIN_GOLD_PER_MAP +
-                    oldStage * GameBalance.WIN_GOLD_PER_STAGE
-            val expGained = GameBalance.WIN_EXP_BASE + oldMap * GameBalance.WIN_EXP_PER_MAP +
-                    oldStage * GameBalance.WIN_EXP_PER_STAGE
+            // 转生倍率镜像（GameService.battle：胜利产出 ×(1+转数×0.1)）
+            val mult = GameBalance.prestigeMultiplier(prestigeCount)
+            val goldGained = ((GameBalance.WIN_GOLD_BASE + oldMap * GameBalance.WIN_GOLD_PER_MAP +
+                    oldStage * GameBalance.WIN_GOLD_PER_STAGE) * mult).toLong()
+            val expGained = ((GameBalance.WIN_EXP_BASE + oldMap * GameBalance.WIN_EXP_PER_MAP +
+                    oldStage * GameBalance.WIN_EXP_PER_STAGE) * mult).toLong()
             gold += goldGained; s.battleGold += goldGained
             soulPower += expGained
             hp = outcome.playerHpLeft.coerceAtLeast(1)
@@ -565,9 +652,11 @@ class LongRunSimulationTest {
 
         fun tower(s: DayStats) {
             val ach = achBonus()
-            val equip = bonus()
+            val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
+            // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就合计 ×转生倍率）
             val power = EquipmentPowerService.powerOf(
-                level, EquipmentBonus(equip.atkBonus + ach.atkBonus, equip.hpBonus + ach.hpBonus)
+                level,
+                EquipmentPowerService.applyPrestige(EquipmentBonus(raw.atkBonus + ach.atkBonus, raw.hpBonus + ach.hpBonus), prestigeCount)
             )
             val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
             rndInt(GameBalance.TOWER_MONSTERS.size) // 镜像 monsterName 抽卡（保持 RNG 流同构）
@@ -576,9 +665,11 @@ class LongRunSimulationTest {
             s.towerWins++
             totalBattleWins++                        // 生产 towerBattle：胜场 +1
             val towerLevel = towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
-            val goldGained = GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL
+            // 转生倍率镜像（GameService.towerBattle：塔胜产出 ×(1+转数×0.1)）
+            val mult = GameBalance.prestigeMultiplier(prestigeCount)
+            val goldGained = ((GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL) * mult).toLong()
             gold += goldGained; s.towerGold += goldGained
-            soulPower += GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL
+            soulPower += ((GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL) * mult).toLong()
             if (rng.nextDouble() < GameBalance.TOWER_BOSS_COIN_CHANCE) { bossCoin += 1; s.bossCoins += 1 }
             towerFloor = min(GameBalance.TOWER_MAX_FLOOR, towerFloor + 1)
             // 掉落判定：nextDouble 无论背包是否满都会消耗（镜像 towerBattle:289 的 `won && nextDouble(...)`），
@@ -616,10 +707,11 @@ class LongRunSimulationTest {
             offlineWastedSeconds += offlineSeconds - eff
             if (eff < 60) return
             val effHours = eff / 3600.0
+            val mult = GameBalance.prestigeMultiplier(prestigeCount)
             val goldPerHour = (GameBalance.OFFLINE_GOLD_BASE + level * GameBalance.OFFLINE_GOLD_PER_LEVEL) *
-                    GameBalance.OFFLINE_EFFICIENCY
+                    GameBalance.OFFLINE_EFFICIENCY * mult
             val expPerHour = (GameBalance.OFFLINE_EXP_BASE + level * GameBalance.OFFLINE_EXP_PER_LEVEL) *
-                    GameBalance.OFFLINE_EFFICIENCY
+                    GameBalance.OFFLINE_EFFICIENCY * mult
             val goldGained = (goldPerHour * effHours).toLong()
             gold += goldGained; s.offlineGold += goldGained
             val expGained = (expPerHour * effHours).toLong()
@@ -654,6 +746,7 @@ class LongRunSimulationTest {
         val rejectsToday: Int, val bagCount: Int, val bagCap: Int, val gold: Long,
         val upgradesToday: Int, val ringDropsToday: Int, val deadRingDropsToday: Int,
         val bagRingsByYear: IntArray,
+        val prestigeCount: Int = 0,
     ) {
         val utilPct: Double get() = if (capacity <= 0) 0.0 else load * 100.0 / capacity
     }
@@ -684,6 +777,7 @@ class LongRunSimulationTest {
         days: Int, seed: Long, enforceLoad: Boolean,
         capacityMult: Long = GameBalance.RING_CAPACITY_ROOT_MULT,
         towerRingYearCap: Int = GameBalance.TOWER_RING_DROP_YEAR_CAP,
+        prestigeEnabled: Boolean = true,
     ): LoadLoopRun {
         val p = EquipSimPlayer(seed, enforceLoad, capacityMult, towerRingYearCap)
         val rows = ArrayList<LoadLoopDay>(days)
@@ -707,7 +801,7 @@ class LongRunSimulationTest {
                 val t = (d - 1) * 24.0 + loginHours[i]
                 p.claimOffline(t, s)
                 repeat(8) { p.cultivate() }
-                s.breakthroughs += p.breakthroughAll()
+                s.breakthroughs += p.breakthroughAll(s, prestigeEnabled)
                 repeat(battlesPerSession[i]) { p.battle(s) }
                 repeat(towersPerSession[i]) { p.tower(s) }
                 p.equipPass()
@@ -728,6 +822,7 @@ class LongRunSimulationTest {
                 upgradesToday = p.upgradesToday, ringDropsToday = p.ringDropsToday,
                 deadRingDropsToday = p.deadRingDropsToday,
                 bagRingsByYear = (0..4).map { y -> bagRings.count { it.year == y } }.toIntArray(),
+                prestigeCount = p.prestigeCount,
             ))
             p.rejectsToday = 0
             p.upgradesToday = 0
@@ -747,6 +842,7 @@ class LongRunSimulationTest {
         val slots: Int, val bagRings: Int, val bagHighTier: Int,
         val deadShareEarly: Double, val deadShareLate: Double,
         val firstRejectDay: Int, val upgradesPerDay: Double, val totalRejects: Long,
+        val prestigeCount: Int = 0, val firstPrestigeDay: Int = 0,
     )
 
     /** 后 60 天（31~90）掉落的魂环中「掉落当时就装不下」的比例 */
@@ -803,10 +899,10 @@ class LongRunSimulationTest {
         appendLine()
         appendLine("### 负荷/容量回路 90 天曲线（主种子 20260914，每 5 天采样）")
         appendLine()
-        appendLine("| 天 | 等级 | 推图 | 已装负荷 | 容量 | 利用率 | 槽位 | 背包环积压(≥2档) | 死环掉落/当日环掉落 | 换装次数 | 塔层 |")
-        appendLine("|---|---|---|---|---|---|---|---|---|---|---|")
+        appendLine("| 天 | 等级 | 转数 | 推图 | 已装负荷 | 容量 | 利用率 | 槽位 | 背包环积压(≥2档) | 死环掉落/当日环掉落 | 换装次数 | 塔层 |")
+        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")
         for (r in load.rowsEvery(5)) {
-            appendLine("| ${r.day} | ${r.level} | ${r.mapId + 1}-${r.stage} | ${eng(r.load)} | ${eng(r.capacity)} " +
+            appendLine("| ${r.day} | ${r.level} | ${r.prestigeCount} | ${r.mapId + 1}-${r.stage} | ${eng(r.load)} | ${eng(r.capacity)} " +
                     "| ${String.format("%.1f", r.utilPct)}% | ${r.slots}/9 | ${r.bagRings} (${r.bagHighTierRings}) " +
                     "| ${r.deadRingDropsToday}/${r.ringDropsToday} | ${r.upgradesToday} | ${r.towerFloor} |")
         }
@@ -867,16 +963,81 @@ class LongRunSimulationTest {
         appendLine()
         appendLine("### 多种子鲁棒性抽查（10 种子 × 90 天，实装组·调参后）")
         appendLine()
-        appendLine("| 种子 | 90天等级 | 推图 | 后期利用率 | 死环率(前30/后60天) | 换装/日 | 拒装/日 | 槽位 | 环积压(≥2档) | 首次拒装 |")
-        appendLine("|---|---|---|---|---|---|---|---|---|---|")
+        appendLine("| 种子 | 90天等级 | 转数(首次转生日) | 推图 | 后期利用率 | 死环率(前30/后60天) | 换装/日 | 拒装/日 | 槽位 | 环积压(≥2档) | 首次拒装 |")
+        appendLine("|---|---|---|---|---|---|---|---|---|---|---|")
         for (s in seeds) {
-            appendLine("| ${s.seed} | ${s.level} | ${s.mapId + 1} | ${String.format("%.1f", s.utilLate)}% " +
+            appendLine("| ${s.seed} | ${s.level} | ${s.prestigeCount} (第 ${s.firstPrestigeDay} 天) | ${s.mapId + 1} | ${String.format("%.1f", s.utilLate)}% " +
                     "| ${String.format("%.1f", s.deadShareEarly)}% / ${String.format("%.1f", s.deadShareLate)}% " +
                     "| ${String.format("%.2f", s.upgradesPerDay)} | ${String.format("%.1f", s.totalRejects / 90.0)} " +
                     "| ${s.slots}/9 | ${s.bagRings} (${s.bagHighTier}) | 第 ${s.firstRejectDay} 天 |")
         }
         appendLine()
-        appendLine("- 10 种子全部 9/9 满槽、后期利用率 66%~73% 带内、后 60 天死环率 ≤2%、换装 treadmill 不死亡，无恒卡/无失控发散。")
+        appendLine("- 10 种子汇总（转生开启）：满槽 ${seeds.count { it.slots == 9 }}/10、" +
+                "后期利用率 ${String.format("%.1f", seeds.minOf { it.utilLate })}%~${String.format("%.1f", seeds.maxOf { it.utilLate })}%" +
+                "、后 60 天死环率最高 ${String.format("%.1f", seeds.maxOf { it.deadShareLate })}%" +
+                "、累计转生 ${seeds.sumOf { it.prestigeCount }} 次（全部种子首次转生日 ${seeds.minOf { it.firstPrestigeDay }}~${seeds.maxOf { it.firstPrestigeDay }} 天）。")
+    }
+
+    /**
+     * 转生事件复盘（转生镜像落地后新增章节）：同种子「关闭转生 vs 达标即转」对照，
+     * 量化转生对等级成长、经济、负荷回路的扰动，供主线评估门槛/收益校准。
+     */
+    private fun buildPrestigeSection(
+        r90: SimOutcome, r90Base: SimOutcome, load90: LoadLoopRun, load90Base: LoadLoopRun
+    ): String = buildString {
+        val f = r90.final
+        val fb = r90Base.final
+        val fl = load90.final
+        val flb = load90Base.final
+        val prestigeDays = r90.rows.mapIndexedNotNull { i, r ->
+            if (r.stats.prestiges > 0) r.day else null
+        }
+        val firstPrestigeDay = prestigeDays.firstOrNull() ?: 0
+        val loadPrestigeDays = load90.rows.mapIndexedNotNull { i, r ->
+            val prev = if (i == 0) 0 else load90.rows[i - 1].prestigeCount
+            if (r.prestigeCount > prev) r.day else null
+        }
+        val loadFirstPrestigeDay = loadPrestigeDays.firstOrNull() ?: 0
+        val utilLateBase = load90Base.rows.filter { it.day > 60 }.averageOf { it.utilPct }
+        val utilLate = load90.rows.filter { it.day > 60 }.averageOf { it.utilPct }
+        appendLine()
+        appendLine("## 转生事件复盘（转生镜像新增）")
+        appendLine()
+        appendLine("### 机制镜像（生产 GameService.prestige + GameBalance.prestigeMultiplier）")
+        appendLine("- 触发策略：画像在 breakthroughAll 中达到 Lv.${GameBalance.PRESTIGE_MIN_LEVEL} 即转生（生产为玩家手动端点 POST /api/action/prestige，")
+        appendLine("  门槛不足返回 success=false 不消耗）。画像取「达标即转」的激进策略，压测重置回爬曲线的最坏情形。")
+        appendLine("- 重置（文档 §15.2 + 防刷修正）：level=1、gold=0、soulPower=0（防存量魂力秒升回原等级——零成本刷属性漏洞）、")
+        appendLine("  推图关卡回 1、已装备魂环/魂骨卸回背包（魂核保留）；保留：towerFloor/currentMapId（推图进度）、codexKills、")
+        appendLine("  bossCoin、成就、天赋、背包；prestigeCount+1、talentPoints+1（天赋点不建模，对属性/收入曲线无反馈）。")
+        appendLine("- 收益（双口径）：修炼/战斗胜/塔胜/离线四处产出与基础 atk/maxHp 及装备+成就加成 ×(1+转数×10%)；")
+        appendLine("  签到/任务固定表不乘（留存钩子与交易口径不膨胀）。")
+        appendLine()
+        appendLine("### 零装备基线（SimPlayer 主种子 20260914，同 RNG 对照）")
+        appendLine()
+        appendLine("| 指标 | 转生关闭 | 转生开启（达标即转） |")
+        appendLine("|---|---|---|")
+        appendLine("| 90 天末等级 | ${fb.level} | ${f.level} |")
+        appendLine("| 累计转生次数 | 0 | ${f.prestigeCount}（首次第 $firstPrestigeDay 天${if (prestigeDays.size > 1) "，全部转生日：$prestigeDays" else ""}） |")
+        appendLine("| 90 天末推图进度 | ${fb.mapId + 1}-${fb.stage} | ${f.mapId + 1}-${f.stage} |")
+        appendLine("| 90 天末塔层 | ${fb.towerFloor} | ${f.towerFloor} |")
+        appendLine("| 90 天金币存量 | ${eng(fb.gold)} | ${eng(f.gold)} |")
+        appendLine("| 近10日日均总收入(金币) | ${String.format("%.3e", r90Base.avgDailyTotalGold(10))} | ${String.format("%.3e", r90.avgDailyTotalGold(10))} |")
+        appendLine()
+        appendLine("### 穿装画像（EquipSimPlayer 实装组主种子，同 RNG 对照）")
+        appendLine()
+        appendLine("| 指标 | 转生关闭 | 转生开启（达标即转） |")
+        appendLine("|---|---|---|")
+        appendLine("| 90 天末等级 | ${flb.level} | ${fl.level} |")
+        appendLine("| 累计转生次数 | 0 | ${fl.prestigeCount}（首次第 $loadFirstPrestigeDay 天${if (loadPrestigeDays.size > 1) "，全部转生日：$loadPrestigeDays" else ""}） |")
+        appendLine("| 90 天末槽位 | ${flb.slots}/9 | ${fl.slots}/9 |")
+        appendLine("| 后期(61~90天)容量利用率 | ${String.format("%.1f", utilLateBase)}% | ${String.format("%.1f", utilLate)}% |")
+        appendLine("| 90 天末推图进度 | ${flb.mapId + 1}-${flb.stage} | ${fl.mapId + 1}-${fl.stage} |")
+        appendLine()
+        appendLine("### 解读")
+        appendLine("- 转生后收入 ×(1+转数×10%) 与推图/塔层保留使回爬快于首爬；等级曲线呈锯齿形（到 50 即清零重爬），")
+        appendLine("  90 天末等级不再单调、以「当前回爬进度」为准。")
+        appendLine("- 穿装画像转生后容量（根骨×乘数，按当前 atk/maxHp）跌至 Lv.1 水平：魂环全部暂不可装（利用率骤降是")
+        appendLine("  转生的预期形态，非负荷系统退化）；骨/核无负荷校验、下个登录即回装，环随等级回爬逐步回装。")
     }
 
     private fun eng(v: Long): String = when {
@@ -888,7 +1049,7 @@ class LongRunSimulationTest {
     }
 
     private fun fmtRow(r: DayRow): String =
-        "| ${r.day} | ${r.level} | ${eng(r.gold)} | ${eng(r.soulPower)} | ${eng(r.bossCoin)} " +
+        "| ${r.day} | ${r.level} | ${r.prestigeCount} | ${eng(r.gold)} | ${eng(r.soulPower)} | ${eng(r.bossCoin)} " +
                 "| ${r.mapId + 1}-${r.stage} | ${r.towerFloor} | ${r.bagCount}/${r.capacity} " +
                 "| ${eng(r.stats.offlineGold)} | ${eng(r.stats.battleGold + r.stats.towerGold + r.stats.sellGold)} " +
                 "| ${eng(r.stats.checkInGold + r.stats.questGold)} " +
@@ -915,7 +1076,9 @@ class LongRunSimulationTest {
         appendLine("  towerFloor/已装备环数/prestige）经生产纯函数解锁并计入战斗 atk/hp（只兑现 hp/atk 口径）。")
         appendLine("- 镜像范围：cultivate / breakthrough(120·L^1.55) / battle（调用生产纯函数 monsterStats+resolveBattle，")
         appendLine("  HP 跨场次持久化、败退回到 1 关）/ towerBattle（调用生产纯函数 towerWinChance）/")
-        appendLine("  claimOfflineReward（12h 截断、P1 修复后按**小时**计费）/ 掉落与背包容量 / 扩展券 / 签到+任务+成就。")
+        appendLine("  claimOfflineReward（12h 截断、P1 修复后按**小时**计费）/ 掉落与背包容量 / 扩展券 / 签到+任务+成就 /")
+        appendLine("  转生（达到 PRESTIGE_MIN_LEVEL=${GameBalance.PRESTIGE_MIN_LEVEL} 即转生：level/gold/soulPower 清零、stage 回 1、")
+        appendLine("  环骨卸回背包，收入与属性 ×(1+转数×0.1)，详见文末《转生事件复盘》。")
         appendLine("- 未建模：宗门 Boss、天赋、穿装行为——画像只捡/卖装备不穿戴，故装备战力加成按 0 计")
         appendLine("  （装备对战力的贡献已由 EquipmentPowerServiceTest 单测覆盖，见「已修复项」P7；成就加成不属装备，照常计入）。")
         appendLine("  **注（任务#22）**：上文各节维持「零装备基线」口径；穿装画像 + 魂环负荷/容量反馈回路的专项仿真")
@@ -926,6 +1089,7 @@ class LongRunSimulationTest {
         appendLine("| 指标 | 第 30 天 | 第 90 天 |")
         appendLine("|---|---|---|")
         appendLine("| 等级 | ${f30.level} | ${f90.level} |")
+        appendLine("| 累计转生次数 | ${f30.prestigeCount} | ${f90.prestigeCount} |")
         appendLine("| 金币存量 | ${f30.gold} | ${f90.gold} |")
         appendLine("| 近10日日均总收入(金币) | ${String.format("%.3e", r30.avgDailyTotalGold(10))} | ${String.format("%.3e", r90.avgDailyTotalGold(10))} |")
         appendLine("| 近10日日均\"主动玩法\"收入(战斗+塔+卖装备) | ${String.format("%.0f", r30.avgDailyActiveGold(10))} | ${String.format("%.0f", r90.avgDailyActiveGold(10))} |")
@@ -1007,8 +1171,8 @@ class LongRunSimulationTest {
         appendLine()
         appendLine("推图列 = 地图-关卡（8-15 表示 7 号图\"杀戮之都外域\"满星后原地驻留）；金币等大额用 k/M/B 缩写。")
         appendLine()
-        appendLine("| 天 | 等级 | 金币存量 | 魂力 | Boss币 | 推图 | 塔层 | 背包 | 当日离线金 | 当日主动金 | 当日签到+任务金 | 满包丢掉落 | 连续未突破天数 |")
-        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        appendLine("| 天 | 等级 | 转数 | 金币存量 | 魂力 | Boss币 | 推图 | 塔层 | 背包 | 当日离线金 | 当日主动金 | 当日签到+任务金 | 满包丢掉落 | 连续未突破天数 |")
+        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         r90.rows.forEach { appendLine(fmtRow(it)) }
         appendLine()
         appendLine("> 收入/属性分项来源说明（每日固定收入 + 成就属性加成镜像，与生产端同源）：")
@@ -1062,9 +1226,12 @@ class LongRunSimulationTest {
         val start = System.currentTimeMillis()
         val r30 = run(days = 30, seed = 20260914L)
         val r90 = run(days = 90, seed = 20260914L)
+        // 转生镜像对照组：同一 RNG 种子关闭转生，量化转生对等级/经济/负荷曲线的影响（报告对比表用）
+        val r90Base = run(days = 90, seed = 20260914L, prestigeEnabled = false)
 
         // 任务#22：负荷回路 —— 主种子（实装/对照）+ 10 种子鲁棒性抽查
         val load90 = runLoadLoop(90, 20260914L, enforceLoad = true)
+        val load90Base = runLoadLoop(90, 20260914L, enforceLoad = true, prestigeEnabled = false)
         val free90 = runLoadLoop(90, 20260914L, enforceLoad = false)
         val seeds = (0 until 10).map { i ->
             val seed = 20260914L + i * 1009L
@@ -1077,6 +1244,8 @@ class LongRunSimulationTest {
                 firstRejectDay = run.firstRejectDay,
                 upgradesPerDay = run.rows.filter { it.day > 60 }.sumOf { it.upgradesToday } / 30.0,
                 totalRejects = run.totalRejects,
+                prestigeCount = run.final.prestigeCount,
+                firstPrestigeDay = run.rows.firstOrNull { it.prestigeCount > 0 }?.day ?: 0,
             )
         }
         val elapsed = System.currentTimeMillis() - start
@@ -1106,7 +1275,10 @@ class LongRunSimulationTest {
         val userDir = File(System.getProperty("user.dir"))
         val root = if (userDir.name.equals("backend", ignoreCase = true)) userDir.parentFile else userDir
         val reportFile = File(root, "数值仿真报告-90天.md")
-        reportFile.writeText(buildReport(r30, r90, elapsed) + "\n" + buildLoadLoopSection(load90, free90, r90, seeds))
+        reportFile.writeText(
+            buildReport(r30, r90, elapsed) + "\n" + buildLoadLoopSection(load90, free90, r90, seeds) +
+                    "\n" + buildPrestigeSection(r90, r90Base, load90, load90Base)
+        )
         assertTrue(reportFile.exists())
     }
 }

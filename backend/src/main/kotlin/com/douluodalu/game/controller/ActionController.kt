@@ -28,6 +28,13 @@ class ActionController(
         return ResponseEntity.ok(gameService.breakthrough(userId))
     }
 
+    @Operation(summary = "转生", description = "Lv.50 达标后重置等级，换取永久属性倍率（+10%/转）与 1 天赋点")
+    @PostMapping("/prestige")
+    fun prestige(auth: Authentication): ResponseEntity<PrestigeResponse> {
+        val userId = auth.principal as Long
+        return ResponseEntity.ok(gameService.prestige(userId))
+    }
+
     @Operation(summary = "战斗", description = "与当前关卡怪物战斗")
     @PostMapping("/battle")
     fun battle(auth: Authentication): ResponseEntity<BattleResponse> {
