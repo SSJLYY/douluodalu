@@ -306,6 +306,16 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 6. **仿真收敛锁原样通过**：主画像技能正向 buff——90 天推图 7-2→**8-10**（首次抵达 8 号图终局）、金币 +19%、等级 29→30；负荷回路画像（无武魂）逐位不变。
 7. **遗留**：BERSERK 类型无实现锚点（副作用机制不存在）；HEAL 与跨场次 currentHp 持久化的长线影响未专项仿真；怪物技能（v1 明确不做）；README 特性清单本轮已刷新至 20 轮现状。
 
+## 📅 第二十一轮：成熟度打磨——补签/成就补齐/指标面板（2026-09-26）
+
+1. **补签机制（签到闭环）**：`POST /api/game/checkin/makeup`——只能补「昨天」这一天，花费 500 金，**只修复连签不补发当日奖励**（定价与语义为实现决策，注释留档）；streak 基准=昨天前最后一条记录快照+1；uk_user_date 防重 + DIVE 归一（穿过事务边界时静默 return 会炸 UnexpectedRollbackException，故归一为 400 而非 200+success=false——实现注释留档）；`CheckInStatus.makeupAvailable` 后端精确计算三态（从未签到/断签/昨日已签）。已知边界：先签今天再补昨日时，今天行快照不回改，前向 streak 不修复（「只能补昨天」的固有语义，留档）。
+2. **成就补齐 16→21**（设计文档 §10 全表对齐）：+cult_150 神王降临 / battle_200 千战精英 / battle_1000 万战传说 / tower_100 杀戮之王 / prestige_5 五世轮回——全部走现有五类口径管道（前端零改动自动渲染）；文档「DEF+n」统一落 pdef+mdef 双防（多数既有口径）。
+3. **业务计数器（7 个，名字逐字契约）**：`douluo.battle.total`(outcome tag)/`douluo.checkin.total`/`douluo.checkin.makeup.total`/`douluo.awaken.total`(kind tag)/`douluo.prestige.total`/`douluo.school.choose.total`/`douluo.quest.claim.total`(questId tag)——MeterRegistry 构造注入，成功出口 increment；Prometheus 端点实测可见。
+4. **运维栈（ops/ 新目录）**：prometheus.yml + alerts.yml（5 条告警：InstanceDown/HighErrorRate/HighLatencyP99/JvmMemoryPressure/DbPoolExhausted，各带阈值理由）；Grafana 11 面板手写仪表盘 + 自动 provisioning（业务速率/资源/JVM/连接池）；backup.sh（mysqldump+gzip+保留期，bash -n 过）；docker-compose 增 prometheus/grafana 服务（`profiles: ["monitoring"]` 隔离，UI 端口绑 127.0.0.1）；DEPLOY.md 补「监控与备份」。本机无 Docker，compose 用 PyYAML 模拟校验（诚实沿用「未实跑」声明）。
+5. **死数据清理（谨慎模式）**：GameModels 删 12 个零引用符号（MapStats/MapData/RealmData/EquipAffix/TowerData 等，344→199 行，头部留档去向）；towerBossKills 列保留+「预留」标注；GameBalance 扫描无零引用项。
+6. **集成验证**：mvn test 基线 226→**247 全绿**；真库冒烟：makeupAvailable 三态/补签扣金连签 1→2→3/21 项成就含 5 新项/计数器进 Prometheus 端点；浏览器 E2E：断签态补签条渲染→点击→扣金 2000→500→按钮消失、成就页 21 行含 5 新项、375px 零溢出、console 0 error。
+7. **遗留**：makeupAvailable 需要的昨日 exists 查询在 signedToday 分支多一次查询（量级可忽略）；备份未实跑恢复演练（脚本逻辑 bash -n 级验证）；监控栈未在真 Docker 实跑（本机无引擎，与第五轮 Docker 化同款诚实声明）。
+
 ---
 
 ## 🔮 后续建议
