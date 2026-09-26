@@ -237,6 +237,16 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 6. **验证**：mvn test 基线 103→**113 全绿**（CheckInServiceTest 9 条含并发兜底/断签/第 7 天回绕 + GameService 组装 1 条；Guild 39 条适配返回类型并补分歧断言）；8090 真库冒烟：首签 200（gold 100 入账）/重复签 400/state.checkIn 全形状含 7 天表/prometheus 匿名 200（108 指标族）/临时宗门 leave transferredTo→disbanded 分歧 ✓；浏览器 E2E（新注册账号）：签到→战斗→回放→宗门页全程 console 0 error、375px 零水平溢出、亮暗双主题截图核对。
 7. **遗留**：无补签机制（断签即重置，先从简）；dev 库新增 r13 系列临时测试用户（含 2 个 level 30 造数用户供宗门测试）；checkIn 不走排行榜缓存故无 @CacheEvict 同步项。
 
+## 📋 第十四轮：每日任务系统 + 塔战回合回放 + 前端测试体系从零到一（2026-09-26）
+
+1. **每日任务（后端）**：V8 迁移 `daily_quest_progress`（`uk_user_date_quest` 唯一键兜底并发首记，quest_date 天然跨天隔离、免定时清理）；5 条固定任务定义入 GameBalance（battle_wins×3 / cultivate×5 / tower×2 / checkin×1 / shop_buy×1，全清 600 金 ≈ 签到 7 日循环的 1/3，Boss 币大奖 2 枚 ≤ 签到第 7 天 10 枚）；5 个成功点挂计数（battle 胜利分支、cultivate、towerBattle 挑战即计、checkIn、shopBuy 唯一成功出口覆盖普通/Boss/限量/宗门 4 入口）——原子条件 UPDATE + DIVE 重试，副路径 try/catch 兜底不击穿主流程；`POST /api/game/quests/claim` 用条件 UPDATE（claimed=0 AND progress>=target）防并发双花；GameStateResponse 尾部 `dailyQuests`（奖励表后端下发，前端零硬编码）。
+2. **塔战回合日志**：塔战本是概率一锤定音（无 HP 模拟），复用普通战斗 `resolveBattle` 纯函数补呈现层——塔怪属性按楼层推导（HP 200+24×层 / ATK 15+2×层，注释写明取自推图曲线均摊），独立种子 Random（userId×1_000_003+楼层，同楼层回放可复现）且放在既有 RNG 掷点之后，**RNG 次序契约零违反**、LongRunSimulationTest 镜像不受影响；日志胜负服从已判定的 won（×1.5 梯度调整怪物属性最多 8 次）；`TowerResponse.battleLog` 默认空表向后兼容，rounds 非空时与日志对齐。
+3. **前端**：`DailyQuestsCard`（progressbar 三值 aria、未完成/领取/✓已领取三态按钮、全清徽标、进度条复用 .dl-hp-bar 零新增 CSS）；`CheckinCard` 提取为独立组件（行为零变化）使可测；塔页复用 `BattleReplay`（battleLog 可选降级）；**主页双顶栏清理**（删内置 header、layout 标题升全称「斗罗大陆·放置传说」、清 unused 解构，loading→loaded 无布局跳变）。
+4. **前端测试体系从零到一**：vitest 3.2.7 + RTL 16 + jsdom + vite-tsconfig-paths（官方 vitest.md 模板；vitest 5 与项目 @types/node ^20 冲突故钉 3.x 兼容线，React 19 必须带 @testing-library/dom peer）；**24 条测试**（api.ts 全路径：409 重放/401 清 token 事件/双错误体兼容/URL+body 断言；BattleReplay fake-timers 步进与自停；CheckinCard/DailyQuestsCard 三态与降级）；CI frontend job 加 `npm test -- --run`。
+5. **集成验证**：mvn test 基线 113→**132 全绿**；真库冒烟：5 条计数线全通、5 任务领奖合计 600金/2Boss币/1000魂力与定义表逐项一致、未达标/已领取/未知任务三文案各归其位；浏览器 E2E（新注册账号）：修炼×5→UI 领取→金币 +60 入账、塔页回放自动播放至自停、375px 零水平溢出、console 0 error。
+6. **修复（集成冒烟抓到）**：claim 对「已知任务当天无进度行」误归因「未知任务」→ 改归「未达标」（未开始 ≠ 未知），单测同步改断言。
+7. **口径决策与遗留**：离线收益的模拟胜场直接累加 totalBattleWins（GameService.claimOfflineReward）但**不计入**战斗任务——参与型任务只认主动战斗，玩家侧「胜场」统计与任务进度会不同步（设计取向，记录在案）；`achievements` 仍为死字段（GameModels.AchievementDefs 无消费，成就系统留作后续）；dev 库新增 r14 系列测试用户。
+
 ---
 
 ## 🔮 后续建议
