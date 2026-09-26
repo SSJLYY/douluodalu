@@ -286,6 +286,14 @@ class ApiClient {
         return this.request<GuildBossRank>('/api/guild/boss/rank');
     }
 
+    /**
+     * 宗门 Boss 周血池状态（GET 照现有无 body 方法惯例）。
+     * 旧后端无此端点（404）：调用方须静默降级（隐藏血条区），不阻塞挑战主功能。
+     */
+    async guildBossStatus() {
+        return this.request<GuildBossStatus>('/api/guild/boss/status');
+    }
+
     async getGuildShopItems() {
         return this.request<ShopItem[]>('/api/guild/shop');
     }
@@ -814,6 +822,22 @@ export interface GuildBossResult {
     bossCoinGained: number;
     item: BackpackItem;
     message: string;
+    /**
+     * 响应尾部血池三字段（新后端）：挑战扣的是全宗门共享周血池，bossHp 为挑战后剩余值，
+     * bossMaxHp 为池容量，killed=true 表示本次挑战击杀了 Boss（击杀者有额外奖励）。
+     * 旧后端缺失（undefined）→ 消费方按存在性容错（不渲染击杀高亮）。
+     */
+    bossMaxHp?: number;
+    killed?: boolean;
+}
+
+/** GET /api/guild/boss/status 响应（JWT，需在宗门，不在宗门 400 由 request 统一抛错）：
+ * bossHp/bossMaxHp 为全宗门共享的周血池（每周一重置重生）；killed=true 本周已被击杀，
+ * 击杀后至下周一期间挑战返回 400「本周 Boss 已被击杀，下周一再来」。 */
+export interface GuildBossStatus {
+    bossHp: number;
+    bossMaxHp: number;
+    killed: boolean;
 }
 
 /** GET /api/guild/boss/rank 单行：weeklyDamage 为该成员本周累计 Boss 伤害（仅 >0 入榜） */

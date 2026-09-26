@@ -183,6 +183,8 @@ object GameBalance {
     const val QUEST_TOWER = "tower"
     const val QUEST_CHECKIN = "checkin"
     const val QUEST_SHOP_BUY = "shop_buy"
+    const val QUEST_GUILD_DONATE = "guild_donate"
+    const val QUEST_BREAKTHROUGH = "breakthrough"
 
     data class DailyQuestDef(
         val id: String,
@@ -200,12 +202,19 @@ object GameBalance {
     //  - bossCoin 仅爬塔任务发 2 枚 ≤ 签到第 7 天大奖 10 枚（爬塔期望 ~0.6 枚/场、
     //    2 次挑战 ≈ 1.2 枚，任务给 2 枚作小额提速），不破坏 bossCoin 定价；
     //  - 魂力按比价 300 金 ≈ 500 魂力（商店魂力精华）折算，≈ 金币 × 5/3。
+    // 第二十三轮追加（第 6/7 条，量级对齐既有表）：
+    //  - guild_donate：宗门捐献 1 次给 150 金（捐献本身把金币转为宗门经验/贡献，
+    //    任务奖励只作参与补贴，取表内 60~200 金区间中位）；
+    //  - breakthrough：突破 2 次给 150 金 + 200 魂力——突破消耗魂力（120·L^1.55），
+    //    奖励按比价返魂力（200 魂力 ≈ 120 金）形成小额回流，金币仍落在既有区间。
     val DAILY_QUESTS = listOf(
         DailyQuestDef(QUEST_BATTLE_WINS, "今日战斗胜利 3 次", target = 3, rewardGold = 200, rewardBossCoin = 0, rewardSoulPower = 330),
         DailyQuestDef(QUEST_CULTIVATE, "修炼 5 次", target = 5, rewardGold = 60, rewardBossCoin = 0, rewardSoulPower = 100),
         DailyQuestDef(QUEST_TOWER, "挑战魂塔 2 次", target = 2, rewardGold = 120, rewardBossCoin = 2, rewardSoulPower = 200),
         DailyQuestDef(QUEST_CHECKIN, "完成今日签到", target = 1, rewardGold = 120, rewardBossCoin = 0, rewardSoulPower = 200),
-        DailyQuestDef(QUEST_SHOP_BUY, "商店购物 1 次", target = 1, rewardGold = 100, rewardBossCoin = 0, rewardSoulPower = 170)
+        DailyQuestDef(QUEST_SHOP_BUY, "商店购物 1 次", target = 1, rewardGold = 100, rewardBossCoin = 0, rewardSoulPower = 170),
+        DailyQuestDef(QUEST_GUILD_DONATE, "宗门捐献 1 次", target = 1, rewardGold = 150, rewardBossCoin = 0, rewardSoulPower = 0),
+        DailyQuestDef(QUEST_BREAKTHROUGH, "境界突破 2 次", target = 2, rewardGold = 150, rewardBossCoin = 0, rewardSoulPower = 200)
     )
 
     /** id → 定义（claim 校验/发奖与 status 合成同源，防止两处数值漂移） */

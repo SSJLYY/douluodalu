@@ -1,11 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import api, { GuildBossRank, GuildBossResult, GuildMemberInfo, GuildSummary, ShopItem } from '@/lib/api';
+import api, { GuildBossRank, GuildBossResult, GuildBossStatus, GuildMemberInfo, GuildSummary, ShopItem } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { BootState, ErrorPanel, EmptyPanel } from '@/components/StateViews';
-import BossRankPanel from '@/components/BossRankPanel';
+import GuildBossPanel from '@/components/GuildBossPanel';
 
 /** ISO-8601 → 本地化「月-日 时:分」；解析失败原样截断，不让坏数据炸渲染 */
 function formatJoinedAt(iso: string): string {
@@ -36,6 +36,8 @@ export default function GuildPage() {
     const [membersError, setMembersError] = useState('');
     // 宗门 Boss 周榜：null = 未加载/加载失败（整块静默不渲染，纯展示功能不阻塞挑战主流程）
     const [bossRank, setBossRank] = useState<GuildBossRank | null>(null);
+    // Boss 周血池状态：null = 未加载/旧后端无 /boss/status 端点（404）/失败 → 血条区隐藏（降级容错，挑战照旧）
+    const [bossStatus, setBossStatus] = useState<GuildBossStatus | null>(null);
 
     const loadMembers = useCallback(async (joined: boolean) => {
         if (!joined) {
@@ -93,6 +95,15 @@ export default function GuildPage() {
         }
     }, []);
 
+    // 血池状态同口径静默降级：旧后端无此端点（404）时置 null → 血条区隐藏、挑战按钮照旧可用
+    const loadBossStatus = useCallback(async () => {
+        try {
+            setBossStatus(await api.guildBossStatus());
+        } catch {
+            setBossStatus(null);
+        }
+    }, []);
+
     useEffect(() => {
         queueMicrotask(() => {
             loadGuilds();
@@ -100,19 +111,21 @@ export default function GuildPage() {
         });
     }, [loadGuilds, loadGuildShop]);
 
-    // 周榜拉取时机①：进入宗门页且确认在宗门内（myGuild 就绪）后拉一次；退出/解散（id 变 null）清空不渲染。
-    // 依赖 id 而非对象引用：loadGuilds 重建 myGuild 对象（捐献/踢人等）不会重复拉榜；
+    // 周榜/血池拉取时机①：进入宗门页且确认在宗门内（myGuild 就绪）后各拉一次；退出/解散（id 变 null）
+    // 清空不渲染。依赖 id 而非对象引用：loadGuilds 重建 myGuild 对象（捐献/踢人等）不会重复拉取；
     // setState 全部走微任务回调（照本页 loadGuilds 惯例），避免 effect 体内同步 setState
     const myGuildId = myGuild?.id ?? null;
     useEffect(() => {
         queueMicrotask(() => {
             if (myGuildId === null) {
                 setBossRank(null);
+                setBossStatus(null);
                 return;
             }
             void loadBossRank();
+            void loadBossStatus();
         });
-    }, [myGuildId, loadBossRank]);
+    }, [myGuildId, loadBossRank, loadBossStatus]);
 
     const handleCreateGuild = () => runAction(
         () => api.createGuild(newGuildName),
@@ -188,6 +201,8 @@ export default function GuildPage() {
             setMessage(`${result.message}，获得 ${result.goldGained} 金币、${result.bossCoinGained} Boss币和 1 件装备`);
             // 周榜拉取时机②：挑战成功后立即刷新，本次伤害即时入榜（失败静默，不影响结果展示）
             void loadBossRank();
+            // 血池时机②：挑战扣的是同一个周血池，成功后同步最新 bossHp/killed（失败静默降级）
+            void loadBossStatus();
         },
         '挑战失败',
     ).then(loadGuilds);
@@ -412,24 +427,16 @@ export default function GuildPage() {
                     </div>
 
                     <div className="bg-gray-800 rounded-lg p-5 border border-gray-600">
-                        <h2 className="text-lg font-semibold mb-3 text-red-400">宗门 Boss</h2>
-                        <p className="text-sm text-gray-200 mb-4">挑战宗门 Boss，可获得金币、Boss币和装备掉落。</p>
-                        <button
-                            onClick={handleChallengeBoss}
-                            disabled={loading}
-                            className="w-full px-4 min-h-11 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded font-medium"
-                        >
-                            挑战 Boss
-                        </button>
-                        {bossResult && (
-                            <div className="mt-3 text-sm text-gray-100">
-                                伤害 {bossResult.damage} / Boss生命 {bossResult.bossHp}
-                            </div>
-                        )}
-                        {/* 本周伤害榜：仅Boss卡（=已在宗门内）渲染；数据未就绪/拉取失败静默整块隐藏 */}
-                        {bossRank && (
-                            <BossRankPanel rank={bossRank} myUserId={user?.userId ?? null} />
-                        )}
+                        {/* Boss 卡内容整体抽至 GuildBossPanel（照 BossRankPanel 先例）：
+                            页面仅注入数据与回调；status 失败/旧后端由组件内部降级隐藏血条区 */}
+                        <GuildBossPanel
+                            bossStatus={bossStatus}
+                            bossResult={bossResult}
+                            rank={bossRank}
+                            myUserId={user?.userId ?? null}
+                            loading={loading}
+                            onChallenge={handleChallengeBoss}
+                        />
                     </div>
 
                     <div className="bg-gray-800 rounded-lg p-5 border border-gray-600">

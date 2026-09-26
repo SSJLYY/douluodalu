@@ -1,7 +1,9 @@
 package com.douluodalu.game.repository
 
 import com.douluodalu.game.entity.*
+import jakarta.persistence.LockModeType
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Lock
 import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
@@ -11,6 +13,17 @@ import org.springframework.stereotype.Repository
 interface GuildRepository : JpaRepository<Guild, Long> {
     fun findByName(name: String): Guild?
     fun existsByName(name: String): Boolean
+
+    /**
+     * SELECT ... FOR UPDATE 行锁读（共享血量宗门 Boss 的并发锚点）：
+     * 锁 guild 行而非 guild_boss 行——宗门本周首次挑战时 boss 行还不存在、无处上锁，
+     * guild 行是恒存在的锁锚；同一宗门的全部挑战者在 guild 行上串行化后，
+     * 对 boss 血池的「读-改-写」不丢更新（等效于对 boss 行加锁，还顺带覆盖
+     * 惰性初始化的并发建行竞态）。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select g from Guild g where g.id = :id")
+    fun findByIdForUpdate(@Param("id") id: Long): Guild?
 
     /**
      * 原子占位：仅当未满员时 +1，返回受影响行数（0 = 满员/不存在）。

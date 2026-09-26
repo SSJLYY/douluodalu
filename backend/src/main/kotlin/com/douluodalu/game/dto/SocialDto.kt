@@ -33,6 +33,12 @@ data class GuildMemberResponse(
     val isLeader: Boolean
 )
 
+/**
+ * 宗门 Boss 挑战响应（POST /api/guild/boss/challenge）。共享血池口径（第二十三轮）：
+ * bossHp = 扣减本次伤害后的血池剩余血（前端血条用，语义由旧「单次挑战血量」迁移而来）、
+ * bossMaxHp = 本周血池上限、killed = 本次挑战后是否完成全宗击杀。
+ * 尾部字段带默认值向后兼容（旧调用方/测试少传不炸）。
+ */
 data class GuildBossResponse(
     val won: Boolean,
     val damage: Long,
@@ -40,7 +46,19 @@ data class GuildBossResponse(
     val goldGained: Long,
     val bossCoinGained: Long,
     val item: BackpackItemDto? = null, // 背包已满时为 null（掉落丢失）
-    val message: String
+    val message: String,
+    val bossMaxHp: Long = 0,
+    val killed: Boolean = false
+)
+
+/**
+ * 宗门 Boss 状态（GET /api/guild/boss/status）：共享血池当前血量/上限/击杀标记，
+ * 供前端血条渲染；本周无行时惰性初始化后返回满血状态。
+ */
+data class GuildBossStatusResponse(
+    val bossHp: Long,
+    val bossMaxHp: Long,
+    val killed: Boolean
 )
 
 /**

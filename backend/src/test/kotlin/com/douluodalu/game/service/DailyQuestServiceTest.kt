@@ -95,7 +95,7 @@ class DailyQuestServiceTest {
     }
 
     @Test
-    fun `five thin recorders should map to their quest ids`() {
+    fun `seven thin recorders should map to their quest ids`() {
         doReturn(1).whenever(dailyQuestRepo).incrementProgress(any(), any(), any())
 
         dailyQuestService.recordBattleWin(1L)
@@ -103,12 +103,78 @@ class DailyQuestServiceTest {
         dailyQuestService.recordTower(3L)
         dailyQuestService.recordCheckin(4L)
         dailyQuestService.recordShopBuy(5L)
+        dailyQuestService.recordGuildDonate(6L)
+        dailyQuestService.recordBreakthrough(7L)
 
         verify(dailyQuestRepo).incrementProgress(eq(1L), any(), eq(GameBalance.QUEST_BATTLE_WINS))
         verify(dailyQuestRepo).incrementProgress(eq(2L), any(), eq(GameBalance.QUEST_CULTIVATE))
         verify(dailyQuestRepo).incrementProgress(eq(3L), any(), eq(GameBalance.QUEST_TOWER))
         verify(dailyQuestRepo).incrementProgress(eq(4L), any(), eq(GameBalance.QUEST_CHECKIN))
         verify(dailyQuestRepo).incrementProgress(eq(5L), any(), eq(GameBalance.QUEST_SHOP_BUY))
+        verify(dailyQuestRepo).incrementProgress(eq(6L), any(), eq(GameBalance.QUEST_GUILD_DONATE))
+        verify(dailyQuestRepo).incrementProgress(eq(7L), any(), eq(GameBalance.QUEST_BREAKTHROUGH))
+    }
+
+    // ==================== 新增任务定义：guild_donate / breakthrough（第二十三轮） ====================
+
+    @Test
+    fun `daily quest defs should contain seven quests with the two new contracted ids`() {
+        // id 是对外契约（前端按 id 渲染），新增不改旧：前 5 条顺序与命名零漂移
+        assertEquals(
+            listOf(
+                GameBalance.QUEST_BATTLE_WINS, GameBalance.QUEST_CULTIVATE, GameBalance.QUEST_TOWER,
+                GameBalance.QUEST_CHECKIN, GameBalance.QUEST_SHOP_BUY,
+                GameBalance.QUEST_GUILD_DONATE, GameBalance.QUEST_BREAKTHROUGH
+            ),
+            GameBalance.DAILY_QUESTS.map { it.id }
+        )
+        // id 唯一（DAILY_QUEST_BY_ID 反查不被覆盖）
+        assertEquals(GameBalance.DAILY_QUESTS.size, GameBalance.DAILY_QUEST_BY_ID.size)
+
+        // guild_donate：宗门捐献 1 次，奖励 150 金（量级对齐既有表 60~200 金区间）
+        val donate = GameBalance.DAILY_QUEST_BY_ID[GameBalance.QUEST_GUILD_DONATE]!!
+        assertEquals(1, donate.target)
+        assertEquals(150L, donate.rewardGold)
+        assertEquals(0L, donate.rewardBossCoin)
+        assertEquals(0L, donate.rewardSoulPower)
+
+        // breakthrough：突破 2 次，奖励 150 金 + 200 魂力（突破消耗魂力故返魂力）
+        val bt = GameBalance.DAILY_QUEST_BY_ID[GameBalance.QUEST_BREAKTHROUGH]!!
+        assertEquals(2, bt.target)
+        assertEquals(150L, bt.rewardGold)
+        assertEquals(0L, bt.rewardBossCoin)
+        assertEquals(200L, bt.rewardSoulPower)
+    }
+
+    @Test
+    fun `claim should grant rewards for the new breakthrough quest through the shared defs path`() {
+        val p = profile()
+        // questId/target 校验走 defs 自动通过：无需为新增任务改 claim 逻辑
+        doReturn(1).whenever(dailyQuestRepo).claimIfEligible(eq(1L), any(), eq(GameBalance.QUEST_BREAKTHROUGH), eq(2))
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+
+        val result = dailyQuestService.claim(1L, GameBalance.QUEST_BREAKTHROUGH)
+
+        val def = GameBalance.DAILY_QUEST_BY_ID[GameBalance.QUEST_BREAKTHROUGH]!!
+        assertEquals(def.rewardGold, result.goldGained)
+        assertEquals(def.rewardSoulPower, result.soulPowerGained)
+        assertEquals(def.rewardGold, p.gold)
+        assertEquals(def.rewardSoulPower, p.soulPower)
+    }
+
+    @Test
+    fun `claim should grant rewards for the new guild donate quest through the shared defs path`() {
+        val p = profile()
+        doReturn(1).whenever(dailyQuestRepo).claimIfEligible(eq(1L), any(), eq(GameBalance.QUEST_GUILD_DONATE), eq(1))
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+
+        val result = dailyQuestService.claim(1L, GameBalance.QUEST_GUILD_DONATE)
+
+        val def = GameBalance.DAILY_QUEST_BY_ID[GameBalance.QUEST_GUILD_DONATE]!!
+        assertEquals(def.rewardGold, result.goldGained)
+        assertEquals(def.rewardGold, p.gold)
+        assertEquals(0L, result.bossCoinGained)
+        assertEquals(0L, result.soulPowerGained)
     }
 
     // ==================== claim 领奖 ====================

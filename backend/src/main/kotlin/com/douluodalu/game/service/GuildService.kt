@@ -3,13 +3,16 @@ package com.douluodalu.game.service
 import com.douluodalu.game.dto.GuildBossRankEntry
 import com.douluodalu.game.dto.GuildBossRankResponse
 import com.douluodalu.game.dto.GuildBossResponse
+import com.douluodalu.game.dto.GuildBossStatusResponse
 import com.douluodalu.game.dto.GuildMemberResponse
 import com.douluodalu.game.dto.LeaveGuildResponse
 import com.douluodalu.game.entity.Guild
+import com.douluodalu.game.entity.GuildBossEntity
 import com.douluodalu.game.entity.GuildMember
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
 import com.douluodalu.game.model.GuildBossBalance
+import com.douluodalu.game.repository.GuildBossRepository
 import com.douluodalu.game.repository.GuildMemberRepository
 import com.douluodalu.game.repository.GuildRepository
 import com.douluodalu.game.repository.UserRepository
@@ -23,8 +26,14 @@ import kotlin.random.Random
 class GuildService(
     private val guildRepository: GuildRepository,
     private val guildMemberRepository: GuildMemberRepository,
+    private val guildBossRepository: GuildBossRepository,
     private val userRepository: UserRepository,
     private val gameService: GameService,
+    /**
+     * 每日任务挂点（副路径）。构造注入 DailyQuestService：它只依赖进度仓库，
+     * 与本类无反向依赖（无循环依赖）；recordProgress 内部吞异常，不击穿捐献主流程。
+     */
+    private val dailyQuestService: DailyQuestService,
     /** 业务计数器（Micrometer，Spring Boot 自动配置 bean）；测试注入 SimpleMeterRegistry */
     private val meterRegistry: MeterRegistry
 ) {
@@ -32,8 +41,14 @@ class GuildService(
         // ===== 业务计数器名（ops Grafana 面板按名建面板，逐字契约，勿改） =====
         const val METRIC_GUILD_BOSS_TOTAL = "douluo.guild.boss.total"
 
+        /** 共享血量宗门 Boss 击杀计数（第 9 个业务计数器；击杀完成时 +1，无 tag） */
+        const val METRIC_GUILD_BOSS_KILL_TOTAL = "douluo.guild.boss.kill.total"
+
         /** 周榜 entries 上限（契约：按 weeklyDamage 降序只含 >0 成员，最多 10 条） */
         const val GUILD_BOSS_RANK_SIZE = 10
+
+        /** 已击杀宗门再挑战的固定文案（IllegalArgumentException → GlobalExceptionHandler 统一 400） */
+        const val MSG_BOSS_ALREADY_KILLED = "本周 Boss 已被击杀，下周一再来"
     }
     fun getGuildList(): List<Guild> {
         return guildRepository.findAll()
@@ -297,6 +312,9 @@ class GuildService(
         guildRepository.save(guild)
         userRepository.save(user)
 
+        // 每日任务挂点（副路径）：捐献成功唯一出口计数（guild_donate），失败不击穿捐献主流程
+        dailyQuestService.recordGuildDonate(userId)
+
         return true
     }
 
@@ -314,24 +332,49 @@ class GuildService(
     }
 
     /**
-     * 挑战宗门 Boss：伤害与玩家等级/战斗魂力挂钩，胜利判定按伤害占 Boss 生命比例。
-     * 无论胜负均获得金币、Boss 币与一件随机装备（背包已满则掉落丢失），并为宗门积累经验。
+     * 挑战宗门 Boss（共享血量 weekly raid 化，第二十三轮）：全宗成员共同扣减同一
+     * 每周血池（guild_boss 一宗一行），扣到 0 即全宗击杀——击杀者在常规奖励外额外
+     * 获得击杀奖（GUILD_BOSS_KILL_BOSS_COIN/GUILD_BOSS_KILL_GOLD），全员仍按本周
+     * 伤害周榜分周奖。单次挑战的伤害/胜负判定/金币/Boss币/贡献/周伤累计等既有口径
+     * 全部保持不变，只改血量来源（共享池）与扣减方式。
      */
     @Transactional
     fun challengeBoss(userId: Long): GuildBossResponse? {
         val user = userRepository.findById(userId).orElse(null) ?: return null
         val player = user.player ?: return null
         val guildId = player.guildId ?: return null
-        val guild = guildRepository.findById(guildId).orElse(null) ?: return null
+        // 行锁口径：锁 guild 行（findByIdForUpdate）而非 guild_boss 行——宗门本周首次
+        // 挑战时 boss 行还不存在无处上锁，guild 行是恒存在的锁锚。同一宗门的全部挑战者
+        // 在此串行化，血池读-改-写不丢更新，惰性初始化的并发建行竞态也被一并覆盖。
+        val guild = guildRepository.findByIdForUpdate(guildId) ?: return null
+        val boss = ensureWeeklyBoss(guild)
+
+        // 已击杀：业务拒绝（IllegalArgumentException → GlobalExceptionHandler 统一 400），
+        // 下周一由周重置服务/惰性重生复活
+        if (boss.killed) throw IllegalArgumentException(MSG_BOSS_ALREADY_KILLED)
 
         val damage = player.level * GuildBossBalance.BASE_DAMAGE_PER_LEVEL +
                 player.battleSoulPower +
                 Random.nextLong(GuildBossBalance.DAMAGE_RANDOM_RANGE)
-        val bossHp = GuildBossBalance.BOSS_HP_BASE + guild.level * GuildBossBalance.BOSS_HP_PER_GUILD_LEVEL
-        val won = damage >= (bossHp * GuildBossBalance.WIN_DAMAGE_RATIO).toLong()
-        val goldGained = damage / GuildBossBalance.GOLD_PER_DAMAGE_DIVISOR
-        val bossCoinGained = if (won) GuildBossBalance.WIN_BOSS_COIN_BASE + guild.level else GuildBossBalance.LOSE_BOSS_COIN
+        // 胜负判定保持既有口径（单次挑战血量 1800+宗门等级×650 的 35% 阈值），
+        // 不随周池放大——否则胜产 Boss 币（6+宗门等级）经济学崩塌
+        val singleFightHp = GuildBossBalance.BOSS_HP_BASE + guild.level * GuildBossBalance.BOSS_HP_PER_GUILD_LEVEL
+        val won = damage >= (singleFightHp * GuildBossBalance.WIN_DAMAGE_RATIO).toLong()
+        // 击杀预判（扣减前）：剩余血是否会被本次伤害扣空——奖励入账与池扣减用同一判定口径
+        val willKill = hpDepleted(boss, damage)
+        val goldGained = damage / GuildBossBalance.GOLD_PER_DAMAGE_DIVISOR +
+                if (willKill) GuildBossBalance.GUILD_BOSS_KILL_GOLD else 0L
+        val bossCoinGained = (if (won) GuildBossBalance.WIN_BOSS_COIN_BASE + guild.level else GuildBossBalance.LOSE_BOSS_COIN) +
+                if (willKill) GuildBossBalance.GUILD_BOSS_KILL_BOSS_COIN else 0L
         val item = gameService.rollBackpackDrop(userId, player.level + guild.level)
+
+        // 共享血池扣减：持 guild 行锁，读-改-写安全；伤害超出剩余血按剩余算（clamp 0），
+        // 扣减后归零 → 本次挑战完成击杀
+        val hpAfter = (boss.currentHp - damage).coerceAtLeast(0)
+        val killed = hpAfter == 0L
+        boss.currentHp = hpAfter
+        boss.killed = killed
+        guildBossRepository.save(boss)
 
         player.gold += goldGained
         player.bossCoin += bossCoinGained
@@ -354,17 +397,65 @@ class GuildService(
 
         // 业务计数器：挑战结算（胜败都计；Micrometer 不抛业务异常，不影响主流程）
         counter(METRIC_GUILD_BOSS_TOTAL, "outcome", if (won) "win" else "lose")
+        if (killed) counter(METRIC_GUILD_BOSS_KILL_TOTAL)
 
         return GuildBossResponse(
             won = won,
             damage = damage,
-            bossHp = bossHp,
+            // 响应血条口径：bossHp=扣减后血池剩余血、bossMaxHp=本周池上限、killed=是否完成击杀
+            bossHp = hpAfter,
             goldGained = goldGained,
             bossCoinGained = bossCoinGained,
             item = item,
             message = (if (won) "宗门 Boss 挑战成功" else "造成了有效伤害，获得参与奖励") +
-                    if (item == null) "；背包已满，掉落装备丢失" else ""
+                    (if (killed) "，全员协力击杀！" else "") +
+                    if (item == null) "；背包已满，掉落装备丢失" else "",
+            bossMaxHp = boss.maxHp,
+            killed = killed
         )
+    }
+
+    /** 血池剩余血是否会被本次伤害扣空（击杀预判，奖励入账与池扣减用同一判定口径） */
+    private fun hpDepleted(boss: GuildBossEntity, damage: Long): Boolean = boss.currentHp - damage <= 0
+
+    /**
+     * 共享血池惰性初始化/跨周重生（须在 guild 行锁内调用）：
+     *  - 无行（本周/建宗以来首次挑战）→ 按当前宗门等级建满血行，week_start=本周一；
+     *  - week_start 非本周 → 跨周兜底重生（周一定时任务的第二道保险：错过定时任务的
+     *    宗门首次挑战时也会复活），maxHp 按当前宗门等级重算；
+     *  - 本周行原样返回。
+     */
+    private fun ensureWeeklyBoss(guild: Guild): GuildBossEntity {
+        val monday = GuildBossBalance.currentWeekMonday()
+        val existing = guildBossRepository.findByGuildId(guild.id)
+        if (existing != null && existing.weekStart == monday) return existing
+
+        val maxHp = GuildBossBalance.weeklyBossMaxHp(guild.level)
+        val boss = existing ?: GuildBossEntity(guildId = guild.id)
+        boss.currentHp = maxHp
+        boss.maxHp = maxHp
+        boss.killed = false
+        boss.weekStart = monday
+        // save 后沿用本地实例（JPA save 对本场景返回同一受管实例；测试 mock 不回传也不受影响）
+        guildBossRepository.save(boss)
+        return boss
+    }
+
+    /**
+     * 共享血池状态（GET /api/guild/boss/status）：返回当前血量/上限/击杀标记供前端血条。
+     * 惰性初始化与 challenge 同口径（无行/跨周时先建行/重生再读）；不在宗门属业务拒绝：
+     * 抛 IllegalArgumentException（消息含「宗门」），GlobalExceptionHandler 统一转 400。
+     */
+    @Transactional
+    fun getGuildBossStatus(userId: Long): GuildBossStatusResponse {
+        val user = userRepository.findById(userId).orElse(null)
+            ?: throw IllegalArgumentException("请先加入宗门后查看 Boss 状态")
+        val guildId = user.player?.guildId
+            ?: throw IllegalArgumentException("请先加入宗门后查看 Boss 状态")
+        val guild = guildRepository.findByIdForUpdate(guildId)
+            ?: throw IllegalArgumentException("请先加入宗门后查看 Boss 状态")
+        val boss = ensureWeeklyBoss(guild)
+        return GuildBossStatusResponse(bossHp = boss.currentHp, bossMaxHp = boss.maxHp, killed = boss.killed)
     }
 
     /**

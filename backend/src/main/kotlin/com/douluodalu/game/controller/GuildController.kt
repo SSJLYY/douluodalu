@@ -1,6 +1,7 @@
 package com.douluodalu.game.controller
 
 import com.douluodalu.game.dto.GuildBossRankResponse
+import com.douluodalu.game.dto.GuildBossStatusResponse
 import com.douluodalu.game.dto.GuildListResponse
 import com.douluodalu.game.dto.GuildMyResponse
 import com.douluodalu.game.entity.Guild
@@ -158,6 +159,16 @@ class GuildController(
         } else {
             ResponseEntity.badRequest().body(mapOf("error" to "请先加入宗门"))
         }
+    }
+
+    /**
+     * 共享血池状态（GET /api/guild/boss/status）：当前血量/本周上限/击杀标记，供前端血条。
+     * 无行/跨周时惰性初始化；未入宗门由服务层抛业务异常（消息含「宗门」），统一转 400。
+     */
+    @GetMapping("/boss/status")
+    fun getGuildBossStatus(auth: Authentication): ResponseEntity<GuildBossStatusResponse> {
+        val userId = auth.principal as Long
+        return ResponseEntity.ok(guildService.getGuildBossStatus(userId))
     }
 
     /**

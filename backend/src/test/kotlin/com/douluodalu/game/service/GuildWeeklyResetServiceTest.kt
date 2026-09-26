@@ -1,12 +1,18 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.entity.Guild
+import com.douluodalu.game.entity.GuildBossEntity
 import com.douluodalu.game.entity.GuildMember
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
 import com.douluodalu.game.model.GuildBossBalance
+import com.douluodalu.game.repository.GuildBossRepository
 import com.douluodalu.game.repository.GuildMemberRepository
+import com.douluodalu.game.repository.GuildRepository
 import com.douluodalu.game.repository.UserRepository
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
@@ -19,11 +25,14 @@ import java.util.Optional
 
 /**
  * 宗门 Boss 周榜重置任务单测（纯 Mockito，不触库）：
- * Top3 发奖精确、第 4 名无奖、零伤害跳过、发奖后全量清零。
+ * Top3 发奖精确、第 4 名无奖、零伤害跳过、发奖后全量清零；
+ * 共享血池周重生（第二十三轮）：killed 翻回、maxHp 按当前宗门等级重算、week_start 对齐本周一。
  */
 class GuildWeeklyResetServiceTest {
 
     private lateinit var guildMemberRepository: GuildMemberRepository
+    private lateinit var guildBossRepository: GuildBossRepository
+    private lateinit var guildRepository: GuildRepository
     private lateinit var userRepository: UserRepository
     private lateinit var service: GuildWeeklyResetService
 
@@ -33,8 +42,10 @@ class GuildWeeklyResetServiceTest {
     @BeforeEach
     fun setUp() {
         guildMemberRepository = mock()
+        guildBossRepository = mock()
+        guildRepository = mock()
         userRepository = mock()
-        service = GuildWeeklyResetService(guildMemberRepository, userRepository)
+        service = GuildWeeklyResetService(guildMemberRepository, guildBossRepository, guildRepository, userRepository)
         profiles.clear()
     }
 
@@ -157,5 +168,65 @@ class GuildWeeklyResetServiceTest {
 
         verify(userRepository, never()).save(any())
         verify(guildMemberRepository, never()).saveAll(any<Iterable<GuildMember>>())
+    }
+
+    // ==================== 第二十三轮 共享血池周重生 ====================
+
+    private fun bossRow(
+        guildId: Long = 9L,
+        guildLevel: Int = 3,
+        currentHp: Long = 0L,
+        killed: Boolean = true
+    ): GuildBossEntity {
+        val maxHp = GuildBossBalance.weeklyBossMaxHp(1) // 旧周的过时上限
+        val row = GuildBossEntity(
+            guildId = guildId, currentHp = currentHp, maxHp = maxHp, killed = killed,
+            weekStart = GuildBossBalance.currentWeekMonday().minusWeeks(1)
+        )
+        whenever(guildBossRepository.findAll()).thenReturn(listOf(row))
+        // maxHp 重算取 guild 当前等级（宗门数量少，逐行查可接受）
+        whenever(guildRepository.findById(guildId)).thenReturn(
+            Optional.of(Guild(id = guildId, name = "唐门", level = guildLevel, leaderId = 1L))
+        )
+        return row
+    }
+
+    @Test
+    fun `reset should respawn boss pools with maxHp recalculated for current guild level and cleared kill flag`() {
+        whenever(guildMemberRepository.findAll()).thenReturn(emptyList()) // 成员侧无关本轮断言
+        val row = bossRow(guildLevel = 3)
+
+        service.resetWeeklyBossDamage()
+
+        val maxHp = GuildBossBalance.weeklyBossMaxHp(3) // (1800 + 3×650) × 10 = 37500
+        assertFalse(row.killed)
+        assertEquals(maxHp, row.currentHp)
+        assertEquals(maxHp, row.maxHp)
+        assertEquals(GuildBossBalance.currentWeekMonday(), row.weekStart)
+        verify(guildBossRepository).saveAll(any<Iterable<GuildBossEntity>>())
+    }
+
+    @Test
+    fun `reset respawn should tolerate boss rows whose guild row is missing`() {
+        whenever(guildMemberRepository.findAll()).thenReturn(emptyList())
+        val row = bossRow(guildId = 42L)
+        whenever(guildRepository.findById(42L)).thenReturn(Optional.empty()) // 宗门行已消失（漂移窗口）
+
+        assertEquals(0, service.resetWeeklyBossDamage())
+
+        // 跳过不失败：该行原样保留（无 guild 可依，不强改）
+        assertTrue(row.killed)
+        assertEquals(0L, row.currentHp)
+    }
+
+    @Test
+    fun `reset with no boss rows should skip respawn without touching guild repo`() {
+        whenever(guildBossRepository.findAll()).thenReturn(emptyList())
+        whenever(guildMemberRepository.findAll()).thenReturn(emptyList())
+
+        assertEquals(0, service.resetWeeklyBossDamage())
+
+        verify(guildRepository, never()).findById(any())
+        verify(guildBossRepository, never()).saveAll(any<Iterable<GuildBossEntity>>())
     }
 }

@@ -463,6 +463,9 @@ class GameService(
         profile.level += 1
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
+        // 每日任务挂点（副路径）：仅突破成功出口计数（breakthrough），失败不击穿主流程；
+        // 突破消耗魂力故任务奖励返魂力，形成小额回流（见 GameBalance.DAILY_QUESTS 注释）
+        dailyQuestService.recordBreakthrough(userId)
         // 成就挂点（副路径）：仅突破成功出口触发（等级达标即自动解锁，失败不击穿主流程）
         achievementService.sync(userId)
         return BreakthroughResponse(true, profile.level, "突破成功！当前境界：${getRealmName(profile.level)} Lv.${profile.level}")

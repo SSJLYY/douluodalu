@@ -111,6 +111,35 @@ class GameServiceTest {
         assertEquals(5, response.level)
     }
 
+    // ==================== 每日任务挂点：breakthrough（第二十三轮） ====================
+
+    @Test
+    fun `breakthrough success should record the breakthrough daily quest progress`() {
+        val p = profile() // level=5，突破消耗 120·5^1.55 ≈ 1448
+        p.soulPower = 100_000L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+
+        val response = gameService.breakthrough(1L)
+
+        assertTrue(response.success)
+        assertEquals(6, response.newLevel)
+        // 每日任务挂点：仅突破成功出口计数（breakthrough）
+        verify(dailyQuestService).recordBreakthrough(1L)
+    }
+
+    @Test
+    fun `breakthrough failure should not record daily quest progress`() {
+        val p = profile()
+        p.soulPower = 0L // 魂力不足 → success=false，零改动
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+
+        val response = gameService.breakthrough(1L)
+
+        assertFalse(response.success)
+        verify(dailyQuestService, never()).recordBreakthrough(any())
+        verify(achievementService, never()).sync(any())
+    }
+
     @Test
     fun `claimOfflineReward should cap offline time at 12 hours`() {
         val p = profile()

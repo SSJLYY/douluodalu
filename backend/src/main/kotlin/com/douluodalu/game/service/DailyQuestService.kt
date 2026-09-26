@@ -74,7 +74,7 @@ class DailyQuestService(
         }
     }
 
-    // ===== 五个计数薄方法（questId 映射收敛于此，玩法侧无需感知任务定义）=====
+    // ===== 七个计数薄方法（questId 映射收敛于此，玩法侧无需感知任务定义）=====
     fun recordBattleWin(userId: Long) = recordProgress(userId, GameBalance.QUEST_BATTLE_WINS)
 
     fun recordCultivate(userId: Long) = recordProgress(userId, GameBalance.QUEST_CULTIVATE)
@@ -85,6 +85,12 @@ class DailyQuestService(
     fun recordCheckin(userId: Long) = recordProgress(userId, GameBalance.QUEST_CHECKIN)
 
     fun recordShopBuy(userId: Long) = recordProgress(userId, GameBalance.QUEST_SHOP_BUY)
+
+    /** 宗门捐献成功即计数（挂点：GuildService.donate；本类不反向依赖宗门服务，无循环依赖） */
+    fun recordGuildDonate(userId: Long) = recordProgress(userId, GameBalance.QUEST_GUILD_DONATE)
+
+    /** 境界突破成功即计数（挂点：GameService.breakthrough，仅成功出口触发） */
+    fun recordBreakthrough(userId: Long) = recordProgress(userId, GameBalance.QUEST_BREAKTHROUGH)
 
     /**
      * 每日任务面板（只读）：读当天全部进度行（一次查询）与定义表合成；

@@ -1,9 +1,11 @@
 package com.douluodalu.game.service
 
 import com.douluodalu.game.entity.Guild
+import com.douluodalu.game.entity.GuildBossEntity
 import com.douluodalu.game.entity.GuildMember
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
+import com.douluodalu.game.repository.GuildBossRepository
 import com.douluodalu.game.repository.GuildMemberRepository
 import com.douluodalu.game.repository.GuildRepository
 import com.douluodalu.game.repository.UserRepository
@@ -35,10 +37,16 @@ class GuildServiceTest {
     private lateinit var guildMemberRepository: GuildMemberRepository
 
     @Mock
+    private lateinit var guildBossRepository: GuildBossRepository
+
+    @Mock
     private lateinit var userRepository: UserRepository
 
     @Mock
     private lateinit var gameService: GameService
+
+    @Mock
+    private lateinit var dailyQuestService: DailyQuestService
 
     /** 真实 Micrometer 注册表（Spy 包装保留真实计数行为；计数器断言用） */
     @Spy
@@ -333,6 +341,7 @@ class GuildServiceTest {
         profile.bossCoin = 0
         val guild = Guild(id = 9L, name = "唐门", level = 1, exp = 990, leaderId = 2L)
         doReturn(Optional.of(guild)).whenever(guildRepository).findById(9L)
+        doReturn(guild).whenever(guildRepository).findByIdForUpdate(9L)
         doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
 
         val resp = guildService.challengeBoss(1L)
@@ -376,6 +385,8 @@ class GuildServiceTest {
     private fun leaderGuild(guildId: Long = 9L, leaderId: Long = 1L, members: Int = 3): Guild {
         val guild = Guild(id = guildId, name = "唐门", level = 1, currentMembers = members, maxMembers = 20, leaderId = leaderId)
         doReturn(Optional.of(guild)).whenever(guildRepository).findById(guildId)
+        // 共享血量 Boss 的行锁读（challengeBoss/getGuildBossStatus 走 FOR UPDATE 锚 guild 行）
+        doReturn(guild).whenever(guildRepository).findByIdForUpdate(guildId)
         return guild
     }
 
@@ -896,5 +907,293 @@ class GuildServiceTest {
         // 业务拒绝：不应触达 guild/member 查询
         verify(guildRepository, never()).findById(any())
         verify(guildMemberRepository, never()).findByGuildId(any())
+    }
+
+    // ==================== 第二十三轮 共享血量宗门 Boss（weekly raid 化） ====================
+
+    /** 血池测试辅助：preset 一行本周血池 */
+    private fun bossPool(
+        guildId: Long = 9L,
+        currentHp: Long,
+        maxHp: Long = GuildBossBalance.weeklyBossMaxHp(1),
+        killed: Boolean = false,
+        weekStart: java.time.LocalDate = GuildBossBalance.currentWeekMonday()
+    ) = GuildBossEntity(guildId = guildId, currentHp = currentHp, maxHp = maxHp, killed = killed, weekStart = weekStart)
+
+    /** 血池测试辅助：打桩成员行（击杀/扣血路径会累计贡献与周伤） */
+    private fun stubBossMember() {
+        doReturn(GuildMember(guildId = 9L, userId = 1L, role = "MEMBER"))
+            .whenever(guildMemberRepository).findByUserId(1L)
+    }
+
+    @Test
+    fun `challengeBoss should lazily create the shared weekly boss pool on first challenge`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        doReturn(null).whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        // 两次 save：第 1 次 = 惰性建行（满血新池），第 2 次 = 本次伤害扣减落库。
+        // captor 捕获的是同一实体引用（建行后被扣减），故按最终池状态断言：
+        val captor = ArgumentCaptor.forClass(GuildBossEntity::class.java)
+        verify(guildBossRepository, times(2)).save(captor.capture())
+        val row = captor.allValues[0]
+        val maxHp = GuildBossBalance.weeklyBossMaxHp(1) // (1800 + 1×650) × 10 = 24500
+        assertEquals(maxHp, row.maxHp)
+        assertFalse(row.killed)
+        assertEquals(GuildBossBalance.currentWeekMonday(), row.weekStart)
+        // 建行满血 → 扣一次伤害：剩余 = maxHp - damage（建行时 currentHp=maxHp 的间接证明）
+        assertEquals(maxHp - resp!!.damage, resp.bossHp)
+        assertEquals(maxHp - resp.damage, row.currentHp)
+        assertFalse(resp.killed)
+    }
+
+    @Test
+    fun `challengeBoss should deduct damage from the shared pool exactly once`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        val maxHp = GuildBossBalance.weeklyBossMaxHp(1)
+        val pool = bossPool(currentHp = maxHp)
+        doReturn(pool).whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        // 精确扣血：pool -= damage（level=50 伤害 ∈ [6100, 6259]，远小于 24500，不击杀）
+        assertEquals(maxHp - resp!!.damage, pool.currentHp)
+        assertEquals(maxHp - resp.damage, resp.bossHp)
+        assertEquals(maxHp, resp.bossMaxHp)
+        assertFalse(resp.killed)
+        assertFalse(pool.killed)
+    }
+
+    @Test
+    fun `challengeBoss should clamp overkill damage at remaining hp and complete the kill`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        val pool = bossPool(currentHp = 500L) // 剩余 500 << 单次伤害 6100+
+        doReturn(pool).whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        // 伤害超剩余血按剩余算：血池归零而非负数；扣减后 == 0 → killed
+        assertEquals(0L, pool.currentHp)
+        assertTrue(pool.killed)
+        assertEquals(0L, resp!!.bossHp)
+        assertEquals(GuildBossBalance.weeklyBossMaxHp(1), resp.bossMaxHp)
+        assertTrue(resp.killed)
+        // 响应 damage 仍按完整伤害口径（既有逻辑不变），血条按剩余
+        assertTrue(resp.damage > 500L)
+    }
+
+    @Test
+    fun `challengeBoss kill should grant killer bonus boss coin gold message and count the kill`() {
+        val (user, profile) = userWith(gold = 0, level = 50, guildId = 9L)
+        profile.bossCoin = 0
+        leaderGuild()
+        doReturn(bossPool(currentHp = 500L)).whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        // 击杀奖励：常规胜奖（金币 damage/12、Boss币 6+guildLevel=7）+ 击杀加成（30 币 + 3000 金）
+        assertEquals(resp!!.damage / GuildBossBalance.GOLD_PER_DAMAGE_DIVISOR + GuildBossBalance.GUILD_BOSS_KILL_GOLD, resp.goldGained)
+        assertEquals(GuildBossBalance.WIN_BOSS_COIN_BASE + 1 + GuildBossBalance.GUILD_BOSS_KILL_BOSS_COIN, resp.bossCoinGained)
+        assertEquals(resp.goldGained, profile.gold)
+        assertEquals(resp.bossCoinGained, profile.bossCoin)
+        assertTrue(resp.message.contains("全员协力击杀"))
+        // 第 9 个业务计数器：击杀 +1（无 tag）
+        assertEquals(1.0, meterRegistry.get(GuildService.METRIC_GUILD_BOSS_KILL_TOTAL).counter().count())
+        verify(userRepository).save(user)
+    }
+
+    @Test
+    fun `challengeBoss mid pool hit should not grant kill rewards or count the kill`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        doReturn(bossPool(currentHp = GuildBossBalance.weeklyBossMaxHp(1)))
+            .whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        // 非击杀：无击杀加成、无击杀计数（registry 里没有该 meter）
+        assertEquals(resp!!.damage / GuildBossBalance.GOLD_PER_DAMAGE_DIVISOR, resp.goldGained)
+        assertEquals(GuildBossBalance.WIN_BOSS_COIN_BASE + 1, resp.bossCoinGained)
+        assertFalse(resp.message.contains("全员协力击杀"))
+        assertEquals(0, meterRegistry.meters.count { it.id.name == GuildService.METRIC_GUILD_BOSS_KILL_TOTAL })
+    }
+
+    @Test
+    fun `challengeBoss after kill should reject with business exception and grant nothing`() {
+        val (_, profile) = userWith(gold = 5000, level = 50, guildId = 9L)
+        profile.bossCoin = 9L
+        leaderGuild()
+        doReturn(bossPool(currentHp = 0L, killed = true)).whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+
+        val ex = assertThrows(IllegalArgumentException::class.java) { guildService.challengeBoss(1L) }
+
+        assertTrue(ex.message!!.contains("下周一"), "已击杀拒绝文案应指引下周再战：${ex.message}")
+        // 业务拒绝零改动：不扣血不发奖不 roll 装备不累计贡献
+        assertEquals(5000L, profile.gold)
+        assertEquals(9L, profile.bossCoin)
+        verify(guildMemberRepository, never()).save(any())
+        verify(gameService, never()).rollBackpackDrop(any(), any())
+        verify(guildBossRepository, never()).save(any())
+        assertEquals(0, meterRegistry.meters.count { it.id.name == GuildService.METRIC_GUILD_BOSS_KILL_TOTAL })
+    }
+
+    @Test
+    fun `challengeBoss should serialize double challenge into one kill and one rejection`() {
+        val (_, profile) = userWith(gold = 0, level = 50, guildId = 9L)
+        profile.bossCoin = 0
+        leaderGuild()
+        val pool = bossPool(currentHp = 500L)
+        doReturn(pool).whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val attempts = AtomicInteger(0)
+        val successes = AtomicInteger(0)
+        val rejections = AtomicInteger(0)
+        var killDamage = 0L
+        // 行锁语义单测化（真实并发由 DB 对 guild 行 FOR UPDATE 串行化）：两挑战串行执行，
+        // 第一击打空血池完成击杀，第二挑战者必须见到 killed=true 被拒——伤害/奖励只入账一次
+        repeat(2) {
+            attempts.incrementAndGet()
+            try {
+                val resp = guildService.challengeBoss(1L)!!
+                successes.incrementAndGet()
+                killDamage = resp.damage
+            } catch (e: IllegalArgumentException) {
+                rejections.incrementAndGet()
+                assertTrue(e.message!!.contains("击杀"))
+            }
+        }
+
+        assertEquals(2, attempts.get())
+        assertEquals(1, successes.get())
+        assertEquals(1, rejections.get())
+        assertEquals(0L, pool.currentHp)
+        assertTrue(pool.killed)
+        // 击杀奖励恰好一次：gold = killDamage/12 + 3000，bossCoin = 7 + 30
+        assertEquals(killDamage / GuildBossBalance.GOLD_PER_DAMAGE_DIVISOR + GuildBossBalance.GUILD_BOSS_KILL_GOLD, profile.gold)
+        assertEquals(GuildBossBalance.WIN_BOSS_COIN_BASE + 1 + GuildBossBalance.GUILD_BOSS_KILL_BOSS_COIN, profile.bossCoin)
+        assertEquals(1.0, meterRegistry.get(GuildService.METRIC_GUILD_BOSS_KILL_TOTAL).counter().count())
+    }
+
+    @Test
+    fun `challengeBoss should lazily respawn a stale week pool with maxHp recalculated for the current guild level`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        val guild = Guild(id = 9L, name = "唐门", level = 3, exp = 0, maxMembers = 30, leaderId = 2L)
+        doReturn(Optional.of(guild)).whenever(guildRepository).findById(9L)
+        doReturn(guild).whenever(guildRepository).findByIdForUpdate(9L)
+        val pool = bossPool(currentHp = 0L, maxHp = GuildBossBalance.weeklyBossMaxHp(1), killed = true,
+            weekStart = GuildBossBalance.currentWeekMonday().minusWeeks(1)) // 上周已击杀的残行
+        doReturn(pool).whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        // 跨周惰性重生：killed 翻回、week_start 对齐本周一、maxHp 按当前宗门等级 3 重算
+        val maxHp = GuildBossBalance.weeklyBossMaxHp(3) // (1800 + 3×650) × 10 = 37500
+        assertFalse(pool.killed)
+        assertEquals(GuildBossBalance.currentWeekMonday(), pool.weekStart)
+        assertEquals(maxHp, pool.maxHp)
+        assertEquals(maxHp - resp!!.damage, pool.currentHp)
+        assertEquals(maxHp, resp.bossMaxHp)
+        assertFalse(resp.killed)
+    }
+
+    @Test
+    fun `challengeBoss should keep win rewards contribution and weekly damage accrual unchanged under the shared pool`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        val member = GuildMember(guildId = 9L, userId = 1L, role = "MEMBER")
+        doReturn(member).whenever(guildMemberRepository).findByUserId(1L)
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        // 既有口径零漂移（单次伤害/胜负/金币/Boss币/贡献/周伤）：
+        // level=50 伤害下限 6100 ≥ 0.35×2450=857 → 恒胜
+        assertTrue(resp!!.won)
+        assertEquals(resp.damage / GuildBossBalance.GOLD_PER_DAMAGE_DIVISOR, resp.goldGained)
+        assertEquals(GuildBossBalance.WIN_BOSS_COIN_BASE + 1, resp.bossCoinGained)
+        assertEquals(resp.damage / GuildBossBalance.CONTRIBUTION_PER_DAMAGE, member.contribution)
+        assertEquals(resp.damage, member.weeklyBossDamage)
+    }
+
+    @Test
+    fun `getGuildBossStatus should lazily init the pool and return full state`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        doReturn(null).whenever(guildBossRepository).findByGuildId(9L)
+
+        val status = guildService.getGuildBossStatus(1L)
+
+        val maxHp = GuildBossBalance.weeklyBossMaxHp(1)
+        assertEquals(maxHp, status.bossHp)
+        assertEquals(maxHp, status.bossMaxHp)
+        assertFalse(status.killed)
+        verify(guildBossRepository).save(any())
+    }
+
+    @Test
+    fun `getGuildBossStatus should report the killed pool without touching it`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        doReturn(bossPool(currentHp = 0L, killed = true)).whenever(guildBossRepository).findByGuildId(9L)
+
+        val status = guildService.getGuildBossStatus(1L)
+
+        assertEquals(0L, status.bossHp)
+        assertEquals(GuildBossBalance.weeklyBossMaxHp(1), status.bossMaxHp)
+        assertTrue(status.killed)
+        verify(guildBossRepository, never()).save(any())
+    }
+
+    @Test
+    fun `getGuildBossStatus should throw business exception for player without guild`() {
+        userWith(gold = 100, guildId = null)
+
+        val ex = assertThrows(IllegalArgumentException::class.java) { guildService.getGuildBossStatus(1L) }
+
+        assertTrue(ex.message!!.contains("宗门"))
+        verify(guildRepository, never()).findByIdForUpdate(any())
+        verify(guildBossRepository, never()).findByGuildId(any())
+    }
+
+    @Test
+    fun `donate success should record the guild_donate daily quest progress`() {
+        userWith(gold = 5000, guildId = 9L)
+        leaderGuild()
+        doReturn(GuildMember(guildId = 9L, userId = 1L, role = "MEMBER"))
+            .whenever(guildMemberRepository).findByUserId(1L)
+
+        assertTrue(guildService.donate(1L, 600L))
+
+        verify(dailyQuestService).recordGuildDonate(1L)
+    }
+
+    @Test
+    fun `donate failure should not record any daily quest progress`() {
+        // 金币不足（副路径只在成功出口计数）
+        userWith(gold = 50, guildId = 9L)
+        leaderGuild()
+
+        assertFalse(guildService.donate(1L, 100L))
+
+        verify(dailyQuestService, never()).recordGuildDonate(any())
     }
 }

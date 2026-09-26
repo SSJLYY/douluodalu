@@ -41,6 +41,7 @@ Micrometer 的 `douluo.battle.total` 等点分名会被 Prometheus 自动转成�
 | `douluo_school_choose_total` | — | 流派选择次数 |
 | `douluo_quest_claim_total` | `quest_id` | 任务领取次数（按任务分） |
 | `douluo_guild_boss_total` | `outcome=win\|lose` | 宗门 Boss 挑战次数（按胜负分） |
+| `douluo_guild_boss_kill_total` | — | 共享血量宗门 Boss 击杀次数（第二十三轮） |
 
 标准 micrometer/actuator 指标同样可用：`jvm_memory_used_bytes` / `jvm_memory_max_bytes`（tag `area`、`id`）、`jvm_gc_pause_seconds`、`hikaricp_connections_active/idle/pending/max`、`http_server_requests_seconds_count/bucket/sum`（tag `uri`、`status`、`outcome`）、`process_cpu_usage`、`system_cpu_usage`。修改业务指标名前先同步本表、alerts.yml 与 douluo-dashboard.json。
 
