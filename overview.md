@@ -227,6 +227,16 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 4. **验证**：mvn test 基线 94→**103 全绿**（公会+5、缓存+4）；8090 合并态真库冒烟：rank 两次一致、members 形状正确、state 200；tsc/eslint 干净。
 5. 遗留：若后续给 level/towerFloor 增加新写点需同步补 @CacheEvict（否则最坏陈旧 30s）；生产 CORS 白名单含 localhost:3000 不含 127.0.0.1:3000；dev 库造有 3 人测试宗门（id=100，宗主 e2euser2）供回归。
 
+## 📅 第十三轮：每日签到系统 + 战斗回合回放 + Prometheus 指标（2026-09-26）
+
+1. **每日签到（后端）**：V7 迁移新建 `check_in_record`（`uk_user_date` 唯一键并发兜底，exists 预检 + DIVE 捕获双保险）；`POST /api/game/checkin`（当日已签 400「今日已签到，明天再来吧」；昨天→streak+1、断签→1；`cycleDay=((streak-1)%7)+1` 七日循环）；GameBalance 新增 7 天奖励表（1-6 天 100~400 金 +100 魂力，第 7 天 500 金 +10 Boss币——单日 ≈ 挂机 1~2 小时金币量级、全循环 ≈ 半天，不冲击主动日收入；第 7 天 Boss 币给攒周期摸到商店 50 币档的期待感）；`GameStateResponse` 尾部新增 `checkIn`（signedToday/streak/totalDays/nextCycleDay + rewards 七天全表后端下发，前端零硬编码数值，旧客户端默认值向后兼容）。
+2. **签到卡片（前端）**：主页战力明细与战斗卡之间新增 `CheckinCard`（奖励网格 sm:grid-cols-7 / 375px grid-cols-4、今日格高亮 `aria-current="date"`、已领格打勾置灰、已签按钮禁用「今日已签 ✓」）；后端未升级时整卡降级 EmptyPanel 不破图。
+3. **战斗回合回放（前端）**：新组件 `BattleReplay` 消费 battleLog（此前只是静态 details 文本）：双 HP 条（role=progressbar + aria-value*）+ 900ms/回合自动步进 + 播放/暂停/上下回合三控制钮 + 播到末回合自停 + 伤害数字 dl-value-flash、HP 归零 dl-shake；`prefers-reduced-motion` 时不自动播放直达末回合（新动画类已登记进 reduced-motion 块）；battleLog 缺失回落原 `<details>`。浏览器实测：步进改 HP/伤害、播放⏸切换、末回合自停全通过。
+4. **可观测性**：`micrometer-registry-prometheus` 接入，`/actuator/prometheus` 非 prod 匿名可抓取（仿 springdoc 的 `@Value` 条件放行 + application-prod.yml `app.monitoring.prometheus-public: false` 双保险）；DEPLOY.md 补 Prometheus 小节（含 scrape_configs 片段）。
+5. **小修**：CORS 默认白名单补 `http://127.0.0.1:3000`（与 localhost:3000 是不同 Origin，第十二轮遗留）；datasource URL 默认追加 `allowPublicKeyRetrieval=true`（第九轮遗留，MySQL8 caching_sha2_password 非 SSL 必需）；宗门退出改返回 `LeaveGuildResponse{message, disbanded, transferredTo}`（宗主转让退出可见继任者昵称、最后一人离开明确 disbanded=true，message 保留向后兼容；第十一轮遗留的"不分歧返回"闭环），前端宗门页按分歧文案展示。
+6. **验证**：mvn test 基线 103→**113 全绿**（CheckInServiceTest 9 条含并发兜底/断签/第 7 天回绕 + GameService 组装 1 条；Guild 39 条适配返回类型并补分歧断言）；8090 真库冒烟：首签 200（gold 100 入账）/重复签 400/state.checkIn 全形状含 7 天表/prometheus 匿名 200（108 指标族）/临时宗门 leave transferredTo→disbanded 分歧 ✓；浏览器 E2E（新注册账号）：签到→战斗→回放→宗门页全程 console 0 error、375px 零水平溢出、亮暗双主题截图核对。
+7. **遗留**：无补签机制（断签即重置，先从简）；dev 库新增 r13 系列临时测试用户（含 2 个 level 30 造数用户供宗门测试）；checkIn 不走排行榜缓存故无 @CacheEvict 同步项。
+
 ---
 
 ## 🔮 后续建议
@@ -238,9 +248,9 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
    - ~~战力明细面板（攻击/生命/各装备件拆分）~~ ✅ 已完成（第九轮）
 
 2. **运维**
-   - Docker 化（后端 Dockerfile + docker-compose）— 未完成
+   - ~~Docker 化（后端 Dockerfile + docker-compose）~~ ✅ 已完成（第五轮；本机无 Docker 引擎未实跑，DEPLOY.md 第 13 节已标注）
    - ~~CI/CD（GitHub Actions）~~ ✅ 已完成：`.github/workflows/ci.yml`，push/PR to main 触发，backend `mvn -B test` + frontend `lint`/`build` 两个并行 job（Android Gradle 工程不构建）
-   - Prometheus 指标监控
+   - ~~Prometheus 指标监控~~ ✅ 已完成（第十三轮：micrometer-registry-prometheus + /actuator/prometheus 非 prod 放行）
 
 3. **高级特性**
    - Redis 分布式锁（多实例部署）
