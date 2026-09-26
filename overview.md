@@ -247,6 +247,16 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 6. **修复（集成冒烟抓到）**：claim 对「已知任务当天无进度行」误归因「未知任务」→ 改归「未达标」（未开始 ≠ 未知），单测同步改断言。
 7. **口径决策与遗留**：离线收益的模拟胜场直接累加 totalBattleWins（GameService.claimOfflineReward）但**不计入**战斗任务——参与型任务只认主动战斗，玩家侧「胜场」统计与任务进度会不同步（设计取向，记录在案）；`achievements` 仍为死字段（GameModels.AchievementDefs 无消费，成就系统留作后续）；dev 库新增 r14 系列测试用户。
 
+## 🏅 第十五轮：成就系统接线 + 90 天仿真纳入新经济（2026-09-26）
+
+1. **成就系统（后端）**：GameModels 死数据 AchievementDefs（16 条定义、5 类）迁入 GameBalance 并接线——V9 `achievement_record`（`uk_user_achievement` 兜底并发，解锁即生效故无 claimed 列）；`AchievementService.sync` 五类口径映射（level/totalBattleWins/towerFloor/已装备环数/prestigeCount），副路径吞异常不击穿主流程；6 个挂点（cultivate/breakthrough/battle/towerBattle/claimOfflineReward/equipRing）；**自动解锁 + 属性即时生效**模型（不走领取——加成按已解锁集合求和，天然幂等无双花）；SOUL_RING 文案「获得→装备」（口径=已装备数）。
+2. **战力口径**：EquipmentPowerService.bonusFor 并入成就 hp/atk（唯一 choke point，战斗/塔/state 消费点全部生效）；PowerDetailDto 加第 5 行 `achievement`，五行求和恒等（base+ring+core+bone+achievement == power，200 组随机回归通过）。**hp/atk 先兑现**：matk/pdef/mdef/critRate/critDmg 后端战斗模型未消费，数据保留、UI 不展示（待属性系统扩展，记录在案）。
+3. **90 天仿真扩展**：镜像纳入每日签到（7 日循环）+ 每日任务（全清上界假设 600 金/日）+ 成就属性加成（按镜像状态算已解锁集合）——收敛锁一次通过（9/9 槽、后期死掉落率 0%、利用率 69.4% 带内）；新收入占主动玩法收入仅 **3.8%（D30）/ 4.2%（D90）**，留存钩子量级不冲击经济。
+4. **前端**：成就页 `/game/achievements`（BootState 三态 + 分组徽标 + progressbar 三值 + 已解锁金徽与日期；无生效奖励的行不显示奖励行）；快捷导航 4→5 格（grid-cols-3 双行 3+2，375px 零溢出）；解锁 toast（首拉建档、diff 检测、多条合并「X 等 N 项」）；PowerDetailPanel 第 5 行；`normalizeAchievements` 形状守卫（旧后端 string[] 降级空数组）。测试 24→**37**。
+5. **集成验证**：mvn test 基线 132→**150 全绿**；真库冒烟：等级/胜场/装备魂环三链路解锁 ✓、五行求和恒等 ✓、重复 sync 幂等（3 解锁 3 行）✓；浏览器 E2E：战斗触发双解锁 → toast「🏆 成就解锁：十战勇士 等2项！属性已生效」+ 战力 115→205 跳变 ✓；375px 零溢出、console 0 error。集成期排查工具：裸 SQL 抬数值一度"失灵"，根因是 UPDATE 漏带库名被 2>/dev/null 吞错（测试手法问题，非产品 bug）。
+6. **第八轮遗留闭环（80% 负荷警示分支）**：实测 9 槽满配千年环、任意等级下负荷比上限 ~57%——第九轮容量反馈回路调参把均衡利用率压在 80% 以下，警示条属防御性 UI（保留，难以自然触达是设计预期）。
+7. **遗留**：转生类成就（prestige_1/3）无写点、恒显 0 进度（待转生玩法）；成就 lifetime 口径含离线模拟胜场（里程碑语义）与任务"只认主动"（参与度语义）并存，均有意为之；dev 库新增 r15 系列测试用户。
+
 ---
 
 ## 🔮 后续建议
