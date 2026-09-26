@@ -204,7 +204,20 @@ data class CheckInStatusDto(
     val totalDays: Long = 0,
     val nextCycleDay: Int = 1,
     /** 固定返回 7 天循环全表（含数值），前端据此渲染预览格，避免前后端数值表漂移 */
-    val rewards: List<CheckInRewardDto> = emptyList()
+    val rewards: List<CheckInRewardDto> = emptyList(),
+    /** 是否可补签（第二十一轮，尾部新增带默认值向后兼容）：昨日无签到记录 且 用户有任意历史签到。
+     *  已签今日不影响——签了今天仍可补昨日 */
+    val makeupAvailable: Boolean = false
+)
+
+/** POST /api/game/checkin/makeup 的补签结果（失败返回 success=false + message，HTTP 200，照 breakthrough 惯例）。
+ *  补签只修复连签、不补发当日奖励；失败时除 success/message 外均为默认值 */
+data class MakeupResponse(
+    val success: Boolean,
+    val streak: Long = 0,
+    val totalDays: Long = 0,
+    val goldSpent: Long = 0,
+    val message: String = ""
 )
 
 data class CheckInRewardDto(

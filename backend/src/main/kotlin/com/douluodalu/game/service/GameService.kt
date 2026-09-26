@@ -14,6 +14,7 @@ import com.douluodalu.game.repository.EquippedRingRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
 import com.douluodalu.game.repository.UserRepository
+import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.cache.annotation.CacheEvict
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -36,7 +37,9 @@ class GameService(
     private val checkInService: CheckInService,
     private val dailyQuestService: DailyQuestService,
     private val equipmentPowerService: EquipmentPowerService,
-    private val achievementService: AchievementService
+    private val achievementService: AchievementService,
+    /** 业务计数器（Micrometer，Spring Boot 自动配置 bean）；测试注入 SimpleMeterRegistry */
+    private val meterRegistry: MeterRegistry
 ) {
     /**
      * 玩家有效战斗属性包（第十七轮战斗模型扩展）。resolveBattle 新签名入参：
@@ -74,6 +77,12 @@ class GameService(
     )
 
     companion object {
+        // ===== 业务计数器名（ops Grafana 面板按名建面板，逐字契约，勿改） =====
+        const val METRIC_BATTLE_TOTAL = "douluo.battle.total"
+        const val METRIC_AWAKEN_TOTAL = "douluo.awaken.total"
+        const val METRIC_PRESTIGE_TOTAL = "douluo.prestige.total"
+        const val METRIC_SCHOOL_CHOOSE_TOTAL = "douluo.school.choose.total"
+
         val REALM_NAMES = listOf(
             "魂士", "魂师", "大魂师", "魂尊", "魂宗",
             "魂王", "魂帝", "魂圣", "魂斗罗", "封号斗罗",
@@ -522,6 +531,8 @@ class GameService(
         profileRepo.save(profile)
         // 成就挂点（副路径）：prestigeCount 跳变 → prestige_1/prestige_3 解锁
         achievementService.sync(userId)
+        // 业务计数器：转生成功（Micrometer 计数是内存操作不抛业务异常，无需 try/catch，不影响主流程）
+        counter(METRIC_PRESTIGE_TOTAL)
         return PrestigeResponse(
             true, profile.prestigeCount,
             "转生成功！现为 ${profile.prestigeCount}转，全属性+${profile.prestigeCount * 10}%，天赋点+1"
@@ -560,6 +571,8 @@ class GameService(
         profile.battleSoulPower = GameBalance.martialSoulPower(soul).toInt()
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
+        // 业务计数器：觉醒成功（kind 区分首醒/重醒；Micrometer 不抛业务异常）
+        counter(METRIC_AWAKEN_TOTAL, "kind", if (reawakened) "reawaken" else "first")
         return AwakenResponse(
             success = true,
             martialSoulName = soul.name,
@@ -623,6 +636,8 @@ class GameService(
         profile.chosenSchool = def.name
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
+        // 业务计数器：流派选择成功（Micrometer 不抛业务异常）
+        counter(METRIC_SCHOOL_CHOOSE_TOTAL)
         return ChooseSchoolResponse(
             success = true,
             chosenSchool = def.name,
@@ -749,6 +764,9 @@ class GameService(
         // 成就挂点（副路径）：胜败都可触发——totalBattleWins/等级在两侧都有跳变点，
         // sync 便宜且统一（失败不击穿主流程，见 AchievementService）
         achievementService.sync(userId)
+
+        // 业务计数器：战斗结算（胜败都计；Micrometer 不抛业务异常，不影响主流程）
+        counter(METRIC_BATTLE_TOTAL, "outcome", if (won) "win" else "lose")
 
         return BattleResponse(
             won = won, rounds = rounds, monsterName = monsterName, monsterMaxHp = monster.hp,
@@ -916,6 +934,11 @@ class GameService(
     private fun getProfile(userId: Long): PlayerProfileEntity {
         return profileRepo.findByUserId(userId)
             ?: throw IllegalStateException("玩家存档不存在")
+    }
+
+    /** 业务计数器薄封装：Micrometer 计数为内存操作、不抛业务异常，直接增量即可（不影响主流程） */
+    private fun counter(name: String, vararg tags: String) {
+        meterRegistry.counter(name, *tags).increment()
     }
 
     /**

@@ -5,11 +5,11 @@ import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.CheckInRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
-import org.mockito.InjectMocks
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.*
@@ -26,7 +26,9 @@ class CheckInServiceTest {
     @Mock
     private lateinit var dailyQuestService: DailyQuestService
 
-    @InjectMocks
+    /** 真实 Micrometer 注册表（计数器断言用；测试间 clear 防串扰） */
+    private val meterRegistry = SimpleMeterRegistry()
+
     private lateinit var checkInService: CheckInService
 
     @BeforeEach
@@ -34,6 +36,8 @@ class CheckInServiceTest {
         MockitoAnnotations.openMocks(this)
         doAnswer { it.arguments[0] }.whenever(checkInRepository).save(any())
         doAnswer { it.arguments[0] }.whenever(profileRepo).save(any())
+        meterRegistry.clear()
+        checkInService = CheckInService(checkInRepository, profileRepo, dailyQuestService, meterRegistry)
     }
 
     private fun profile() = PlayerProfileEntity(userId = 1L, level = 5)
@@ -196,5 +200,214 @@ class CheckInServiceTest {
             .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
         assertThrows(IllegalArgumentException::class.java) { checkInService.checkIn(1L) }
         verify(dailyQuestService).recordCheckin(1L)
+    }
+
+    // ==================== 签到业务计数器 ====================
+
+    @Test
+    fun `check-in success should increment micrometer counter`() {
+        doReturn(null).whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(false).whenever(checkInRepository).existsByUserIdAndCheckDate(eq(1L), any())
+        doReturn(profile()).whenever(profileRepo).findByUserId(1L)
+
+        checkInService.checkIn(1L)
+
+        assertEquals(1.0, meterRegistry.get(CheckInService.METRIC_CHECKIN_TOTAL).counter().count())
+    }
+
+    // ==================== 补签（第二十一轮） ====================
+
+    @Test
+    fun `makeup should reject when user has no check-in history`() {
+        doReturn(null).whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+
+        val result = checkInService.makeup(1L)
+
+        assertFalse(result.success)
+        verify(profileRepo, never()).findByUserId(any())
+        verify(checkInRepository, never()).save(any())
+    }
+
+    @Test
+    fun `makeup should reject when yesterday is the latest record`() {
+        doReturn(lastRecord(LocalDate.now().minusDays(1), streak = 3, total = 9))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+
+        val result = checkInService.makeup(1L)
+
+        assertFalse(result.success)
+        assertEquals(CheckInService.MAKEUP_ALREADY_MESSAGE, result.message)
+        verify(checkInRepository, never()).save(any())
+    }
+
+    @Test
+    fun `makeup should reject when yesterday is signed behind a today record`() {
+        // 今天已签且昨天也签过（最近一条是今天行，昨日判定需查库）→ 无需补签
+        doReturn(lastRecord(LocalDate.now(), streak = 4, total = 10))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(true).whenever(checkInRepository)
+            .existsByUserIdAndCheckDate(1L, LocalDate.now().minusDays(1))
+
+        val result = checkInService.makeup(1L)
+
+        assertFalse(result.success)
+        assertEquals(CheckInService.MAKEUP_ALREADY_MESSAGE, result.message)
+        verify(checkInRepository, never()).save(any())
+    }
+
+    @Test
+    fun `makeup should reject when gold is insufficient`() {
+        doReturn(lastRecord(LocalDate.now().minusDays(2), streak = 3, total = 9))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(profile()).whenever(profileRepo).findByUserId(1L) // gold=0 < 500
+
+        val result = checkInService.makeup(1L)
+
+        assertFalse(result.success)
+        assertTrue(result.message.contains("500"), result.message)
+        verify(checkInRepository, never()).save(any())
+        verify(profileRepo, never()).save(any())
+    }
+
+    @Test
+    fun `makeup success should repair streak from pre-yesterday snapshot without granting rewards`() {
+        // 前天签过（streak=3/total=9）、昨天断、今天未签 → 补昨天 streak=4/total=10
+        val p = profile()
+        p.gold = 1000L
+        doReturn(lastRecord(LocalDate.now().minusDays(2), streak = 3, total = 9))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(lastRecord(LocalDate.now().minusDays(2), streak = 3, total = 9))
+            .whenever(checkInRepository)
+            .findFirstByUserIdAndCheckDateLessThanOrderByCheckDateDesc(eq(1L), any())
+        doReturn(false).whenever(checkInRepository).existsByUserIdAndCheckDate(eq(1L), any())
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+
+        val result = checkInService.makeup(1L)
+
+        assertTrue(result.success)
+        assertEquals(4L, result.streak)
+        assertEquals(10L, result.totalDays)
+        assertEquals(500L, result.goldSpent)
+        assertEquals(500L, p.gold) // 只扣 500 金
+        assertEquals(0L, p.bossCoin) // 不补发当日奖励
+        assertEquals(0L, p.soulPower)
+        val captor = ArgumentCaptor.forClass(CheckInEntity::class.java)
+        verify(checkInRepository).save(captor.capture())
+        assertEquals(LocalDate.now().minusDays(1), captor.value.checkDate)
+        assertEquals(4L, captor.value.streakAtSign)
+        assertEquals(10L, captor.value.totalDaysAtSign)
+        assertEquals(4, captor.value.cycleDay) // ((4-1)%7)+1
+        // 补签是「昨天」的动作，不触发每日任务「完成今日签到」计数
+        verify(dailyQuestService, never()).recordCheckin(any())
+        // 业务计数器（ops 面板名逐字契约）
+        assertEquals(1.0, meterRegistry.get(CheckInService.METRIC_CHECKIN_MAKEUP_TOTAL).counter().count())
+    }
+
+    @Test
+    fun `signing today after makeup should continue the streak`() {
+        // 补签昨天（streak=4）后今天正签 → streak 连续到 5（连签修复的前向语义）
+        val p = profile()
+        p.gold = 1000L
+        doReturn(lastRecord(LocalDate.now().minusDays(2), streak = 3, total = 9))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(lastRecord(LocalDate.now().minusDays(2), streak = 3, total = 9))
+            .whenever(checkInRepository)
+            .findFirstByUserIdAndCheckDateLessThanOrderByCheckDateDesc(eq(1L), any())
+        doReturn(false).whenever(checkInRepository).existsByUserIdAndCheckDate(eq(1L), any())
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+
+        val makeup = checkInService.makeup(1L)
+        assertTrue(makeup.success)
+
+        // 补签落库后，最近一条变为昨天行（mock 切换到补签后的世界状态）
+        doReturn(lastRecord(LocalDate.now().minusDays(1), streak = makeup.streak, total = makeup.totalDays))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+
+        val sign = checkInService.checkIn(1L)
+
+        assertEquals(5L, sign.streak)
+        assertEquals(11L, sign.totalDays)
+        assertEquals(5, sign.cycleDay)
+    }
+
+    @Test
+    fun `concurrent duplicate makeup should be normalized by unique constraint like check-in`() {
+        // 并发双补同一「昨天」：save 撞 uk_user_date → 照 checkIn 惯例归一为 400
+        doReturn(lastRecord(LocalDate.now().minusDays(2), streak = 3, total = 9))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(false).whenever(checkInRepository).existsByUserIdAndCheckDate(eq(1L), any())
+        doReturn(profile().apply { gold = 1000L }).whenever(profileRepo).findByUserId(1L)
+        doThrow(DataIntegrityViolationException("uk_user_date")).whenever(checkInRepository).save(any())
+
+        val ex = assertThrows(IllegalArgumentException::class.java) { checkInService.makeup(1L) }
+
+        assertEquals(CheckInService.MAKEUP_ALREADY_MESSAGE, ex.message)
+        verify(profileRepo, never()).save(any())
+    }
+
+    @Test
+    fun `makeup with no pre-yesterday base should start streak at 1`() {
+        // 历史只有今天一条（首签当天就补昨天）：基准缺失 → streak=1，total=今天行快照+1
+        doReturn(lastRecord(LocalDate.now(), streak = 1, total = 1))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(false).whenever(checkInRepository).existsByUserIdAndCheckDate(eq(1L), any())
+        doReturn(null).whenever(checkInRepository)
+            .findFirstByUserIdAndCheckDateLessThanOrderByCheckDateDesc(eq(1L), any())
+        doReturn(profile().apply { gold = 1000L }).whenever(profileRepo).findByUserId(1L)
+
+        val result = checkInService.makeup(1L)
+
+        assertTrue(result.success)
+        assertEquals(1L, result.streak)
+        assertEquals(2L, result.totalDays)
+        val captor = ArgumentCaptor.forClass(CheckInEntity::class.java)
+        verify(checkInRepository).save(captor.capture())
+        assertEquals(1, captor.value.cycleDay) // streak=1 → 循环第 1 天
+    }
+
+    // ==================== makeupAvailable 三态 ====================
+
+    @Test
+    fun `makeupAvailable should be false for a player who never signed in`() {
+        doReturn(null).whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+
+        assertFalse(checkInService.getCheckInStatus(1L).makeupAvailable)
+    }
+
+    @Test
+    fun `makeupAvailable should be true when streak is broken`() {
+        doReturn(lastRecord(LocalDate.now().minusDays(5), streak = 6, total = 20))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+
+        assertTrue(checkInService.getCheckInStatus(1L).makeupAvailable)
+    }
+
+    @Test
+    fun `makeupAvailable should be false when yesterday is the latest record`() {
+        doReturn(lastRecord(LocalDate.now().minusDays(1), streak = 3, total = 9))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+
+        assertFalse(checkInService.getCheckInStatus(1L).makeupAvailable)
+    }
+
+    @Test
+    fun `makeupAvailable should be true after signing today while yesterday was missed`() {
+        // 签了今天仍可补昨日（last=今天行、昨日无记录）
+        doReturn(lastRecord(LocalDate.now(), streak = 1, total = 5))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(false).whenever(checkInRepository)
+            .existsByUserIdAndCheckDate(1L, LocalDate.now().minusDays(1))
+
+        assertTrue(checkInService.getCheckInStatus(1L).makeupAvailable)
+    }
+
+    @Test
+    fun `makeupAvailable should be false when today and yesterday are both signed`() {
+        doReturn(lastRecord(LocalDate.now(), streak = 4, total = 10))
+            .whenever(checkInRepository).findFirstByUserIdOrderByCheckDateDesc(1L)
+        doReturn(true).whenever(checkInRepository)
+            .existsByUserIdAndCheckDate(1L, LocalDate.now().minusDays(1))
+
+        assertFalse(checkInService.getCheckInStatus(1L).makeupAvailable)
     }
 }

@@ -1,20 +1,25 @@
 'use client';
 
+import { MAKEUP_COST_GOLD } from '@/lib/api';
 import type { CheckInStatus } from '@/lib/api';
 import { EmptyPanel } from '@/components/StateViews';
 
 /**
  * 每日签到卡（7 日循环）：奖励表由后端下发（rewards），前端不硬编码数值。
  * 后端响应升级前 gameState.checkIn 可能缺失/为空 → 整卡降级为标题+「暂不可用」灰字，不留破图。
+ * 补签条：makeupAvailable=true 才渲染（后端判定昨日漏签可补）；旧后端缺失 → 纯增量不显示。
  */
 export default function CheckinCard({
     checkIn,
     actionLoading,
     onCheckin,
+    onMakeup,
 }: {
     checkIn?: CheckInStatus;
     actionLoading: boolean;
     onCheckin: () => void;
+    /** 补签回调（页面用 runAction 包装 api.makeupCheckin）；仅补签条渲染时可触达 */
+    onMakeup?: () => void;
 }) {
     const rewards = checkIn?.rewards ? [...checkIn.rewards].sort((a, b) => a.day - b.day) : [];
     const usable = rewards.length > 0;
@@ -93,6 +98,29 @@ export default function CheckinCard({
                     >
                         {signed ? '今日已签 ✓' : actionLoading ? '签到中...' : '签到'}
                     </button>
+
+                    {/* 补签条：只修复连签、不补发当日奖励（文案写明）；补签成功后 runAction 自动 refresh
+                        → makeupAvailable 变 false → 整条消失、连续/累计徽标更新。金币不足等失败由后端 message 提示。
+                        按钮为 secondary 风格（border-line），弱于主签到按钮；窄屏文案与按钮单列堆叠，375px 零溢出。 */}
+                    {checkIn?.makeupAvailable && (
+                        <div
+                            data-testid="makeup-row"
+                            className="mt-2 flex flex-col sm:flex-row sm:items-center gap-2 rounded-lg border border-line bg-gray-700/30 p-2.5"
+                        >
+                            <p className="min-w-0 text-xs leading-relaxed text-gray-400">
+                                昨日漏签了！花费 {MAKEUP_COST_GOLD} 金币补签，修复连续签到（不补发当日奖励）
+                            </p>
+                            <button
+                                type="button"
+                                data-testid="makeup-btn"
+                                onClick={onMakeup}
+                                disabled={actionLoading}
+                                className="shrink-0 w-full sm:w-auto min-h-11 px-3 rounded-lg text-xs sm:text-sm font-bold text-gray-200 border border-line bg-gray-700/50 hover:bg-gray-700 transition-colors disabled:opacity-50"
+                            >
+                                补签昨日（{MAKEUP_COST_GOLD}金币）
+                            </button>
+                        </div>
+                    )}
                 </>
             )}
         </div>

@@ -43,6 +43,7 @@ class PlayerProfileEntity(
 
     @Column(name = "tower_floor")
     var towerFloor: Int = 0,
+    /** 预留：塔 Boss 击杀统计（无写点，历史迁移遗留列；删除需 DB 迁移，保留列并在此标注） */
     @Column(name = "tower_boss_kills")
     var towerBossKills: Int = 0,
     @Column(name = "killing_intent")

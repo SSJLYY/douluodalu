@@ -46,6 +46,10 @@ services:
       # 其余可选：RATELIMIT_ENABLED / AUTH_RPM / GLOBAL_RPM / JWT_EXPIRATION / FLYWAY_ENABLED
       # 表结构由 Flyway 在后端启动时自动迁移（V1~V4），无需手工建表
     ports:
+      # 8080 同时暴露 /api/** 与 GET /actuator/prometheus（Micrometer 指标端点）。
+      # 非 prod 匿名可抓取（app.monitoring.prometheus-public=true 默认开）；
+      # prod profile 默认双保险关闭，如需抓取见 DEPLOY.md「监控与备份」。
+      # compose 内的监控栈走内网服务名 backend:8080，不经宿主机端口映射。
       - "${BACKEND_PORT:-8080}:8080"
     networks: [douluo]
 
@@ -64,9 +68,49 @@ services:
       - "${FRONTEND_PORT:-3000}:3000"
     networks: [douluo]
 
+  # ---- 监控栈：profile 隔离，默认 up 不启动 ----
+  # 启用：docker compose --profile monitoring up -d （详见 DEPLOY.md「监控与备份」）
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: douluo-prometheus
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    # 抓取配置 + 告警规则均来自 ops/prometheus/，数据落 prometheus-data 卷
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    # 默认只绑回环：Prometheus UI 无鉴权，公网访问请走 Nginx 反代 + ACL
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks: [douluo]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: douluo-grafana
+    restart: unless-stopped
+    profiles: ["monitoring"]
+    depends_on:
+      - prometheus
+    environment:
+      # 默认 admin/admin，首登强制改密；正式环境在 .env 里设 GRAFANA_ADMIN_PASSWORD 覆盖
+      # （不用 :? 强制，避免默认 up 不带 monitoring profile 时也要求该变量）
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    # provisioning 目录自动注册 Prometheus 数据源与 douluo-dashboard.json 总览面板
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/douluo-dashboard.json:/var/lib/grafana/dashboards/douluo-dashboard.json:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3001"
+    networks: [douluo]
+
 networks:
   douluo:
     driver: bridge
 
 volumes:
   mysql-data:
+  prometheus-data:   # monitoring profile：Prometheus 时序数据
+  grafana-data:      # monitoring profile：Grafana 配置/仪表盘/账号库

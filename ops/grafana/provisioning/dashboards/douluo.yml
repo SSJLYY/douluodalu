@@ -1,0 +1,15 @@
+# Grafana 仪表盘文件提供者：扫描 /var/lib/grafana/dashboards 下的 JSON 自动加载
+# douluo-dashboard.json 由 docker-compose.yml 以只读方式挂载到该目录
+apiVersion: 1
+
+providers:
+  - name: douluo
+    orgId: 1
+    folder: Douluo
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

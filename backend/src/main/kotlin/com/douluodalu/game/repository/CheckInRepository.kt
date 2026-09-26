@@ -12,4 +12,7 @@ interface CheckInRepository : JpaRepository<CheckInEntity, Long> {
 
     /** 当日预检（save 之外另有 uk_user_date 唯一键兜底并发双击） */
     fun existsByUserIdAndCheckDate(userId: Long, checkDate: LocalDate): Boolean
+
+    /** 某日期之前（< checkDate）最后一条记录：补签 streak 快照的基准（可能不存在——历史全在该日之后） */
+    fun findFirstByUserIdAndCheckDateLessThanOrderByCheckDateDesc(userId: Long, checkDate: LocalDate): CheckInEntity?
 }

@@ -11,6 +11,7 @@ import com.douluodalu.game.repository.EquippedRingRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
 import com.douluodalu.game.repository.TalentRepository
 import com.douluodalu.game.repository.UserRepository
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -69,7 +70,10 @@ class EquipmentFlowTest {
     @Captor
     private lateinit var bagItemCaptor: ArgumentCaptor<BackpackItemEntity>
 
-    @InjectMocks
+    // GameService 构造新增 MeterRegistry（业务计数器）：@InjectMocks 对不可解析参数传 null
+    // 会撞 Kotlin 非空检查，改为手动构造注入真实 SimpleMeterRegistry
+    private val meterRegistry = SimpleMeterRegistry()
+
     private lateinit var gameService: GameService
 
     @BeforeEach
@@ -78,6 +82,11 @@ class EquipmentFlowTest {
         doAnswer { it.arguments[0] }.whenever(profileRepo).save(any())
         doAnswer { it.arguments[0] }.whenever(backpackRepo).save(any())
         doAnswer { it.arguments[0] }.whenever(equippedRingRepo).save(any())
+        gameService = GameService(
+            profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
+            userRepository, webSocketService, checkInService, dailyQuestService,
+            equipmentPowerService, achievementService, meterRegistry
+        )
     }
 
     private fun ring(id: Long, year: Int = 1, quality: Int = 2, percentage: Int = 350) = BackpackItemEntity(

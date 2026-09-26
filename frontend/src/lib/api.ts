@@ -112,6 +112,16 @@ class ApiClient {
         return this.request<CheckInResult>('/api/game/checkin', { method: 'POST' });
     }
 
+    /**
+     * 补签（只能补昨天这一天）：花费 500 金币（MAKEUP_COST_GOLD 镜像常量）修复连续签到，
+     * 只修复连签、不补发当日奖励；补签后今日仍可正常签到。
+     * 失败（无历史签到/昨日已签/金币不足）也是 200 + success:false + message
+     * （照 prestige/awaken 惯例，前端只透传 message）。
+     */
+    async makeupCheckin() {
+        return this.request<MakeupResult>('/api/game/checkin/makeup', { method: 'POST' });
+    }
+
     // Daily Quests（每日任务）：未达标/已领取由后端 400 → request 统一抛 message
     async claimQuest(questId: string) {
         return this.request<ClaimQuestResult>('/api/game/quests/claim', {
@@ -676,6 +686,8 @@ export interface CheckInStatus {
     nextCycleDay: number;
     /** 7 天奖励全表（后端下发） */
     rewards: CheckInReward[];
+    /** 昨日漏签且可补签（花费 MAKEUP_COST_GOLD 金币，只修复连签不补发当日奖励）。旧后端缺失按 undefined → 补签条不渲染（纯增量功能） */
+    makeupAvailable?: boolean;
 }
 
 /** POST /api/game/checkin 响应；已签返回 400（message=「今日已签到，明天再来吧」） */
@@ -686,6 +698,24 @@ export interface CheckInResult {
     streak: number;
     totalDays: number;
     cycleDay: number;
+}
+
+/** 补签花费金币（与后端 MAKEUP_COST_GOLD 同源，改需双向同步——照 REAWAKEN_COST_GOLD/RESCHOOL_COST_GOLD 镜像惯例） */
+export const MAKEUP_COST_GOLD = 500;
+
+/**
+ * POST /api/game/checkin/makeup 响应：失败（无历史签到/昨日已签/金币不足）也是 200 + success:false + message
+ * （照 prestige/awaken 惯例，前端只透传 message）。只修复连签、不补发当日奖励；补签后今日仍可正常签到。
+ */
+export interface MakeupResult {
+    success: boolean;
+    /** 补签后的连续签到天数 */
+    streak: number;
+    /** 补签后的累计签到天数 */
+    totalDays: number;
+    /** 本次补签实际花费金币（= MAKEUP_COST_GOLD） */
+    goldSpent: number;
+    message: string;
 }
 
 /** 每日任务单条：固定 5 条（battle_wins/cultivate/tower/checkin/shop_buy），后端按日重置 */

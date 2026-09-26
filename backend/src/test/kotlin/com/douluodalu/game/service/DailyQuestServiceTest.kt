@@ -5,11 +5,11 @@ import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.DailyQuestProgressRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
-import org.mockito.InjectMocks
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.*
@@ -23,13 +23,17 @@ class DailyQuestServiceTest {
     @Mock
     private lateinit var profileRepo: PlayerProfileRepository
 
-    @InjectMocks
+    /** 真实 Micrometer 注册表（计数器断言用；测试间 clear 防串扰） */
+    private val meterRegistry = SimpleMeterRegistry()
+
     private lateinit var dailyQuestService: DailyQuestService
 
     @BeforeEach
     fun setUp() {
         MockitoAnnotations.openMocks(this)
         doAnswer { it.arguments[0] }.whenever(profileRepo).save(any())
+        meterRegistry.clear()
+        dailyQuestService = DailyQuestService(dailyQuestRepo, profileRepo, meterRegistry)
     }
 
     private fun profile() = PlayerProfileEntity(userId = 1L, level = 5)
@@ -125,6 +129,9 @@ class DailyQuestServiceTest {
         assertEquals(def.rewardGold, p.gold)
         assertEquals(def.rewardBossCoin, p.bossCoin)
         assertEquals(def.rewardSoulPower, p.soulPower)
+        // 业务计数器：领取成功带 questId tag
+        assertEquals(1.0, meterRegistry.get(DailyQuestService.METRIC_QUEST_CLAIM_TOTAL)
+            .tag("questId", GameBalance.QUEST_BATTLE_WINS).counter().count())
     }
 
     @Test

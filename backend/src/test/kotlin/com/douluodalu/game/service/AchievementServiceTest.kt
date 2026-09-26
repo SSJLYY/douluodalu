@@ -269,4 +269,106 @@ class AchievementServiceTest {
         assertEquals(0L, bonus.atkBonus)
         assertEquals(0L, bonus.hpBonus)
     }
+
+    // ==================== 设计文档 §10 缺口补齐（第二十一轮） ====================
+
+    @Test
+    fun `achievement defs should cover the 21 documented achievements in doc order`() {
+        val ids = GameBalance.AchievementDefs.all.map { it.id }
+        assertEquals(21, ids.size)
+        assertEquals(
+            listOf(
+                "cult_10", "cult_30", "cult_50", "cult_80", "cult_100", "cult_150",
+                "ring_1", "ring_3", "ring_5", "ring_9",
+                "battle_10", "battle_50", "battle_200", "battle_1000",
+                "tower_10", "tower_30", "tower_50", "tower_100",
+                "prestige_1", "prestige_3", "prestige_5"
+            ),
+            ids
+        )
+    }
+
+    @Test
+    fun `cult_150 should unlock at level 150 with doc section 10-1 rewards`() {
+        doReturn(profile(level = 150)).whenever(profileRepo).findByUserId(1L)
+        doReturn(emptyList<AchievementEntity>()).whenever(achievementRepo).findByUserId(1L)
+
+        achievementService.sync(1L)
+
+        val captor = ArgumentCaptor.forClass(AchievementEntity::class.java)
+        verify(achievementRepo, times(6)).save(captor.capture()) // cult_10..150 六连解锁
+        assertEquals("cult_150", captor.allValues.last().achievementId)
+        val rewards = GameBalance.ACHIEVEMENT_BY_ID.getValue("cult_150").rewards
+        assertEquals(8000L, rewards.hp)
+        assertEquals(300, rewards.atk)
+        assertEquals(80, rewards.pdef)
+        assertEquals(80, rewards.mdef)
+        assertEquals(12, rewards.critRate)
+        assertEquals(30, rewards.critDmg)
+    }
+
+    @Test
+    fun `battle_200 should map to totalBattleWins progress`() {
+        doReturn(profile(wins = 250)).whenever(profileRepo).findByUserId(1L)
+        doReturn(emptyList<AchievementEntity>()).whenever(achievementRepo).findByUserId(1L)
+
+        achievementService.sync(1L)
+
+        val captor = ArgumentCaptor.forClass(AchievementEntity::class.java)
+        verify(achievementRepo, times(3)).save(captor.capture())
+        // 250 胜跨过 battle_10/50/200，battle_1000 未达
+        assertEquals(listOf("battle_10", "battle_50", "battle_200"), captor.allValues.map { it.achievementId })
+    }
+
+    @Test
+    fun `tower_100 should map to towerFloor progress`() {
+        doReturn(profile(towerFloor = 100)).whenever(profileRepo).findByUserId(1L)
+        doReturn(emptyList<AchievementEntity>()).whenever(achievementRepo).findByUserId(1L)
+        doReturn(emptyList<EquippedRing>()).whenever(equippedRingRepo).findByUserId(1L)
+
+        achievementService.sync(1L)
+
+        val captor = ArgumentCaptor.forClass(AchievementEntity::class.java)
+        verify(achievementRepo, times(4)).save(captor.capture()) // tower_10/30/50/100 四连
+        assertEquals("tower_100", captor.allValues.last().achievementId)
+    }
+
+    @Test
+    fun `prestige_5 should unlock at prestigeCount 5 with doc section 10-5 rewards`() {
+        doReturn(profile(prestige = 5)).whenever(profileRepo).findByUserId(1L)
+        doReturn(emptyList<AchievementEntity>()).whenever(achievementRepo).findByUserId(1L)
+        doReturn(emptyList<EquippedRing>()).whenever(equippedRingRepo).findByUserId(1L)
+
+        achievementService.sync(1L)
+
+        val captor = ArgumentCaptor.forClass(AchievementEntity::class.java)
+        verify(achievementRepo, times(3)).save(captor.capture())
+        assertEquals(listOf("prestige_1", "prestige_3", "prestige_5"), captor.allValues.map { it.achievementId })
+        val rewards = GameBalance.ACHIEVEMENT_BY_ID.getValue("prestige_5").rewards
+        assertEquals(5000L, rewards.hp)
+        assertEquals(150, rewards.pdef)
+        assertEquals(150, rewards.mdef)
+        assertEquals(5, rewards.critRate)
+        assertEquals(50, rewards.critDmg)
+    }
+
+    @Test
+    fun `new achievements should expose live progress in status synthesis`() {
+        doReturn(profile(level = 150, wins = 1000, towerFloor = 100, prestige = 5))
+            .whenever(profileRepo).findByUserId(1L)
+        doReturn(emptyList<AchievementEntity>()).whenever(achievementRepo).findByUserId(1L)
+        doReturn(rings(9)).whenever(equippedRingRepo).findByUserId(1L)
+
+        val status = achievementService.getStatus(1L)
+
+        // progressOf 口径：新成就与旧成就同源（level/wins/floor/prestige 维度）
+        assertEquals(150L, status.first { it.id == "cult_150" }.progress)
+        assertEquals(1000L, status.first { it.id == "battle_1000" }.progress)
+        assertEquals(1000L, status.first { it.id == "battle_200" }.progress) // BATTLE 口径=实时胜场，不按 target 截断
+        assertEquals(100L, status.first { it.id == "tower_100" }.progress)
+        assertEquals(5L, status.first { it.id == "prestige_5" }.progress)
+        // 奖励字段照带（ AchievementRewardDto 七字段全量镜像）
+        assertEquals(GameBalance.ACHIEVEMENT_BY_ID.getValue("tower_100").rewards.critDmg,
+            status.first { it.id == "tower_100" }.rewards.critDmg)
+    }
 }

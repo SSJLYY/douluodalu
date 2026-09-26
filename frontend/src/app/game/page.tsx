@@ -181,6 +181,15 @@ export default function GamePage() {
         '签到失败',
     );
 
+    // 补签昨日（花费 500 金币，MAKEUP_COST_GOLD）：后端失败（无历史签到/昨日已签/金币不足）也是
+    // 200 + success:false → 透传 message（照 prestige/awaken 惯例）；只修复连签、不补发当日奖励。
+    // runAction 自动 refresh 拉新 makeupAvailable/streak（成功后补签条消失、连续徽标更新）。
+    const handleMakeupCheckin = () => runAction(
+        () => api.makeupCheckin(),
+        (r) => setMessage(r.message),
+        '补签失败',
+    );
+
     // 每日任务领奖：runAction 成功回调 + 自动 refresh 拉新任务进度；未达标/重复领取由后端 400 → message 提示
     const handleClaimQuest = (questId: string) => runAction(
         () => api.claimQuest(questId),
@@ -343,7 +352,7 @@ export default function GamePage() {
                 <PowerDetailPanel power={gameState.power} detail={gameState.powerDetail} combatStats={gameState.combatStats} />
 
                 {/* 每日签到（后端未升级时 checkIn 缺失 → 卡内降级为空态） */}
-                <CheckinCard checkIn={gameState.checkIn} actionLoading={actionLoading} onCheckin={handleCheckin} />
+                <CheckinCard checkIn={gameState.checkIn} actionLoading={actionLoading} onCheckin={handleCheckin} onMakeup={handleMakeupCheckin} />
 
                 {/* 每日任务（纯增量功能：后端未升级时 dailyQuests 缺失 → 整卡隐藏不渲染） */}
                 <DailyQuestsCard quests={gameState.dailyQuests?.quests} actionLoading={actionLoading} onClaim={handleClaimQuest} />

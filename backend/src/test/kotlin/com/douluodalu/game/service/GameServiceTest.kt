@@ -18,6 +18,7 @@ import com.douluodalu.game.repository.EquippedRingRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
 import com.douluodalu.game.repository.TalentRepository
 import com.douluodalu.game.repository.UserRepository
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -72,17 +73,22 @@ class GameServiceTest {
 
     private lateinit var gameService: GameService
 
+    /** 真实 Micrometer 注册表（计数器断言用；测试间 clear 防串扰） */
+    private val meterRegistry = SimpleMeterRegistry()
+
     @BeforeEach
     fun setUp() {
         MockitoAnnotations.openMocks(this)
         doAnswer { it.arguments[0] }.whenever(profileRepo).save(any())
+        meterRegistry.clear()
         // 真实 EquipmentPowerService（wire 同一组 mock 仓库）：battle/塔/状态组装走 bonusFor 真实公式；
         // 成就加成默认空（Mockito 对 List 返回类型的默认值即空表 → 成就加成 0）
         gameService = GameService(
             profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
             userRepository, webSocketService, checkInService, dailyQuestService,
             EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
-            achievementService
+            achievementService,
+            meterRegistry
         )
     }
 
@@ -314,6 +320,34 @@ class GameServiceTest {
         verify(achievementService).sync(1L)
     }
 
+    @Test
+    fun `battle should increment micrometer counter with outcome tag`() {
+        // 确定性获胜：douluo.battle.total{outcome=win} +1（ops Grafana 面板名逐字契约）
+        val p = profile()
+        p.currentHp = 350L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+
+        gameService.battle(1L)
+
+        assertEquals(1.0, meterRegistry.get(GameService.METRIC_BATTLE_TOTAL)
+            .tag("outcome", "win").counter().count())
+
+        // 确定性战败：douluo.battle.total{outcome=lose} +1（同一计数器按 tag 分列）
+        val loser = PlayerProfileEntity(userId = 1L, level = 1)
+        loser.currentMapId = 7
+        loser.currentStage = 15
+        whenever(profileRepo.findByUserId(1L)).thenReturn(loser)
+
+        gameService.battle(1L)
+
+        assertEquals(1.0, meterRegistry.get(GameService.METRIC_BATTLE_TOTAL)
+            .tag("outcome", "lose").counter().count())
+    }
+
     // ==================== 塔战逐回合日志 ====================
 
     @Test
@@ -482,7 +516,8 @@ class GameServiceTest {
             profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
             userRepository, webSocketService, checkInService, dailyQuestService,
             EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
-            realAchievementService
+            realAchievementService,
+            SimpleMeterRegistry()
         )
         val p = PlayerProfileEntity(userId = 1L, level = GameBalance.PRESTIGE_MIN_LEVEL)
         whenever(profileRepo.findByUserId(1L)).thenReturn(p)

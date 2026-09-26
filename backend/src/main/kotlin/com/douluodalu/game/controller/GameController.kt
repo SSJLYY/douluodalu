@@ -41,6 +41,16 @@ class GameController(
         return ResponseEntity.ok(checkInService.checkIn(userId))
     }
 
+    @Operation(
+        summary = "补签", description = "只能补签昨天：花费 500 金币修复连签，不补发当日奖励；" +
+                "无历史签到/昨日已签/金币不足返回 200 + success=false"
+    )
+    @PostMapping("/checkin/makeup")
+    fun makeupCheckIn(auth: Authentication): ResponseEntity<MakeupResponse> {
+        val userId = auth.principal as Long
+        return ResponseEntity.ok(checkInService.makeup(userId))
+    }
+
     @Operation(summary = "领取每日任务奖励", description = "进度未达标/今日已领取/未知任务返回 400")
     @PostMapping("/quests/claim")
     fun claimQuest(auth: Authentication, @Valid @RequestBody request: ClaimQuestRequest): ResponseEntity<ClaimQuestResponse> {

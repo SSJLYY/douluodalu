@@ -1,0 +1,69 @@
+# 斗罗大陆 · 放置传说 —— 告警规则
+# 由 prometheus.yml 的 rule_files 加载；job 名与抓取配置对应（douluo-backend）
+groups:
+  - name: douluo-backend
+    rules:
+      # 抓取目标连续 1 分钟不可达：进程挂了 / 容器退出 / 网络不通
+      # 1m 容忍单次抓取抖动，不至于误报
+      - alert: InstanceDown
+        expr: up{job="douluo-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "后端实例不可达 ({{ $labels.instance }})"
+          description: "douluo-backend 已 1 分钟无法抓取指标（up=0），服务可能已停止，请立即检查容器状态与日志。"
+
+      # 5xx 占比 > 5% 持续 5 分钟：正常业务错误率应接近 0，
+      # 5% 且持续 5m 说明不是偶发（限流/校验类 4xx 不计入），大概率是服务端故障
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="douluo-backend", status=~"5.."}[5m]))
+            /
+          sum(rate(http_server_requests_seconds_count{job="douluo-backend"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HTTP 5xx 错误率超过 5%（持续 5m）"
+          description: "当前 5xx 占比 {{ $value | humanizePercentage }}。低流量时比值为 NaN 不触发，避免无流量误报。"
+
+      # P99 延迟 > 2s 持续 10 分钟：放置游戏接口正常应在百毫秒级，
+      # 持续 2s+ 说明 DB 慢查询 / GC 停顿 / 线程池打满；10m 过滤掉单次 GC 或冷启动尖峰
+      - alert: HighLatencyP99
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(http_server_requests_seconds_bucket{job="douluo-backend"}[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP P99 延迟超过 2s（持续 10m）"
+          description: "P99 = {{ $value | humanizeDuration }}。结合 HikariCP pending 与 GC 面板定位瓶颈。"
+
+      # 老年代使用 > 85% 持续 10 分钟：逼近 Full GC 触发线，
+      # 内存泄漏或堆过小时老年代会长期高位；10m 排除正常波动
+      # 注：JDK 21 默认 G1，老年代池 id 为 "G1 Old Gen"，正则兼容 PS Old Gen / Tenured Gen
+      - alert: JvmMemoryPressure
+        expr: |
+          sum(jvm_memory_used_bytes{job="douluo-backend", area="heap", id=~".*(Old|Tenured).*"})
+            /
+          sum(jvm_memory_max_bytes{job="douluo-backend", area="heap", id=~".*(Old|Tenured).*"}) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "JVM 老年代使用率超过 85%（持续 10m）"
+          description: "老年代占用 {{ $value | humanizePercentage }}，Full GC 风险高；如持续上涨疑似内存泄漏，需 dump 分析。"
+
+      # HikariCP 有连接等待者持续 5 分钟：pending > 0 即有请求在排队等连接，
+      # 偶发可接受，持续 5m 说明连接池太小或存在慢 SQL 占住连接
+      - alert: DbPoolExhausted
+        expr: hikaricp_connections_pending{job="douluo-backend"} > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "数据库连接池等待队列非空（持续 5m）"
+          description: "hikaricp_connections_pending = {{ $value }}，请求已阻塞等连接。检查慢 SQL，或调大 HIKARI pool（默认 10）。"

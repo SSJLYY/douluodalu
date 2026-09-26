@@ -1,7 +1,12 @@
 package com.douluodalu.game.model
 
-import kotlin.math.pow
-import kotlin.random.Random
+
+// 【第二十一轮死数据清理留档】本文件曾有 PlayerAttributes / RealmData / EquipAffix /
+// EquipAffixValue / MonsterAffix / MapDropInfo / MapStats / MapEffect / MapDef / MapData /
+// TowerSegment / TowerData 共 12 个符号，全后端（src/main + src/test）零消费（玩法实际口径
+// 分别由 GameService.REALM_NAMES/monsterStats 与 GameBalance.TOWER_* 等替代），已删除；
+// 历史实现见 git 记录。保留的 Rarity/RingYear/RingQuality/BoneType/BoneYear/BoneRarity/
+// SoulCoreTier/TalentBranch/ShopItem/三商店数据均有消费（ShopService/TalentService/GameBalance 等）。
 
 // ============ 品质/稀有度 ============
 enum class Rarity(val displayName: String) {
@@ -9,51 +14,6 @@ enum class Rarity(val displayName: String) {
     EPIC("史诗"), LEGENDARY("传说"), MYTHIC("神话")
 }
 
-// ============ 玩家属性 ============
-data class PlayerAttributes(
-    val maxHp: Long, val atk: Int, val matk: Int,
-    val critRate: Int, val critDmg: Int, val pdef: Int, val mdef: Int
-)
-
-// ============ 境界系统 ============
-object RealmData {
-    val names = listOf(
-        "魂士", "魂师", "大魂师", "魂尊", "魂宗",
-        "魂王", "魂帝", "魂圣", "魂斗罗", "封号斗罗",
-        "极限斗罗", "半神", "神祇", "神王", "至高神王", "创世神"
-    )
-
-    fun name(level: Int): String {
-        val idx = ((level - 1) / 10).coerceIn(0, names.size - 1)
-        return names[idx]
-    }
-
-    fun breakthroughCost(level: Int): Long = (150.0 * level.toDouble().pow(1.65)).toLong()
-    fun baseHp(level: Int): Long = (50L * level + 100L)
-    fun baseAtk(level: Int): Int = level * 10
-    fun baseMatk(level: Int): Int = level * 8
-    fun basePdef(level: Int): Int = level * 5
-    fun baseMdef(level: Int): Int = level * 4
-    fun autoGoldBonus(level: Int): Int = level * 8
-    fun maxSoulRings(level: Int): Int = ((level - 1) / 20 + 1).coerceIn(1, 9)
-    fun maxSoulBones(level: Int): Int = ((level - 1) / 30 + 1).coerceIn(1, 6)
-    fun ringSlotUnlockLevel(slotIndex: Int): Int = slotIndex * 20 + 1
-    fun boneSlotUnlockLevel(slotIndex: Int): Int = slotIndex * 30 + 1
-    fun battleSoulPowerMax(level: Int): Int = 100 + level * 5
-    fun realmBonusMult(level: Int): Double {
-        val completedRealms = level / 10
-        return 1.0 + completedRealms * 0.25
-    }
-    const val PRESTIGE_MIN_LEVEL = 100
-}
-
-// ============ 装备词缀系统 ============
-enum class EquipAffix(val displayName: String, val valueMultiplier: Double) {
-    HP("生命", 5.0), ATK("攻击", 1.0), MATK("魔攻", 1.0),
-    CRIT_RATE("暴击", 0.06), CRIT_DMG("爆伤", 0.3), PDEF("物防", 0.5), MDEF("魔防", 0.5)
-}
-
-data class EquipAffixValue(val type: EquipAffix, val value: Int)
 
 // ============ 魂环系统 ============
 enum class RingYear(val displayName: String, val costBase: Int, val idx: Int) {
@@ -236,109 +196,4 @@ object LimitedShopData {
     )
 }
 
-// ============ 怪物词缀系统 ============
-enum class MonsterAffix(val displayName: String, val dropMult: Double) {
-    GIANT("巨大的", 1.5), TOUGH("坚硬的", 1.3), FRAGILE("脆弱的", 0.6),
-    SWIFT("快速的", 1.3), BURNING("燃烧的", 1.4), BERSERK("狂暴的", 1.5),
-    SHADOW("暗影的", 1.4), HOLY("神圣的", 2.0), REGENERATING("复生的", 1.3),
-    TUTOR("新手导师", 1.1), BOSS("领主", 5.0)
-}
 
-// ============ 地图系统 ============
-data class MapDropInfo(
-    val ringYearRange: Pair<Int, Int>,
-    val ringQualityChance: Map<Int, Float>,
-    val boneDropChance: Float,
-    val bossCoinMin: Long,
-    val bossCoinMax: Long,
-    val goldMult: Float = 1.0f,
-    val expMult: Float = 1.0f
-)
-
-data class MapStats(
-    val hp: Long = 100, val atk: Int = 10, val matk: Int = 5,
-    val pdef: Int = 5, val mdef: Int = 3, val critRate: Int = 5,
-    val critDmg: Int = 150, val expReward: Long = 10, val goldReward: Long = 5
-)
-
-data class MapEffect(
-    val description: String, val monsterHpMult: Double = 1.0,
-    val monsterAtkMult: Double = 1.0, val monsterDefMult: Double = 1.0,
-    val goldMult: Double = 1.0, val expMult: Double = 1.0
-)
-
-data class MapDef(
-    val id: Int, val name: String, val description: String,
-    val unlockLevel: Int, val unlockCost: Long, val monsterNamePrefix: String,
-    val baseStats: MapStats, val floors: Int = 100,
-    val effect: MapEffect = MapEffect("无特殊效果"),
-    val dropInfo: MapDropInfo? = null
-)
-
-object MapData {
-    val all = listOf(
-        MapDef(0, "圣魂村", "唐三的故乡，低级魂兽出没", 1, 0, "野",
-            MapStats(200, 15, 8, 7, 4, 5, 150, 20, 30),
-            effect = MapEffect("安宁之地，无特殊效果"),
-            dropInfo = MapDropInfo(0 to 0, mapOf(0 to 0.6f, 1 to 0.3f, 2 to 0.1f), 0.03f, 10, 20)),
-        MapDef(1, "诺丁城外", "学院周边，中级魂兽", 10, 2000, "凶",
-            MapStats(500, 33, 18, 13, 10, 6, 155, 60, 96),
-            effect = MapEffect("富饶之地，金币掉落+20%", goldMult = 1.2),
-            dropInfo = MapDropInfo(0 to 1, mapOf(0 to 0.4f, 1 to 0.4f, 2 to 0.15f, 3 to 0.05f), 0.05f, 15, 30)),
-        MapDef(2, "星斗外围", "星斗大森林边缘地带", 25, 15000, "狂暴",
-            MapStats(1200, 75, 40, 25, 20, 7, 160, 140, 210),
-            effect = MapEffect("魂兽活跃，怪物攻击+15%", monsterAtkMult = 1.15),
-            dropInfo = MapDropInfo(1 to 2, mapOf(1 to 0.3f, 2 to 0.4f, 3 to 0.2f, 4 to 0.1f), 0.08f, 20, 40)),
-        MapDef(3, "落日森林", "危险的中级魂兽区域", 45, 80000, "剧毒",
-            MapStats(3000, 170, 90, 50, 40, 8, 165, 320, 480),
-            effect = MapEffect("毒雾弥漫，每回合受毒伤"),
-            dropInfo = MapDropInfo(2 to 2, mapOf(1 to 0.2f, 2 to 0.4f, 3 to 0.3f, 4 to 0.1f), 0.10f, 25, 50)),
-        MapDef(4, "极北之地", "冰天雪地的凶险区域", 70, 400000, "冰霜",
-            MapStats(8000, 400, 220, 100, 80, 9, 170, 800, 1150),
-            effect = MapEffect("极寒之地，怪物HP+30%", monsterHpMult = 1.3),
-            dropInfo = MapDropInfo(2 to 3, mapOf(2 to 0.2f, 3 to 0.5f, 4 to 0.3f), 0.12f, 30, 60)),
-        MapDef(5, "海神岛", "深海中的神秘岛屿", 100, 2000000, "深海",
-            MapStats(22000, 950, 550, 220, 180, 10, 175, 2200, 3120),
-            effect = MapEffect("深海压力，怪物双防+25%", monsterDefMult = 1.25),
-            dropInfo = MapDropInfo(3 to 3, mapOf(2 to 0.15f, 3 to 0.5f, 4 to 0.35f), 0.15f, 35, 70)),
-        MapDef(6, "杀戮之都外域", "修罗神的试炼之地", 140, 10000000, "杀戮",
-            MapStats(60000, 2300, 1400, 500, 420, 12, 180, 6000, 8350),
-            effect = MapEffect("杀戮气息，玩家攻击+15%但怪暴击+10%", monsterAtkMult = 1.10),
-            dropInfo = MapDropInfo(3 to 4, mapOf(3 to 0.4f, 4 to 0.6f), 0.18f, 40, 80)),
-        MapDef(7, "神界废墟", "众神陨落之地", 190, 50000000, "神级",
-            MapStats(180000, 6000, 3800, 1200, 1000, 15, 190, 16000, 23500),
-            effect = MapEffect("神之领域，所有怪物全属性+20%", monsterHpMult = 1.2, monsterAtkMult = 1.2, monsterDefMult = 1.2, goldMult = 1.5, expMult = 1.5),
-            dropInfo = MapDropInfo(4 to 4, mapOf(3 to 0.3f, 4 to 0.7f), 0.20f, 50, 100))
-    )
-    fun getMap(mapId: Int): MapDef? = all.getOrNull(mapId)
-    fun getMaxMapId(): Int = all.size - 1
-}
-
-// ============ 杀戮之都 ============
-data class TowerSegment(
-    val name: String, val theme: String, val bossName: String, val bossDesc: String,
-    val startFloor: Int, val endFloor: Int
-)
-
-object TowerData {
-    const val MAX_FLOOR = 100
-    val segments = listOf(
-        TowerSegment("鲜血荒原", "杀戮之都外围", "血屠夫", "挥舞巨斧的狂爆屠夫", 1, 10),
-        TowerSegment("岩浆炼狱", "地狱回廊", "熔岩巨兽", "全身覆盖岩浆的巨型怪兽", 11, 20),
-        TowerSegment("修罗试炼场", "修罗战场", "修罗骑士", "身披黑甲的不死亡灵骑士", 21, 35),
-        TowerSegment("无尽深渊", "黑暗深渊", "深渊领主", "掌控黑暗力量的深渊领主", 36, 50),
-        TowerSegment("血月祭坛", "血月领域", "血月祭司", "在血月下获得无尽力量的大祭司", 51, 65),
-        TowerSegment("杀戮圣殿", "杀戮神殿", "杀戮天使", "被堕落之力腐蚀的六翼天使", 66, 80),
-        TowerSegment("修罗王域", "修罗王座", "修罗将军", "修罗神座下第一战将", 81, 95),
-        TowerSegment("终焉之地", "杀戮之巅", "杀戮之王·修罗神", "杀戮之都的最终统治者，修罗神化身", 96, 100)
-    )
-    fun getSegment(floor: Int): TowerSegment = segments.firstOrNull { floor in it.startFloor..it.endFloor } ?: segments.last()
-    fun isBossFloor(floor: Int): Boolean = floor % 10 == 0
-    fun isRestFloor(floor: Int): Boolean = floor % 5 == 0 && !isBossFloor(floor)
-    fun floorHpMultiplier(floor: Int): Double = 1.0 + floor * 0.08
-    fun floorAtkMultiplier(floor: Int): Double = 1.0 + floor * 0.06
-    fun monsterPower(floor: Int): Long { val base = 200L + floor * 80L; return (base * (1.0 + floor * 0.05)).toLong() }
-    fun bossGoldBonus(floor: Int): Long = when { floor <= 20 -> 500L + floor * 50L; floor <= 50 -> 2000L + floor * 120L; floor <= 80 -> 8000L + floor * 250L; else -> 30000L + floor * 500L }
-    fun normalReward(floor: Int): Long = (100.0 * 1.08.pow(floor.toDouble())).toLong()
-    fun bossBoneReward(floor: Int): Int = when { floor >= 90 -> 22; floor >= 70 -> 17; floor >= 40 -> 12; floor >= 20 -> 7; else -> 2 }
-}

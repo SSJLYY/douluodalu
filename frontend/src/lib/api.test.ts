@@ -101,6 +101,17 @@ describe('ApiClient.request', () => {
         expect(init.body).toBeUndefined();
     });
 
+    it('makeupCheckin 走 POST /api/game/checkin/makeup（无 body），透传 MakeupResult', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true, streak: 4, totalDays: 11, goldSpent: 500, message: '补签成功' }));
+
+        await expect(api.makeupCheckin()).resolves.toMatchObject({ success: true, goldSpent: 500 });
+
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe(`${API_BASE}/api/game/checkin/makeup`);
+        expect(init.method).toBe('POST');
+        expect(init.body).toBeUndefined();
+    });
+
     it('claimQuest 走 POST /api/game/quests/claim，body 为 JSON {questId}', async () => {
         fetchMock.mockResolvedValueOnce(jsonResponse(200, { questId: 'battle_wins', goldGained: 500, bossCoinGained: 0, soulPowerGained: 20 }));
 

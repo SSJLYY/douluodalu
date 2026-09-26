@@ -160,6 +160,13 @@ object GameBalance {
     /** 7 日循环天数上限：cycleDay = ((streak - 1) % CHECK_IN_CYCLE) + 1 */
     const val CHECK_IN_CYCLE = 7
 
+    // ======== 签到补签（第二十一轮） ========
+    // 实现决策定价（设计文档未定价）：500 金 ≈ 0~5 层塔单次胜场量级（TOWER_GOLD_BASE +
+    // towerLevel×TOWER_GOLD_PER_LEVEL），断签玩家的止损选项而非奖励套利入口。
+    // 语义边界：补签只修复连签（把「昨天」按正常签到口径接回链上），【不补发】当日
+    // 循环奖励（金币/Boss币/魂力一律不发，也不触发每日任务的签到计数）。
+    const val CHECKIN_MAKEUP_COST_GOLD = 500L
+
     // ======== 每日任务 ========
     // 任务 id 是对外契约（前端按 id 渲染与领奖），不得改名；target/description/奖励可按经济锚点微调。
     const val QUEST_BATTLE_WINS = "battle_wins"
@@ -224,6 +231,10 @@ object GameBalance {
     fun prestigeMultiplier(count: Int): Double = 1.0 + count * PRESTIGE_STAT_BONUS
 
     // ======== 成就 ========
+    // 定义表与设计文档 §10 全表对齐（21 条：cult_10~150 / ring_1~9 / battle_10~1000 /
+    // tower_10~100 / prestige_1~5，第二十一轮补齐缺口 cult_150/battle_200/battle_1000/
+    // tower_100/prestige_5）。文档「DEF+n」按既有多数口径落为 pdef+mdef 双防各 n
+    // （battle_50 历史上只落 pdef，属孤例，不回改）。
     // 奖励兑现口径：第十七轮战斗模型扩展起七字段全消费（hp/atk 之外，matk/pdef/mdef/critRate/critDmg
     // 经 EquipmentBonus 五属性字段进 resolveBattle 与 powerOf）；装备侧暂无五属性数据（affixesJson
     // 未生成），转生武魂下轮接入。
@@ -247,17 +258,22 @@ object GameBalance {
             AchievementDef("cult_50", "魂宗威名", "达到50级", "CULTIVATION", 50, AchievementRewards(hp = 600, atk = 30, pdef = 10, mdef = 10, critRate = 2)),
             AchievementDef("cult_80", "封号斗罗", "达到80级", "CULTIVATION", 80, AchievementRewards(hp = 1500, atk = 60, pdef = 20, mdef = 20, critRate = 5)),
             AchievementDef("cult_100", "极限斗罗", "达到100级", "CULTIVATION", 100, AchievementRewards(hp = 3000, atk = 120, pdef = 40, mdef = 40, critRate = 8, critDmg = 15)),
+            AchievementDef("cult_150", "神王降临", "达到150级", "CULTIVATION", 150, AchievementRewards(hp = 8000, atk = 300, pdef = 80, mdef = 80, critRate = 12, critDmg = 30)),
             AchievementDef("ring_1", "初获魂环", "装备第一个魂环", "SOUL_RING", 1, AchievementRewards(matk = 10, critRate = 1)),
             AchievementDef("ring_3", "三环齐聚", "装备3个魂环", "SOUL_RING", 3, AchievementRewards(matk = 35, critRate = 3, critDmg = 10)),
             AchievementDef("ring_5", "五环辉煌", "装备5个魂环", "SOUL_RING", 5, AchievementRewards(matk = 70, critRate = 5, critDmg = 20, hp = 300)),
             AchievementDef("ring_9", "九环圆满", "装备9个魂环", "SOUL_RING", 9, AchievementRewards(hp = 500, matk = 200, critRate = 10, critDmg = 40)),
             AchievementDef("battle_10", "十战勇士", "赢得10场战斗", "BATTLE", 10, AchievementRewards(hp = 100, atk = 10)),
             AchievementDef("battle_50", "百战老兵", "赢得50场战斗", "BATTLE", 50, AchievementRewards(hp = 400, atk = 30, pdef = 5)),
+            AchievementDef("battle_200", "千战精英", "赢得200场战斗", "BATTLE", 200, AchievementRewards(hp = 1000, atk = 80, pdef = 15, mdef = 15)),
+            AchievementDef("battle_1000", "万战传说", "赢得1000场战斗", "BATTLE", 1000, AchievementRewards(hp = 3000, atk = 250, pdef = 50, mdef = 50, critRate = 5)),
             AchievementDef("tower_10", "塔十层", "通关杀戮之都第10层", "TOWER", 10, AchievementRewards(hp = 200, atk = 15, matk = 10)),
             AchievementDef("tower_30", "塔三十层", "通关杀戮之都第30层", "TOWER", 30, AchievementRewards(hp = 600, atk = 50, matk = 40, pdef = 10, mdef = 10, critRate = 3)),
             AchievementDef("tower_50", "塔五十层", "通关杀戮之都第50层", "TOWER", 50, AchievementRewards(hp = 1500, atk = 120, matk = 100, pdef = 25, mdef = 25, critRate = 5, critDmg = 15)),
+            AchievementDef("tower_100", "杀戮之王", "通关杀戮之都第100层", "TOWER", 100, AchievementRewards(hp = 8000, atk = 500, matk = 400, pdef = 100, mdef = 100, critRate = 15, critDmg = 50)),
             AchievementDef("prestige_1", "初次转生", "完成第一次神位传承", "PRESTIGE", 1, AchievementRewards(hp = 500, pdef = 20, mdef = 20)),
-            AchievementDef("prestige_3", "三生三世", "完成3次神位传承", "PRESTIGE", 3, AchievementRewards(hp = 2000, pdef = 60, mdef = 60, critDmg = 20))
+            AchievementDef("prestige_3", "三生三世", "完成3次神位传承", "PRESTIGE", 3, AchievementRewards(hp = 2000, pdef = 60, mdef = 60, critDmg = 20)),
+            AchievementDef("prestige_5", "五世轮回", "完成5次神位传承", "PRESTIGE", 5, AchievementRewards(hp = 5000, pdef = 150, mdef = 150, critRate = 5, critDmg = 50))
         )
     }
 

@@ -7,6 +7,7 @@ import com.douluodalu.game.entity.DailyQuestProgressEntity
 import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.DailyQuestProgressRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
+import io.micrometer.core.instrument.MeterRegistry
 import org.slf4j.LoggerFactory
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
@@ -31,7 +32,9 @@ import java.time.LocalDateTime
 @Service
 class DailyQuestService(
     private val dailyQuestRepo: DailyQuestProgressRepository,
-    private val profileRepo: PlayerProfileRepository
+    private val profileRepo: PlayerProfileRepository,
+    /** 业务计数器（Micrometer，Spring Boot 自动配置 bean）；测试注入 SimpleMeterRegistry */
+    private val meterRegistry: MeterRegistry
 ) {
     companion object {
         private val log = LoggerFactory.getLogger(DailyQuestService::class.java)
@@ -40,6 +43,9 @@ class DailyQuestService(
         const val MSG_NOT_ENOUGH = "任务未达标"
         const val MSG_ALREADY_CLAIMED = "今日已领取"
         const val MSG_UNKNOWN = "未知任务"
+
+        /** 业务计数器名（ops Grafana 面板按名建面板，逐字契约，勿改） */
+        const val METRIC_QUEST_CLAIM_TOTAL = "douluo.quest.claim.total"
     }
 
     /**
@@ -122,6 +128,8 @@ class DailyQuestService(
             profile.soulPower += def.rewardSoulPower
             profile.updatedAt = LocalDateTime.now()
             profileRepo.save(profile)
+            // 业务计数器：领奖成功（Micrometer 计数是内存操作不抛业务异常，无需 try/catch，不影响主流程）
+            meterRegistry.counter(METRIC_QUEST_CLAIM_TOTAL, "questId", questId).increment()
             return ClaimQuestResponse(
                 questId = questId,
                 goldGained = def.rewardGold,

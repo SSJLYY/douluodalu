@@ -17,6 +17,7 @@
 11. [设置开机自启](#11-设置开机自启)
 12. [常用运维命令](#12-常用运维命令)
 13. [Docker 部署（未在本机验证）](#13-docker-部署未在本机验证)
+14. [监控与备份（Docker 部署）](#14-监控与备份docker-部署)
 
 ---
 
@@ -542,4 +543,46 @@ docker volume rm douluodalu_mysql-data         # 彻底清库（危险）
 docker exec -it douluo-mysql mysqladmin shutdown   # 手动关 mysql
 # 备份：docker exec douluo-mysql sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" douluo_game' > backup.sql
 ```
+
+---
+
+## 14. 监控与备份（Docker 部署）
+
+监控栈由 compose 的 `monitoring` profile 隔离，默认 `up` 不启动：
+
+```bash
+docker compose --profile monitoring up -d     # 连带业务容器一起启动监控栈
+```
+
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| Prometheus | http://127.0.0.1:9090 | 抓 `backend:8080/actuator/prometheus`（15s），告警规则在 `ops/prometheus/alerts.yml` |
+| Grafana | http://127.0.0.1:3001 | 默认 admin/admin（首登改密，或在 `.env` 设 `GRAFANA_ADMIN_PASSWORD`） |
+
+两端口默认只绑回环，公网访问请走 Nginx 反代 + ACL。Grafana 由 provisioning 自动注入 Prometheus 数据源与「斗罗大陆 · 放置传说 总览」仪表盘（`ops/grafana/douluo-dashboard.json`，11 面板）；未挂载 provisioning 时可手动 import 该 JSON。告警共 5 条：InstanceDown（up=0 持续 1m，critical）、HighErrorRate（5xx >5% 持续 5m，critical）、HighLatencyP99（P99 >2s 持续 10m，warning）、JvmMemoryPressure（老年代 >85% 持续 10m，warning）、DbPoolExhausted（Hikari pending >0 持续 5m，critical），阈值理由见 alerts.yml 注释。
+
+### 业务指标契约（Micrometer 计数器，逐字使用）
+
+| 指标名 | tag | 含义 |
+|------|-----|------|
+| `douluo_battle_total` | `outcome=win\|lose` | 战斗次数（按胜负分） |
+| `douluo_checkin_total` | — | 每日签到 |
+| `douluo_checkin_makeup_total` | — | 补签 |
+| `douluo_awaken_total` | `kind=first\|reawaken` | 觉醒（首次/再觉醒） |
+| `douluo_prestige_total` | — | 转生 |
+| `douluo_school_choose_total` | — | 流派选择 |
+| `douluo_quest_claim_total` | `quest_id` | 任务领取（按任务分） |
+
+### 数据库备份（Docker 部署）
+
+```bash
+./ops/backup/backup.sh     # 手动执行：mysqldump+gzip 输出 /opt/backup/douluo，默认保留 7 天
+```
+
+cron 每日 03:00 自动备份：
+```
+0 3 * * * cd /opt/app/douluodalu && ./ops/backup/backup.sh >> /var/log/douluo-backup.log 2>&1
+```
+
+保留天数由 `BACKUP_RETAIN_DAYS` 控制（默认 7），恢复命令见 `ops/backup/backup.sh` 头注释；PM2 部署形态的备份见第 12 节。指标契约与启用细节另见 `ops/README.md`。
 

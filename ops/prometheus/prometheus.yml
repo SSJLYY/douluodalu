@@ -1,0 +1,19 @@
+# 斗罗大陆 · 放置传说 —— Prometheus 抓取配置
+# 由 docker-compose.yml 的 prometheus 服务挂载到 /etc/prometheus/prometheus.yml
+# 目标 backend:8080 是 compose 网络内的后端服务名（无需映射宿主机端口）
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Spring Boot /actuator/prometheus（micrometer-registry-prometheus 文本格式）
+  # 非 prod 默认匿名可抓；prod 默认关闭（双保险），如需抓取见 DEPLOY.md 监控章节
+  - job_name: douluo-backend
+    metrics_path: /actuator/prometheus
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['backend:8080']

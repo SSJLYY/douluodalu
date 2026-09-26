@@ -1,5 +1,6 @@
 package com.douluodalu.game.service
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import com.douluodalu.game.dto.CheckInStatusDto
 import com.douluodalu.game.dto.DailyQuestsDto
 import com.douluodalu.game.entity.PlayerProfileEntity
@@ -81,7 +82,8 @@ class SchoolIntegrationTest {
             profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
             userRepository, webSocketService, checkInService, dailyQuestService,
             EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
-            achievementService
+            achievementService,
+            SimpleMeterRegistry()
         )
     }
 

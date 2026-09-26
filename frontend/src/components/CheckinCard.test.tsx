@@ -96,3 +96,53 @@ describe('CheckinCard', () => {
         expect(screen.queryByTestId('checkin-btn')).toBeNull();
     });
 });
+
+describe('CheckinCard 补签条', () => {
+    /** 补签可用态：BASE + makeupAvailable（后端判定昨日漏签可补） */
+    const MAKEUP: CheckInStatus = { ...BASE, makeupAvailable: true };
+
+    it('makeupAvailable=true 渲染补签条、说明文案与补签按钮（文案写明不补发当日奖励）', () => {
+        render(<CheckinCard checkIn={MAKEUP} actionLoading={false} onCheckin={vi.fn()} onMakeup={vi.fn()} />);
+
+        expect(screen.getByTestId('makeup-row')).toBeTruthy();
+        expect(screen.getByText('昨日漏签了！花费 500 金币补签，修复连续签到（不补发当日奖励）')).toBeTruthy();
+        const btn = screen.getByTestId('makeup-btn') as HTMLButtonElement;
+        expect(btn.textContent).toBe('补签昨日（500金币）');
+        expect(btn.disabled).toBe(false);
+    });
+
+    it('makeupAvailable=false → 不渲染补签条与补签按钮', () => {
+        render(<CheckinCard checkIn={{ ...BASE, makeupAvailable: false }} actionLoading={false} onCheckin={vi.fn()} onMakeup={vi.fn()} />);
+
+        expect(screen.queryByTestId('makeup-row')).toBeNull();
+        expect(screen.queryByTestId('makeup-btn')).toBeNull();
+    });
+
+    it('makeupAvailable 缺失（旧后端）→ 同样不渲染补签条', () => {
+        render(<CheckinCard checkIn={BASE} actionLoading={false} onCheckin={vi.fn()} onMakeup={vi.fn()} />);
+
+        expect(screen.queryByTestId('makeup-row')).toBeNull();
+        expect(screen.queryByTestId('makeup-btn')).toBeNull();
+        // 主签到流程不受影响
+        expect(screen.getByTestId('checkin-btn')).toBeTruthy();
+    });
+
+    it('点击补签按钮触发 onMakeup 回调（不触发 onCheckin）', () => {
+        const onMakeup = vi.fn();
+        const onCheckin = vi.fn();
+        render(<CheckinCard checkIn={MAKEUP} actionLoading={false} onCheckin={onCheckin} onMakeup={onMakeup} />);
+
+        fireEvent.click(screen.getByTestId('makeup-btn'));
+
+        expect(onMakeup).toHaveBeenCalledTimes(1);
+        expect(onCheckin).not.toHaveBeenCalled();
+    });
+
+    it('actionLoading 时补签按钮禁用', () => {
+        render(<CheckinCard checkIn={MAKEUP} actionLoading onCheckin={vi.fn()} onMakeup={vi.fn()} />);
+
+        const btn = screen.getByTestId('makeup-btn') as HTMLButtonElement;
+        expect(btn.disabled).toBe(true);
+        fireEvent.click(btn);
+    });
+});
