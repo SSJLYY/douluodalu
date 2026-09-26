@@ -28,6 +28,8 @@ import org.springframework.stereotype.Service
  * 不依赖 AchievementService（防循环）。
  * 转生系统集成：bonusFor 增加转数参数（默认 0），装备+成就合计加成乘转生倍率（applyPrestige）；
  * detail 同步增加第 6 行 prestige（倍率增量单列），求和恒等从五行升级为六行。
+ * 武魂集成（第十八轮）：bonusFor/bonus 本体不并入武魂（武魂单列 detail 第 7 行 soul，
+ * 经 soulBonus 换算 + applyPrestige 乘倍率后由调用方并入战斗/战力口径），七行求和恒等。
  */
 /**
  * 单件装备折出的战斗加成（成就加成复用同一形状）。
@@ -176,6 +178,18 @@ class EquipmentPowerService(
             a.critRateBonus + b.critRateBonus, a.critDmgBonus + b.critDmgBonus
         )
 
+        /**
+         * 武魂七属性 → EquipmentBonus 形状（第十八轮武魂觉醒）：atk 1:1、hp 1:1、
+         * matk/pdef/mdef/critRate/critDmg 直映。调用方（GameService.battle/塔/状态组装与
+         * detail 的 soul 行）再统一走 applyPrestige 乘转生倍率，与装备/成就加成同通道，
+         * 保证 powerOf 的战力口径与实际战斗强度不脱节。bonusFor/bonus 本体【不】并入武魂
+         * （武魂单列 detail 第 7 行，不混入装备拆分行）。
+         */
+        fun soulBonus(soul: GameBalance.MartialSoulDef): EquipmentBonus = EquipmentBonus(
+            soul.baseAtk.toLong(), soul.baseHp, soul.baseMatk.toLong(),
+            soul.pdef.toLong(), soul.mdef.toLong(), soul.critRate.toLong(), soul.critDmg.toLong()
+        )
+
         /** 基础攻击（等级部分），powerOf / detail 同源 */
         fun baseAttack(level: Int): Long =
             GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
@@ -197,16 +211,21 @@ class EquipmentPowerService(
         }
 
         /**
-         * 纯函数：战力明细拆分（任务#23；成就系统集成后五行不变量；转生集成后六行不变量）。
-         * 复用与 bonus() 完全相同的单件公式，取整用最大余数法（largest remainder）保证拆分求和与
-         * EquipmentBonus / powerOf 严格相等：
+         * 纯函数：战力明细拆分（任务#23；成就系统集成后五行不变量；转生集成后六行不变量；
+         * 第十八轮武魂觉醒后七行不变量）。复用与 bonus() 完全相同的单件公式，取整用最大余数法
+         * （largest remainder）保证拆分求和与 EquipmentBonus / powerOf 严格相等：
          *  - ringAtk + boneAtk + coreAtk == 装备部分的 atkBonus（不含成就加成）
          *  - ringHp + boneHp == 装备部分的 hpBonus（魂核只加攻击、玩家无基础生命 → coreHp/baseHp 恒 0）
          *  - basePower + ringPower + bonePower + corePower + achievement ==
          *    powerOf(level, bonus(level, rings, bones, cores, achievementBonus))（1.0 倍口径）
          *  - 上式五行 + prestige == powerOf(level, applyPrestige(装备+成就合计, prestigeCount))
          *    （转生倍率产生的全部增量单列第 6 行；prestigeCount=0 时该行恒 0，退化为原五行拆分）
-         *  achievementBonus / prestigeCount 均为默认零时与既有四参调用行为完全一致。
+         *  - 上式六行 + soul == powerOf(level, plus(applyPrestige(装备+成就合计, p), applyPrestige(soulBonus, p)))
+         *    （武魂贡献单列第 7 行 = 含武魂战力 − 不含武魂六行之和，最大余数法口径延续——武魂不经
+         *    bonus() 单件拆分，无自然来源行，故用差值法与第 6 行同款手法；soul=null 时该行恒 0，
+         *    退化为原六行拆分。倍率取整式与 GameService 战斗组装（applyPrestige(soulBonus, p) 后
+         *    并入）逐位一致，防止 power 展示与战斗强度脱节）
+         *  achievementBonus / prestigeCount / soul 均为默认零/空时与既有调用行为完全一致。
          */
         fun detail(
             level: Int,
@@ -214,7 +233,8 @@ class EquipmentPowerService(
             bones: List<EquippedBone>,
             cores: List<EquippedCore>,
             achievementBonus: EquipmentBonus = EquipmentBonus(0, 0),
-            prestigeCount: Int = 0
+            prestigeCount: Int = 0,
+            soul: GameBalance.MartialSoulDef? = null
         ): PowerDetailDto {
             val b = bonus(level, rings, bones, cores)
             val baseAtk = baseAttack(level)
@@ -253,6 +273,14 @@ class EquipmentPowerService(
             val fiveRowSum = basePower + ringAtk + hpPowerAlloc[0] + boneAtk + hpPowerAlloc[1] + coreAtk + achievementRow
             val combined = plus(b, achievementBonus)
             val prestigeRow = powerOf(level, applyPrestige(combined, prestigeCount)) - fiveRowSum
+            // 第 7 行 soul = 含武魂战力 − 六行之和（差值法，与第 6 行同款最大余数口径延续）；
+            // 倍率取整式 applyPrestige(soulBonus, p) 与 GameService 战斗组装逐位一致（soulBonus 注释）
+            val sixRowSum = fiveRowSum + prestigeRow
+            val soulRow = if (soul == null) 0L else
+                powerOf(
+                    level,
+                    plus(applyPrestige(combined, prestigeCount), applyPrestige(soulBonus(soul), prestigeCount))
+                ) - sixRowSum
             return PowerDetailDto(
                 baseAtk = baseAtk,
                 baseHp = 0,
@@ -267,7 +295,8 @@ class EquipmentPowerService(
                 coreHp = 0,
                 corePower = coreAtk,
                 achievement = achievementRow,
-                prestige = prestigeRow
+                prestige = prestigeRow,
+                soul = soulRow
             )
         }
 

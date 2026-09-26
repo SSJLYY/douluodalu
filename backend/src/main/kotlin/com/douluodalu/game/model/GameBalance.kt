@@ -1,5 +1,7 @@
 package com.douluodalu.game.model
 
+import kotlin.random.Random
+
 /**
  * 游戏数值平衡常量：GameService 中的魔法数字统一收敛到这里。
  * 与 application.yml 中 game.offline.* 配置保持一致（当前代码以本对象为准）。
@@ -261,4 +263,92 @@ object GameBalance {
 
     /** id → 定义（解锁判定 / 属性加成求和 / 状态合成三处同源，防止数值漂移） */
     val ACHIEVEMENT_BY_ID = AchievementDefs.all.associateBy { it.id }
+
+    // ======== 武魂池（觉醒） ========
+    // 数值锚点：设计文档 §2.1（12 武魂 × 七属性表）、§2.2（觉醒概率权重）、§2.3（品质池随转数扩展），
+    // 定义从 shared 引擎 Models.kt MartialSoulPool **逐字移植**（shared 为唯一权威，若调参需两侧同步；
+    // 技能/流派/自动金币加成字段本轮不消费，故不移植）。rarity 复用本模块既有 Rarity 枚举
+    // （枚举名与 shared 逐字一致：COMMON/UNCOMMON/RARE/EPIC/LEGENDARY/MYTHIC）。
+    data class MartialSoulDef(
+        val name: String,
+        val rarity: Rarity,
+        val baseHp: Long,
+        val baseAtk: Int,
+        val baseMatk: Int,
+        val critRate: Int,
+        val critDmg: Int,
+        val pdef: Int,
+        val mdef: Int
+    )
+
+    // §2.1 十二武魂（字段序：name, rarity, baseHp, baseAtk, baseMatk, critRate, critDmg, pdef, mdef；
+    // 与 shared MartialSoul 前九参逐条对照核验）
+    val MARTIAL_SOULS = listOf(
+        MartialSoulDef("蓝银草", Rarity.COMMON, 50, 20, 10, 5, 150, 5, 5),
+        MartialSoulDef("幽冥灵猫", Rarity.COMMON, 40, 25, 5, 10, 150, 3, 3),
+        MartialSoulDef("柔骨兔", Rarity.UNCOMMON, 80, 30, 15, 8, 160, 8, 8),
+        MartialSoulDef("蓝银皇", Rarity.UNCOMMON, 100, 40, 30, 8, 160, 10, 12),
+        MartialSoulDef("七宝琉璃塔", Rarity.RARE, 120, 50, 60, 12, 180, 15, 20),
+        MartialSoulDef("邪火凤凰", Rarity.RARE, 110, 55, 70, 15, 200, 12, 10),
+        MartialSoulDef("白虎", Rarity.RARE, 200, 60, 20, 10, 170, 25, 15),
+        MartialSoulDef("昊天锤", Rarity.EPIC, 250, 80, 30, 12, 200, 30, 20),
+        MartialSoulDef("九宝琉璃塔", Rarity.EPIC, 180, 75, 90, 15, 200, 20, 25),
+        MartialSoulDef("六翼天使", Rarity.LEGENDARY, 350, 120, 100, 18, 220, 35, 30),
+        MartialSoulDef("海神三叉戟", Rarity.LEGENDARY, 300, 130, 120, 15, 250, 30, 35),
+        MartialSoulDef("修罗魔剑", Rarity.MYTHIC, 500, 200, 150, 25, 300, 40, 35)
+    )
+
+    private val MARTIAL_SOUL_BY_NAME = MARTIAL_SOULS.associateBy { it.name }
+
+    /** 名字反查（ProfileDto.soulRarity 徽章 / 战斗属性并入共用）；未知名字（历史脏数据）返回 null */
+    fun soulByName(name: String): MartialSoulDef? = MARTIAL_SOUL_BY_NAME[name]
+
+    /** §2.3 品质池门槛：0转 ≤精良 / 1转 ≤稀有 / 2转 ≤史诗 / 3~4转 ≤传说 / ≥5转 全量（shared getAvailablePool 同款） */
+    fun availableSoulPool(prestigeCount: Int): List<MartialSoulDef> {
+        val maxRarity = when {
+            prestigeCount >= 5 -> Rarity.MYTHIC
+            prestigeCount >= 3 -> Rarity.LEGENDARY
+            prestigeCount >= 2 -> Rarity.EPIC
+            prestigeCount >= 1 -> Rarity.RARE
+            else -> Rarity.UNCOMMON
+        }
+        return MARTIAL_SOULS.filter { it.rarity.ordinal <= maxRarity.ordinal }
+    }
+
+    /** §2.2 觉醒概率权重（逐字）：COMMON 40 / UNCOMMON 25 / RARE 15 / EPIC 8 / LEGENDARY 2 / MYTHIC 0.5 */
+    private fun soulRollWeight(rarity: Rarity): Double = when (rarity) {
+        Rarity.COMMON -> 40.0
+        Rarity.UNCOMMON -> 25.0
+        Rarity.RARE -> 15.0
+        Rarity.EPIC -> 8.0
+        Rarity.LEGENDARY -> 2.0
+        Rarity.MYTHIC -> 0.5
+    }
+
+    /**
+     * 觉醒 roll（shared MartialSoulPool.randomAwaken 同款算法）：nextDouble × 权重总和后按池序逐项扣减。
+     * rng 默认全局 Random（awaken 端点无既有掷点次序契约）；仿真镜像/测试可注入自身 rng 保持可复现。
+     */
+    fun rollMartialSoul(prestigeCount: Int, rng: Random = Random): MartialSoulDef {
+        val pool = availableSoulPool(prestigeCount)
+        var rand = rng.nextDouble() * pool.sumOf { soulRollWeight(it.rarity) }
+        for (soul in pool) {
+            rand -= soulRollWeight(soul.rarity)
+            if (rand <= 0) return soul
+        }
+        return pool.first()
+    }
+
+    /**
+     * 武魂战力值（battleSoulPower 唯一写点公式）：让宗门 Boss 伤害公式（GuildService.challengeBoss）
+     * 里的恒 100 死值变成随武魂品质成长的活值（COMMON 蓝银草 60 → MYTHIC 修罗魔剑 455）；重醒时重算。
+     */
+    fun martialSoulPower(def: MartialSoulDef): Long =
+        def.baseHp / 10 + def.baseAtk + def.baseMatk / 2 + def.pdef + def.mdef + def.critRate + def.critDmg / 10
+
+    /**
+     * 重醒定价：文档未定价，实现决策——首醒免费、重醒 5000 金，防无限免费刷池
+     * （重醒不限次数，品质上限由 §2.3 转数门槛兜住）。
+     */
+    const val REAWAKEN_COST_GOLD = 5000L
 }

@@ -36,6 +36,9 @@ import kotlin.random.Random
  *                            breakthroughAll 达到 PRESTIGE_MIN_LEVEL 即转生——level/gold/soulPower 清零、
  *                            stage 回 1、环骨卸回背包（魂核保留）、towerFloor/mapId 保留；
  *                            收入与属性按双口径 ×(1+转数×0.1)，改动需同步
+ *   - awaken()               觉醒镜像（第十八轮：GameService.awaken + GameBalance.rollMartialSoul/soulBonusOf，
+ *                            首醒免费/重醒 REAWAKEN_COST_GOLD；第 1 天首醒、每转重醒一次；
+ *                            roll 注入镜像自身 rng、武魂加成计入战斗属性与塔战力），改动需同步
  * 平衡常量直接引用 GameBalance（单一事实来源），但公式结构如有改动需同步本文件。
  *
  * 断言刻意只放软性的健康检查（跑通、数量级不离谱）；主要产出是根目录
@@ -70,6 +73,8 @@ class LongRunSimulationTest {
         // 签到+任务（每日固定收入镜像，经济占比核算用）
         var checkInGold = 0L; var questGold = 0L
         var checkInQuestBossCoin = 0L; var checkInQuestSoulPower = 0L
+        // 第十八轮武魂觉醒镜像事件计数（当日；报告「觉醒事件」行汇总）
+        var awakens = 0; var reawakens = 0
     }
 
     /** 每日固定收入镜像（SimPlayer/EquipSimPlayer 共用，保证两组画像经济口径一致） */
@@ -133,9 +138,35 @@ class LongRunSimulationTest {
         var offlineWastedSeconds = 0L    // 因 12h 上限被截断的离线秒数
         var totalBattleWins = 0L         // 镜像 profile.totalBattleWins（战斗胜 + 塔胜 + 离线折算，成就 BATTLE 口径）
         var prestigeCount = 0            // 镜像 profile.prestigeCount（talentPoints 不建模：对属性/收入曲线无反馈）
+        // 第十八轮武魂觉醒镜像（GameService.awaken / GameBalance 武魂池）：
+        // 第 1 天免费首醒（0 转池），每次转生后重醒一次（池随转数扩展；金币不足留待后续登录）
+        var martialSoul: GameBalance.MartialSoulDef? = null
+        var pendingReawaken = false
+        var awakenTotal = 0
+        var reawakenTotal = 0
 
         /** 成就属性加成（SimPlayer 不穿装 → 环数按 0 计；prestigeCount 参与成就解锁口径） */
         fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, 0, prestigeCount)
+
+        /** 武魂加成镜像（GameService.soulBonusOf 同源纯函数：反查武魂池 + applyPrestige） */
+        fun soulBonusOf(): EquipmentBonus = GameService.soulBonusOf(martialSoul?.name, prestigeCount)
+
+        // ---- 觉醒镜像（GameService.awaken：首醒免费、重醒扣 GameBalance.REAWAKEN_COST_GOLD，
+        //      金币不足返回 false 零改动；roll 走生产纯函数但注入镜像自身 rng 保持可复现）----
+        fun awaken(s: DayStats): Boolean {
+            val reawakened = martialSoul != null
+            if (reawakened) {
+                if (gold < GameBalance.REAWAKEN_COST_GOLD) return false
+                gold -= GameBalance.REAWAKEN_COST_GOLD
+                reawakenTotal++
+                s.reawakens++
+            } else {
+                awakenTotal++
+                s.awakens++
+            }
+            martialSoul = GameBalance.rollMartialSoul(prestigeCount, rng)
+            return true
+        }
 
         private fun rndLong(bound: Long): Long = if (bound <= 0) 0 else rng.nextLong(bound)
         private fun rndInt(bound: Int): Int = if (bound <= 0) 0 else rng.nextInt(bound)
@@ -187,20 +218,26 @@ class LongRunSimulationTest {
             stage = 1                        // 镜像生产：保留地图、从第 1 关重新推
             hp = 50L * 1 + 100L              // 镜像生产 currentHp = getMaxHp(1)
             // towerFloor/currentMapId/codexKills/bossCoin 保留；talentPoints+1 不建模（无数值反馈）
+            // 武魂保留（文档 §15.2 重置项不含武魂）；「每转重醒一次」镜像玩家策略（金币充裕时执行）
+            pendingReawaken = true
         }
 
         // ---- battle 镜像：直接调用生产纯函数 GameService.monsterStats/playerCombatStats/resolveBattle ----
         fun battle(s: DayStats) {
             // 镜像 bonusFor(userId, level, prestigeCount)：装备(0)+成就 合计 ×转生倍率
-            val ach = EquipmentPowerService.applyPrestige(achBonus(), prestigeCount)
+            // 第十八轮武魂镜像：武魂加成（soulBonusOf，已乘转生倍率）并入同一加成包（生产 battle 同式）
+            val equip = EquipmentPowerService.plus(
+                EquipmentPowerService.applyPrestige(achBonus(), prestigeCount),
+                soulBonusOf()
+            )
             val oldMap = mapId
             val oldStage = stage          // 生产代码掉落/奖励均用战前快照
             val monster = GameService.monsterStats(oldMap, oldStage)
             // 画像不模拟穿装 → 装备加成恒为 0（P7 修复效果在报告「已修复项」中说明）；
             // 成就七字段加成按已解锁集合并入（与生产 bonusFor 口径一致，含转生倍率）；
-            // 战斗属性（含五属性）直接调生产纯函数 playerCombatStats 组装，与 battle() 逐位同源
-            val player = GameService.playerCombatStats(level, prestigeCount, ach)
-            val maxHp = scaledBaseMaxHp() + ach.hpBonus
+            // 战斗属性（含五属性与武魂）直接调生产纯函数 playerCombatStats 组装，与 battle() 逐位同源
+            val player = GameService.playerCombatStats(level, prestigeCount, equip)
+            val maxHp = scaledBaseMaxHp() + equip.hpBonus
             val outcome = GameService.resolveBattle(
                 player, hp, monster, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
@@ -239,8 +276,14 @@ class LongRunSimulationTest {
 
         // ---- 塔镜像：胜率直接调用生产纯函数 EquipmentPowerService.towerWinChance（P2+P7 修复后同源）----
         fun tower(s: DayStats) {
-            // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就合计 ×转生倍率）
-            val power = EquipmentPowerService.powerOf(level, EquipmentPowerService.applyPrestige(achBonus(), prestigeCount))
+            // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就合计 ×转生倍率）+ 武魂加成（第十八轮）
+            val power = EquipmentPowerService.powerOf(
+                level,
+                EquipmentPowerService.plus(
+                    EquipmentPowerService.applyPrestige(achBonus(), prestigeCount),
+                    soulBonusOf()
+                )
+            )
             val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
             if (!won) { s.towerLosses++; return }
             s.towerWins++
@@ -320,6 +363,10 @@ class LongRunSimulationTest {
         val dropLostTotal: Long,
         val dropsGainedTotal: Long,
         val offlineWastedHours: Double,
+        // 第十八轮武魂觉醒镜像汇总（报告「觉醒事件」行）：90 天末武魂与累计觉醒/重醒次数
+        val finalSoul: GameBalance.MartialSoulDef? = null,
+        val awakenTotal: Int = 0,
+        val reawakenTotal: Int = 0,
     ) {
         val final: DayRow get() = rows.last()
         fun last(n: Int) = rows.takeLast(n)
@@ -370,6 +417,10 @@ class LongRunSimulationTest {
             s.checkInGold += inc.checkInGold; s.questGold += inc.questGold
             s.bossCoins += inc.bossCoin
             s.checkInQuestSoulPower += inc.soulPower
+            // 第十八轮武魂觉醒镜像：第 1 天首次登录免费首醒（0 转池）；转生后重醒一次
+            // （金币 ≥REAWAKEN_COST_GOLD 即执行，不足留待后续登录——镜像「金币在后期充裕」）
+            if (d == 1) p.awaken(s)
+            if (p.pendingReawaken && p.awaken(s)) p.pendingReawaken = false
             for (i in loginHours.indices) {
                 val t = (d - 1) * 24.0 + loginHours[i]
                 p.claimOffline(t, s)
@@ -386,7 +437,8 @@ class LongRunSimulationTest {
             rows.add(DayRow(d, s, p.level, p.gold, p.soulPower, p.bossCoin,
                 p.mapId, p.stage, p.towerFloor, p.items.size, p.capacity, stuckStreak, p.prestigeCount))
         }
-        return SimOutcome(rows, p.dropLostTotal, gained, p.offlineWastedSeconds / 3600.0)
+        return SimOutcome(rows, p.dropLostTotal, gained, p.offlineWastedSeconds / 3600.0,
+            p.martialSoul, p.awakenTotal, p.reawakenTotal)
     }
 
     // ======== 任务#22：魂环负荷反馈回路专项 ========
@@ -1073,6 +1125,9 @@ class LongRunSimulationTest {
         appendLine("  claimOfflineReward（12h 截断、P1 修复后按**小时**计费）/ 掉落与背包容量 / 扩展券 / 签到+任务+成就 /")
         appendLine("  转生（达到 PRESTIGE_MIN_LEVEL=${GameBalance.PRESTIGE_MIN_LEVEL} 即转生：level/gold/soulPower 清零、stage 回 1、")
         appendLine("  环骨卸回背包，收入与属性 ×(1+转数×0.1)，详见文末《转生事件复盘》。")
+        appendLine("- 武魂觉醒（第十八轮镜像，GameService.awaken / GameBalance 武魂池同源）：第 1 天免费首醒（0 转池），")
+        appendLine("  每次转生后重醒一次（REAWAKEN_COST_GOLD=${GameBalance.REAWAKEN_COST_GOLD} 金，金币不足留待后续登录）；")
+        appendLine("  武魂七属性经 soulBonusOf（已乘转生倍率）计入镜像战斗属性与塔胜率战力（报告末尾附觉醒事件行）。")
         appendLine("- 未建模：宗门 Boss、天赋、穿装行为——画像只捡/卖装备不穿戴，故装备战力加成按 0 计")
         appendLine("  （装备对战力的贡献已由 EquipmentPowerServiceTest 单测覆盖，见「已修复项」P7；成就加成不属装备，照常计入）。")
         appendLine("  **注（任务#22）**：上文各节维持「零装备基线」口径；穿装画像 + 魂环负荷/容量反馈回路的专项仿真")
@@ -1097,6 +1152,11 @@ class LongRunSimulationTest {
         appendLine("| 魂塔层数 | ${f30.towerFloor} | ${f90.towerFloor} |")
         appendLine("| 累计满包丢掉落 | ${r30.dropLostTotal} | ${r90.dropLostTotal} |")
         appendLine("| 连续无法突破最长天数 | ${r30.rows.maxOf { it.stuckStreak }} | ${r90.rows.maxOf { it.stuckStreak }} |")
+        // 第十八轮武魂觉醒事件行（首醒第 1 天免费；重醒 = 转生后花 REAWAKEN_COST_GOLD 换更大品质池）
+        fun soulLabel(o: SimOutcome): String =
+            o.finalSoul?.let { "${it.name}（${it.rarity.displayName}，战力值 ${GameBalance.martialSoulPower(it)}）" } ?: "未觉醒"
+        appendLine("| 武魂觉醒事件（首醒/重醒累计） | ${r30.awakenTotal}/${r30.reawakenTotal} | ${r90.awakenTotal}/${r90.reawakenTotal} |")
+        appendLine("| 期末武魂 | ${soulLabel(r30)} | ${soulLabel(r90)} |")
         appendLine()
         appendLine("## 发现的平衡问题（P1/P2/P7 已于任务#20 修复，前后对账见文末「已修复项」）")
         appendLine()

@@ -6,6 +6,7 @@ import type { CombatStats, PowerDetail } from '@/lib/api';
 /**
  * 战力明细面板行显隐单测（直接渲染组件，不渲染整页）：
  * prestige 为后端增量字段（第 6 行「🔄 转生」），旧后端缺失 → undefined 按 0 处理、行隐藏、脚注回退。
+ * soul 为后端增量字段（第 7 行「💠 武魂」），同路径容错。
  * combatStats 为后端增量字段（脚注下方战斗属性摘要行），旧后端缺失 → 整行隐藏；critRate=0 也显示「暴击 0%」。
  */
 
@@ -72,6 +73,65 @@ describe('PowerDetailPanel 转生第 6 行', () => {
     it('六行 share 求和恒等于总战力（DOM aria-valuenow 逐行累加断言）', () => {
         const power = BASE_POWER + 25 + 10;
         const container = openPanel(power, { ...BASE_DETAIL, achievement: 25, prestige: 10 });
+
+        const sum = Array.from(container.querySelectorAll('[data-power-row]'))
+            .map((row) => row.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow') ?? '0')
+            .reduce((acc, v) => acc + Number(v), 0);
+        expect(sum).toBe(power);
+    });
+});
+
+describe('PowerDetailPanel 武魂第 7 行', () => {
+    /** 六行总和（100+40+15+5+25+10），武魂行再额外累加 */
+    const SIX_ROW_POWER = BASE_POWER + 25 + 10;
+
+    it('soul>0 追加第 7 行「武魂」（aria-label=武魂加成，bar=bg-cyan-500），脚注升级为七行 + 武魂加成', () => {
+        const container = openPanel(SIX_ROW_POWER + 7, {
+            ...BASE_DETAIL,
+            achievement: 25,
+            prestige: 10,
+            soul: 7,
+        });
+
+        expect(screen.getByRole('progressbar', { name: '武魂加成' }).getAttribute('aria-valuenow')).toBe('7');
+        // 七行齐全：base/ring/bone/core/achievement/prestige/soul
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(7);
+        // 契约：武魂行 bar 用 bg-cyan-500
+        expect(container.querySelector('[data-power-row="soul"] .bg-cyan-500')).toBeTruthy();
+
+        const footnote = screen.getByText(/行求和恒等于总战力/).textContent ?? '';
+        expect(footnote).toContain('七行');
+        expect(footnote).toContain('武魂加成');
+    });
+
+    it('soul=0 → 武魂行隐藏，脚注回退六行且不含武魂加成', () => {
+        openPanel(SIX_ROW_POWER, { ...BASE_DETAIL, achievement: 25, prestige: 10, soul: 0 });
+
+        expect(screen.queryByRole('progressbar', { name: '武魂加成' })).toBeNull();
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(6);
+        const footnote = screen.getByText(/行求和恒等于总战力/).textContent ?? '';
+        expect(footnote).toContain('六行');
+        expect(footnote).not.toContain('武魂加成');
+    });
+
+    it('旧后端 soul 缺失（undefined）→ 武魂行隐藏，其余可选行不受影响（四固定行+武魂=五行）', () => {
+        openPanel(BASE_POWER + 7, { ...BASE_DETAIL, soul: 7 });
+
+        expect(screen.getByRole('progressbar', { name: '武魂加成' }).getAttribute('aria-valuenow')).toBe('7');
+        expect(screen.queryByRole('progressbar', { name: '成就加成' })).toBeNull();
+        expect(screen.queryByRole('progressbar', { name: '转生加成' })).toBeNull();
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(5);
+        expect(screen.getByText(/行求和恒等于总战力/).textContent).toContain('五行');
+    });
+
+    it('七行 share 求和恒等于总战力（DOM aria-valuenow 逐行累加断言）', () => {
+        const power = SIX_ROW_POWER + 7;
+        const container = openPanel(power, {
+            ...BASE_DETAIL,
+            achievement: 25,
+            prestige: 10,
+            soul: 7,
+        });
 
         const sum = Array.from(container.querySelectorAll('[data-power-row]'))
             .map((row) => row.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow') ?? '0')

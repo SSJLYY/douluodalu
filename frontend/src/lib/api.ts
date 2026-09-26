@@ -138,6 +138,15 @@ class ApiClient {
         return this.request<PrestigeResult>('/api/action/prestige', { method: 'POST' });
     }
 
+    /**
+     * 觉醒/重醒武魂：首醒免费，重醒 5000 金（前端镜像常量见 lib/soul.ts REAWAKEN_COST_GOLD）。
+     * 失败（如重醒金币不足）也是 200 + success:false + message（照 prestige 惯例，前端只透传 message）；
+     * 成功返回本次觉醒/重醒的武魂名与稀有度；转生不清武魂。
+     */
+    async awaken() {
+        return this.request<AwakenResult>('/api/action/awaken', { method: 'POST' });
+    }
+
     async battle() {
         return this.request<BattleResult>('/api/action/battle', { method: 'POST' });
     }
@@ -395,7 +404,7 @@ export interface CombatStats {
     /**
      * 对应后端 PowerDetailDto（任务#23）。
      * 后端保证：ringAtk+boneAtk+coreAtk == 攻击加成总值、ringHp+boneHp == 生命加成总值、
-     * 四行 power* 求和 == power（后端补 achievement/prestige 字段后为五行/六行：+ achievement + prestige）。
+     * 四行 power* 求和 == power（后端补 achievement/prestige/soul 字段后为五行/六行/七行：+ achievement + prestige + soul）。
      * 魂核只加攻击（coreHp=0），玩家模型无基础生命（baseHp=0）。
      */
 export interface PowerDetail {
@@ -415,6 +424,8 @@ export interface PowerDetail {
     achievement?: number;
     /** 转生加成折算战力（第 6 行，每转全属性+10% 的折算）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：base+ring+core+bone+achievement+prestige == power */
     prestige?: number;
+    /** 武魂加成折算战力（第 7 行，武魂七属性折算）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：base+ring+core+bone+achievement+prestige+soul == power */
+    soul?: number;
 }
 
 /** 成就属性奖励（Achievement.rewards）。matk/pdef/mdef/critRate/critDmg 后端暂未生效，前端只展示 hp/atk */
@@ -476,6 +487,8 @@ export interface Profile {
     autoAdvanceMap: boolean;
     autoBreakthrough: boolean;
     tutorialStep: number;
+    /** 当前武魂稀有度（COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC）。旧后端缺失按 null → 前端只显武魂名不显徽章 */
+    soulRarity?: string | null;
 }
 
 export interface EquippedRing {
@@ -582,6 +595,23 @@ export interface BreakthroughResult {
 export interface PrestigeResult {
     success: boolean;
     prestigeCount: number;
+    message: string;
+}
+
+/**
+ * POST /api/action/awaken 响应：失败（重醒金币不足等）也是 200 + success:false + message。
+ * 稀有度枚举：COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC（中文名/色板映射见 lib/soul.ts）。
+ */
+export interface AwakenResult {
+    success: boolean;
+    /** 本次觉醒/重醒结果武魂名 */
+    martialSoulName: string;
+    /** 六档稀有度枚举之一；未知值前端按「只显名字不显徽章」降级 */
+    rarity: string;
+    /** 首醒 0 / 重醒 5000 */
+    goldSpent: number;
+    /** false=首次觉醒 / true=重醒 */
+    reawakened: boolean;
     message: string;
 }
 

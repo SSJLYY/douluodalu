@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import api, { BattleResult, OfflineReward, normalizeAchievements } from '@/lib/api';
 import { PRESTIGE_MIN_LEVEL, prestigeHint } from '@/lib/prestige';
+import { awakenToast, REAWAKEN_COST_GOLD, soulPoolHint, soulRarityMeta } from '@/lib/soul';
 import { useGameData } from '@/lib/hooks';
 import { BootState } from '@/components/StateViews';
 import BattleReplay from '@/components/BattleReplay';
@@ -28,6 +29,9 @@ export default function GamePage() {
     // 转生确认弹窗：按钮只负责打开，真正请求在弹窗内「确认转生」触发
     const [prestigeOpen, setPrestigeOpen] = useState(false);
     const prestigeCancelRef = useRef<HTMLButtonElement>(null);
+    // 重醒确认弹窗（重醒花 5000 金，破坏性弱于转生但仍需确认）：同转生弹窗模板
+    const [reawakenOpen, setReawakenOpen] = useState(false);
+    const reawakenCancelRef = useRef<HTMLButtonElement>(null);
 
     // 进入主页领取一次离线收益：有实际产出才弹窗，0 收益静默关闭
     useEffect(() => {
@@ -114,6 +118,35 @@ export default function GamePage() {
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [prestigeOpen]);
 
+    // 觉醒/重醒：后端失败（重醒金币不足）也是 200 + success:false → message 照显；
+    // 传说/神话成功由 awakenToast 加 ✨🎉 前缀。首醒免费且不可逆性弱 → 不弹窗直接觉醒，结果走大号 message toast。
+    const handleAwaken = () => runAction(
+        () => api.awaken(),
+        (r) => setMessage(awakenToast(r)),
+        '觉醒失败',
+    );
+
+    // 重醒（5000 金）：确认弹窗内才发请求，成功/失败路径都关弹窗（照转生弹窗惯例，失败不打断重试）。
+    const handleReawaken = async () => {
+        await runAction(
+            () => api.awaken(),
+            (r) => setMessage(awakenToast(r)),
+            '重醒失败',
+        );
+        setReawakenOpen(false);
+    };
+
+    // 重醒确认弹窗可达性：照转生弹窗模板——打开聚焦「取消」，Escape 关闭，遮罩点击关闭。
+    useEffect(() => {
+        if (!reawakenOpen) return;
+        reawakenCancelRef.current?.focus();
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setReawakenOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [reawakenOpen]);
+
     // 每日签到：runAction 成功回调 + 自动 refresh 拉新签到状态；已签由后端 400 → message 提示
     const handleCheckin = () => runAction(
         () => api.checkin(),
@@ -140,6 +173,8 @@ export default function GamePage() {
     }
 
     const p = gameState.profile;
+    // 武魂稀有度徽章元数据：旧后端 soulRarity 缺失/未知 → null（只显名字不显徽章）
+    const soulMeta = soulRarityMeta(p.soulRarity);
     const realmName = REALM_NAMES[Math.min(Math.floor((p.level - 1) / 10), REALM_NAMES.length - 1)];
     const mapName = MAP_NAMES[p.currentMapId] || '未知';
     const maxHp = 50 * p.level + 100;
@@ -161,8 +196,48 @@ export default function GamePage() {
                                 ⚔️ 战力 <span key={gameState.power} className="dl-value-flash inline-block tabular-nums">{gameState.power.toLocaleString()}</span>
                             </span>
                         </div>
-                        <div className="text-sm text-gray-400 min-w-0 truncate max-w-full">
-                            {p.martialSoulName ? `武魂: ${p.martialSoulName}` : '未觉醒武魂'}
+                        {/* 武魂状态：已觉醒 → 名字+稀有度徽章+重醒入口；未觉醒 → 名字占位+觉醒按钮（首醒免费，不弹窗）。
+                            375px：徽章 text-[11px] shrink-0、名字 truncate、按钮 min-h-11 触达高度，行不溢出 */}
+                        <div className="text-sm text-gray-400 min-w-0 max-w-full flex flex-col items-start sm:items-end gap-1">
+                            <div className="flex items-center gap-2 min-w-0 max-w-full">
+                                {p.martialSoulName ? (
+                                    <>
+                                        <span className="truncate">武魂: {p.martialSoulName}</span>
+                                        {soulMeta && (
+                                            <span
+                                                data-testid="soul-badge"
+                                                className={`shrink-0 inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-semibold leading-none ${soulMeta.className}`}
+                                            >
+                                                {soulMeta.label}
+                                            </span>
+                                        )}
+                                    </>
+                                ) : (
+                                    <span>未觉醒武魂</span>
+                                )}
+                            </div>
+                            {p.martialSoulName ? (
+                                <button
+                                    data-testid="reawaken-btn"
+                                    onClick={() => setReawakenOpen(true)}
+                                    disabled={actionLoading}
+                                    title={`重醒花费 ${REAWAKEN_COST_GOLD} 金币，随机获得当前品质池内的新武魂`}
+                                    className="min-h-11 px-1 text-xs text-gray-500 hover:text-yellow-400 underline underline-offset-2 transition disabled:opacity-50"
+                                >
+                                    重醒（{REAWAKEN_COST_GOLD}金币）
+                                </button>
+                            ) : (
+                                <button
+                                    data-testid="awaken-btn"
+                                    onClick={handleAwaken}
+                                    disabled={actionLoading}
+                                    title="首次觉醒免费"
+                                    aria-label="觉醒武魂（首次免费）"
+                                    className="min-h-11 px-4 rounded-lg bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-500 hover:to-amber-500 text-white text-sm font-bold transition disabled:opacity-50"
+                                >
+                                    {actionLoading ? '觉醒中...' : '觉醒'}
+                                </button>
+                            )}
                         </div>
                     </div>
 
@@ -417,6 +492,55 @@ export default function GamePage() {
                                 className="py-2 bg-gradient-to-r from-red-600 to-yellow-600 hover:from-red-500 hover:to-yellow-500 rounded-lg font-bold transition disabled:opacity-50"
                             >
                                 {actionLoading ? '转生中...' : '确认转生'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 重醒确认弹窗：照转生弹窗模板（role=dialog/aria-modal、Escape/遮罩关闭、打开聚焦取消钮），
+                列明花费（5000 金）与当前品质池范围（随转数扩展，见 lib/soul.ts）；确认才发 /api/action/awaken */}
+            {reawakenOpen && (
+                <div
+                    className="dl-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="武魂重醒确认"
+                    data-testid="reawaken-dialog"
+                    onClick={() => setReawakenOpen(false)}
+                >
+                    <div
+                        className="dl-pop bg-surface border border-yellow-500/50 rounded-2xl p-6 max-w-sm w-full shadow-2xl max-h-[85vh] overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3 className="text-lg font-bold text-yellow-400 mb-3">
+                            <span aria-hidden>♻️</span> 武魂重醒
+                        </h3>
+                        <p className="text-sm text-gray-400 mb-3">
+                            重醒将随机获得当前品质池内的新武魂（{soulPoolHint(p.prestigeCount)}），武魂名与属性随之改变，请确认：
+                        </p>
+                        <ul className="text-xs space-y-1 mb-4 text-gray-300 bg-gray-900/30 border border-line rounded-lg p-3">
+                            <li>• 花费 <span className="text-yellow-400">{REAWAKEN_COST_GOLD} 金币</span>（当前拥有 {p.gold.toLocaleString()}）</li>
+                            <li>• 新武魂品质在当前品质池内随机，可能低于当前品质</li>
+                            <li>• 转生不会清除武魂；转数越高品质池越好</li>
+                        </ul>
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                ref={reawakenCancelRef}
+                                data-testid="reawaken-cancel"
+                                onClick={() => setReawakenOpen(false)}
+                                disabled={actionLoading}
+                                className="py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-bold transition disabled:opacity-50"
+                            >
+                                取消
+                            </button>
+                            <button
+                                data-testid="reawaken-confirm"
+                                onClick={handleReawaken}
+                                disabled={actionLoading}
+                                className="py-2 bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-500 hover:to-amber-500 rounded-lg font-bold transition disabled:opacity-50"
+                            >
+                                {actionLoading ? '重醒中...' : '确认重醒'}
                             </button>
                         </div>
                     </div>

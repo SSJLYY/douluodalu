@@ -103,6 +103,9 @@ class GameService(
          *  - pdef/mdef 基础 = level × PLAYER_DEF_PER_LEVEL（基础部分同样乘转生倍率——「全属性+10%/转」
          *    双口径，与 scaledBaseAtk/scaledBaseMaxHp 一致）；加成部分已由 bonusFor/applyPrestige 乘过倍率；
          *  - critRate/critDmg = 常数基础 + 加成（基础不乘转生倍率：非常量成长项，无等级维度）。
+         *  签名不变（第十八轮武魂集成走加成通道）：调用方把武魂加成经 soulBonusOf（已乘转生倍率）
+         *  并入 equip 后传入——武魂 hp/atk 由此进 maxHp/atk 基础战斗口径（hp 不入 CombatStats 包，
+         *  由 maxHp 侧消费），五属性随包进结算；未觉醒并入零加成，数值零漂移。
          */
         fun playerCombatStats(level: Int, prestigeCount: Int, equip: EquipmentBonus): CombatStats {
             fun scale(base: Long): Long =
@@ -119,6 +122,18 @@ class GameService(
                 critRate = GameBalance.PLAYER_CRIT_RATE_BASE + equip.critRateBonus.toInt(),
                 critDmg = GameBalance.PLAYER_CRIT_DMG_BASE + equip.critDmgBonus.toInt()
             )
+        }
+
+        /**
+         * 武魂加成（第十八轮武魂觉醒，纯函数四处同源：battle / towerBattle / getGameState / 仿真镜像）：
+         *  由 martialSoulName 反查武魂池折成七字段 EquipmentBonus，并乘转生倍率（与装备/成就加成
+         *  同通道——基础与加成两侧都吃「+10%/转」，powerOf 的 atk 1:1、hp/10 权重因此与战斗口径一致）。
+         *  未觉醒/名字无法反查（历史脏数据）返回零加成。hp/atk 虽「进基础」字段（maxHp/atk 的基础
+         *  战斗口径），但倍率取整统一走 applyPrestige 加成侧，避免 playerCombatStats 出现两套倍率路径。
+         */
+        fun soulBonusOf(martialSoulName: String?, prestigeCount: Int): EquipmentBonus {
+            val soul = martialSoulName?.let { GameBalance.soulByName(it) } ?: return EquipmentBonus(0, 0)
+            return EquipmentPowerService.applyPrestige(EquipmentPowerService.soulBonus(soul), prestigeCount)
         }
 
         /**
@@ -263,9 +278,13 @@ class GameService(
         // 收入/战斗属性/bonusFor，负荷体系不动
         val achBonus = achievementService.unlockedBonus(userId)
         val rawBonus = EquipmentPowerService.bonus(profile.level, rings, bones, cores, achBonus)
+        // 第十八轮武魂集成：武魂加成（已乘转生倍率）并入战斗/战力口径；容量口径【有意】不并入
+        // （负荷体系按装备校准，武魂非装备、不入根骨，与五属性不入容量的既有决定一致）
+        val soulBonus = soulBonusOf(profile.martialSoulName, profile.prestigeCount)
         val bonus = EquipmentPowerService.applyPrestige(rawBonus, profile.prestigeCount)
+        val combatBonus = EquipmentPowerService.plus(bonus, soulBonus)
         // 第十七轮战斗模型扩展：玩家有效战斗属性（与 battle() 结算入参同源，含转生倍率）
-        val combat = playerCombatStats(profile.level, profile.prestigeCount, bonus)
+        val combat = playerCombatStats(profile.level, profile.prestigeCount, combatBonus)
         return GameStateResponse(
             profile = toProfileDto(profile),
             equippedRings = equippedRings,
@@ -274,12 +293,15 @@ class GameService(
             backpackItems = backpackRepo.findByUserIdOrderByCreatedAtAsc(userId).map { toBackpackItemDto(it) },
             talents = talents,
             achievements = achievementService.getStatus(userId),
-            power = EquipmentPowerService.powerOf(profile.level, bonus),
+            power = EquipmentPowerService.powerOf(profile.level, combatBonus),
             ringLoad = RingLoadCalculator.totalRingLoad(rings),
             capacity = absorptionCapacityFor(profile, rawBonus),
             // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库；
-            // 六行含成就行与转生倍率增量行，六行求和 == power）
-            powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores, achBonus, profile.prestigeCount),
+            // 七行含成就行、转生倍率增量行与武魂行，七行求和 == power）
+            powerDetail = EquipmentPowerService.detail(
+                profile.level, rings, bones, cores, achBonus, profile.prestigeCount,
+                profile.martialSoulName?.let { GameBalance.soulByName(it) }
+            ),
             // 第十七轮战斗模型扩展：玩家有效战斗属性（含成就/装备五属性加成与转生倍率，与 battle
             // 结算入参同源 playerCombatStats）；尾部新增带默认值，向后兼容
             combatStats = CombatStatsDto(
@@ -401,6 +423,49 @@ class GameService(
         )
     }
 
+    // ======== 武魂觉醒（第十八轮） ========
+    /**
+     * 觉醒/重醒：未觉醒免费从品质池 roll（池按转数过滤，§2.3）；已觉醒再醒（重醒）花
+     * GameBalance.REAWAKEN_COST_GOLD（文档未定价，实现决策防无限免费刷池，注释留档；
+     * 重醒不限次数——品质上限由转数门槛兜住）。
+     * 写点：martialSoulName + battleSoulPower（= GameBalance.martialSoulPower 公式值，
+     * 宗门 Boss 伤害公式的死值由此活化；重醒时重算）。转生不清武魂（文档 §15.2 重置项
+     * 不含武魂，§15.1 重醒是可选动作），故 prestige() 无需改动。
+     * 失败语义与 breakthrough 一致：HTTP 200 + success=false + message，不抛异常、零改动。
+     * 注：不调 achievementService.sync——成就口径（level/胜场/塔层/已装备环数/转数）没有
+     * 武魂类成就，觉醒/重醒不改变任何成就进度维度。
+     */
+    @Transactional
+    fun awaken(userId: Long): AwakenResponse {
+        val profile = getProfile(userId)
+        val reawakened = profile.martialSoulName != null
+        if (reawakened) {
+            val cost = GameBalance.REAWAKEN_COST_GOLD
+            if (profile.gold < cost) {
+                return AwakenResponse(
+                    success = false, goldSpent = 0, reawakened = true,
+                    message = "重醒需要${cost}金币（当前${profile.gold}）"
+                )
+            }
+            profile.gold -= cost
+        }
+        // roll 用全局 Random：awaken 端点无既有掷点次序契约（GameBalance.rollMartialSoul 注释）
+        val soul = GameBalance.rollMartialSoul(profile.prestigeCount)
+        profile.martialSoulName = soul.name
+        profile.battleSoulPower = GameBalance.martialSoulPower(soul).toInt()
+        profile.updatedAt = LocalDateTime.now()
+        profileRepo.save(profile)
+        return AwakenResponse(
+            success = true,
+            martialSoulName = soul.name,
+            rarity = soul.rarity.name,
+            goldSpent = if (reawakened) GameBalance.REAWAKEN_COST_GOLD else 0L,
+            reawakened = reawakened,
+            message = (if (reawakened) "重醒成功！" else "觉醒成功！") +
+                    "获得${soul.rarity.displayName}武魂「${soul.name}」"
+        )
+    }
+
     @Transactional
     fun battle(userId: Long): BattleResponse {
         val profile = getProfile(userId)
@@ -409,7 +474,12 @@ class GameService(
 
         // 装备战力接入（P7 修复）+ 成就属性加成（bonusFor 唯一 choke point，即时生效）
         // 转生集成：bonusFor 返回的装备+成就合计加成已乘转生倍率（转数入参）
-        val equip = equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount)
+        // 第十八轮武魂集成：武魂加成（已乘转生倍率）并入同一加成包——atk/hp 进基础战斗口径
+        // （maxHp/atk），五属性随 CombatStats 进结算，power 与战斗强度同口径
+        val equip = EquipmentPowerService.plus(
+            equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount),
+            soulBonusOf(profile.martialSoulName, profile.prestigeCount)
+        )
         val power = EquipmentPowerService.powerOf(profile.level, equip)
 
         // 生成怪物（第十七轮扩展：数据类含 matk/pdef/mdef）
@@ -528,7 +598,11 @@ class GameService(
         val foughtFloor = profile.towerFloor // 塔战日志种子取挑战时楼层（胜利分支随后会 +1）
         // P2+P7 修复：胜率 = 1-(0.25+floor×0.005) 基础值 + 装备战力加成（floor=99 仍 >0，换装可登顶）
         // 成就属性加成经 bonusFor 并入（唯一 choke point，即时生效）；转生集成：加成已乘转生倍率
-        val equip = equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount)
+        // 第十八轮武魂集成：武魂加成（已乘转生倍率）并入，塔胜率/塔日志/战败回满与 battle 同口径
+        val equip = EquipmentPowerService.plus(
+            equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount),
+            soulBonusOf(profile.martialSoulName, profile.prestigeCount)
+        )
         val power = EquipmentPowerService.powerOf(profile.level, equip)
         val won = Random.nextDouble() < EquipmentPowerService.towerWinChance(profile.towerFloor, power)
         val monsterName = GameBalance.TOWER_MONSTERS[Random.nextInt(GameBalance.TOWER_MONSTERS.size)]
@@ -705,7 +779,9 @@ class GameService(
         prestigeCount = p.prestigeCount, talentPoints = p.talentPoints,
         codexKills = p.codexKills, autoBattle = p.autoBattle,
         autoAdvanceMap = p.autoAdvanceMap, autoBreakthrough = p.autoBreakthrough,
-        tutorialStep = p.tutorialStep
+        tutorialStep = p.tutorialStep,
+        // 第十八轮武魂集成：品质徽章由名字反查武魂池，不落库不加列（避免迁移）；未觉醒/脏数据为 null
+        soulRarity = p.martialSoulName?.let { GameBalance.soulByName(it)?.rarity?.name }
     )
 
     private fun toBackpackItemDto(e: com.douluodalu.game.entity.BackpackItemEntity) = BackpackItemDto(

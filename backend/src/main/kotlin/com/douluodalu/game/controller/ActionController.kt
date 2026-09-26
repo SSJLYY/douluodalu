@@ -35,6 +35,13 @@ class ActionController(
         return ResponseEntity.ok(gameService.prestige(userId))
     }
 
+    @Operation(summary = "武魂觉醒", description = "未觉醒免费从品质池随机觉醒（池随转数扩展）；已觉醒重醒需 5000 金币")
+    @PostMapping("/awaken")
+    fun awaken(auth: Authentication): ResponseEntity<AwakenResponse> {
+        val userId = auth.principal as Long
+        return ResponseEntity.ok(gameService.awaken(userId))
+    }
+
     @Operation(summary = "战斗", description = "与当前关卡怪物战斗")
     @PostMapping("/battle")
     fun battle(auth: Authentication): ResponseEntity<BattleResponse> {

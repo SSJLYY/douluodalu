@@ -349,6 +349,54 @@ class EquipmentPowerServiceTest {
         }
     }
 
+    @Test
+    fun `power detail seven-row invariant holds with martial soul across randomized equipment`() {
+        // 第十八轮武魂集成回归：soul 行（= 含武魂战力 − 六行之和）并入后，七行求和恒等在
+        // 200 组随机（保留升级：随机装备/成就/转数/武魂/未觉醒混合）下与含武魂总战力严格一致
+        val rng = Random(20260927)
+        repeat(200) {
+            val level = rng.nextInt(1, 121)
+            val prestigeCount = rng.nextInt(0, 6)
+            val rings = List(rng.nextInt(0, 7)) {
+                ring(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), percentage = rng.nextInt(0, 1000))
+            }
+            val bones = List(rng.nextInt(0, 5)) {
+                bone(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), enhance = rng.nextInt(0, 13))
+            }
+            val cores = List(rng.nextInt(0, 3)) {
+                core(rarity = rng.nextInt(0, 5), value = rng.nextInt(1, 300))
+            }
+            val ach = EquipmentBonus(
+                atkBonus = rng.nextLong(0, 500), hpBonus = rng.nextLong(0, 5000),
+                matkBonus = rng.nextLong(0, 300), pdefBonus = rng.nextLong(0, 100),
+                mdefBonus = rng.nextLong(0, 100), critRateBonus = rng.nextLong(0, 20),
+                critDmgBonus = rng.nextLong(0, 60)
+            )
+            // 1/4 概率未觉醒（soul=null → soul 行恒 0，退化为原六行恒等）
+            val soul =
+                if (rng.nextInt(0, 4) == 0) null
+                else GameBalance.MARTIAL_SOULS[rng.nextInt(GameBalance.MARTIAL_SOULS.size)]
+            val d = EquipmentPowerService.detail(level, rings, bones, cores, ach, prestigeCount, soul)
+            val eff = EquipmentPowerService.applyPrestige(
+                EquipmentPowerService.bonus(level, rings, bones, cores, ach), prestigeCount
+            )
+            // 与 GameService 战斗组装同式：applyPrestige(soulBonus, p) 后并入（soulBonus 注释）
+            val withSoul = if (soul == null) eff else EquipmentPowerService.plus(
+                eff, EquipmentPowerService.applyPrestige(EquipmentPowerService.soulBonus(soul), prestigeCount)
+            )
+            assertEquals(
+                EquipmentPowerService.powerOf(level, withSoul),
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige + d.soul,
+                "七行战力求和必须等于含武魂总战力: level=$level prestige=$prestigeCount soul=${soul?.name}"
+            )
+            if (soul == null) {
+                assertEquals(0L, d.soul, "未觉醒时 soul 行必须为 0")
+            } else {
+                assertTrue(d.soul > 0L, "觉醒玩家的 soul 行必须为正: soul=${soul.name}")
+            }
+        }
+    }
+
     // ======== P2：塔胜率修复 ========
 
     @Test

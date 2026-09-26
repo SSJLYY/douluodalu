@@ -48,6 +48,8 @@ data class CombatStatsDto(
  *  - basePower + ringPower + bonePower + corePower + achievement + prestige == power（powerOf 同式，
  *    成就加成单列一行：achievement = 成就 atk + 成就 hp/POWER_HP_DIVISOR 折算；
  *    转生倍率增量单列第 6 行 prestige，转数 0 时恒为 0）
+ *  - 上式六行 + soul == power（第十八轮武魂觉醒：武魂贡献单列第 7 行，soul 行 = 含武魂战力 −
+ *    六行之和；未觉醒恒为 0，退化为原六行恒等）
  */
 data class PowerDetailDto(
     /** 基础攻击 = PLAYER_ATK_BASE + level × PLAYER_ATK_PER_LEVEL */
@@ -68,7 +70,9 @@ data class PowerDetailDto(
     /** 成就加成战力行（已解锁成就 hp/atk 求和折算；未解锁任何成就时为 0） */
     val achievement: Long = 0,
     /** 转生倍率战力增量行（装备+成就加成 ×(1+转数×0.1) 相对 1.0 倍的增量；未转生恒为 0） */
-    val prestige: Long = 0
+    val prestige: Long = 0,
+    /** 武魂战力行（第十八轮武魂觉醒：= 含武魂战力 − 六行之和；未觉醒恒为 0。尾部新增，向后兼容） */
+    val soul: Long = 0
 )
 
 // ======== 成就 ========
@@ -118,7 +122,10 @@ data class ProfileDto(
     val autoBattle: Boolean,
     val autoAdvanceMap: Boolean,
     val autoBreakthrough: Boolean,
-    val tutorialStep: Int
+    val tutorialStep: Int,
+    /** 武魂品质徽章（第十八轮）：由 martialSoulName 反查武魂池得到，不落库（尾部新增，向后兼容）；
+     *  取值 COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC，未觉醒为 null */
+    val soulRarity: String? = null
 )
 
 data class EquippedRingDto(
@@ -243,6 +250,17 @@ data class PrestigeResponse(
     val success: Boolean,
     val prestigeCount: Int,
     val message: String
+)
+
+/** POST /api/action/awaken 的觉醒/重醒结果（失败返回 success=false + message，HTTP 200，与 breakthrough 一致）。
+ *  rarity 取值 COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC；失败时除 success/message 外均为默认值 */
+data class AwakenResponse(
+    val success: Boolean,
+    val martialSoulName: String = "",
+    val rarity: String = "",        // COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC
+    val goldSpent: Long = 0,        // 首醒 0 / 重醒 5000
+    val reawakened: Boolean = false,
+    val message: String = ""
 )
 
 data class OfflineRewardResponse(
