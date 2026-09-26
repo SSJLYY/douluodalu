@@ -1,5 +1,7 @@
 package com.douluodalu.game.dto
 
+import jakarta.validation.constraints.NotBlank
+
 // ======== 游戏状态DTO ========
 data class GameStateResponse(
     val profile: ProfileDto,
@@ -50,6 +52,8 @@ data class CombatStatsDto(
  *    转生倍率增量单列第 6 行 prestige，转数 0 时恒为 0）
  *  - 上式六行 + soul == power（第十八轮武魂觉醒：武魂贡献单列第 7 行，soul 行 = 含武魂战力 −
  *    六行之和；未觉醒恒为 0，退化为原六行恒等）
+ *  - 上式七行 + school == power（第十九轮流派：流派系数战力贡献单列第 8 行，school 行 =
+ *    含流派战力 − 七行之和（差值法，prestige/soul 行同款）；未选流派恒为 0，退化为原七行恒等）
  */
 data class PowerDetailDto(
     /** 基础攻击 = PLAYER_ATK_BASE + level × PLAYER_ATK_PER_LEVEL */
@@ -72,7 +76,9 @@ data class PowerDetailDto(
     /** 转生倍率战力增量行（装备+成就加成 ×(1+转数×0.1) 相对 1.0 倍的增量；未转生恒为 0） */
     val prestige: Long = 0,
     /** 武魂战力行（第十八轮武魂觉醒：= 含武魂战力 − 六行之和；未觉醒恒为 0。尾部新增，向后兼容） */
-    val soul: Long = 0
+    val soul: Long = 0,
+    /** 流派战力行（第十九轮流派：= 含流派战力 − 七行之和；未选流派恒为 0。尾部新增，向后兼容） */
+    val school: Long = 0
 )
 
 // ======== 成就 ========
@@ -261,6 +267,20 @@ data class AwakenResponse(
     val goldSpent: Long = 0,        // 首醒 0 / 重醒 5000
     val reawakened: Boolean = false,
     val message: String = ""
+)
+
+/** POST /api/action/school 的选择流派结果（失败返回 success=false + message，HTTP 200，与 breakthrough 一致）。
+ *  chosenSchool 为流派枚举名（BALANCED|PHYSICAL|MAGIC|SUPPORT|CONTROL|ASSASSIN）；失败时为空串 */
+data class ChooseSchoolResponse(
+    val success: Boolean,
+    val chosenSchool: String = "",
+    val message: String = ""
+)
+
+/** POST /api/action/school 请求体：school 为流派枚举名；非法枚举名走业务校验返回 success=false「未知流派」 */
+data class ChooseSchoolRequest(
+    @field:NotBlank(message = "school 不能为空")
+    val school: String = ""
 )
 
 data class OfflineRewardResponse(

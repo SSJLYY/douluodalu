@@ -351,4 +351,64 @@ object GameBalance {
      * （重醒不限次数，品质上限由 §2.3 转数门槛兜住）。
      */
     const val REAWAKEN_COST_GOLD = 5000L
+
+    // ======== 流派（灵武流派，第十九轮） ========
+    // 数值锚点：shared 引擎 ModelsExt.kt:615-641（SoulSchool 枚举 + SchoolStatMods 表）**逐字移植**
+    // （shared 为唯一权威，若调参需两侧同步；shared 的「减伤+5%」「自动金币加成」等后端无对应
+    // 乘区的字段不移植）。选流派不重 roll 武魂——shared chooseSchool 会 roll，实现分歧照 awaken
+    // 惯例留档：后端武魂觉醒/流派选择解耦，零新增掷点。
+    // 系数口径（写死，四处组装同源遵守）：流派系数作用于「基础(已乘转生) + 装备/成就/武魂加成
+    // (已乘转生)」之和——即 atk/matk/pdef/mdef 与 hp 逐属性乘对应系数（GameService.playerCombatStats
+    // 的 scale+equip 相加后乘、maxHp 的 scaledBaseMaxHp+equip.hpBonus 加总后乘——加成包里的武魂 hp
+    // 也吃到系数，与 shared「基础+武魂之后乘流派」口径对齐）；暴击率/爆伤走加数（百分点直加）。
+    // chosenSchool=null → 全部系数恒等（乘 1.0/加 0），既有数值零漂移。
+    data class SchoolMods(
+        val hp: Double, val atk: Double, val matk: Double,
+        val pdef: Double, val mdef: Double,
+        /** 暴击率/暴击伤害加成（百分点数：5 = 5%/+5% 爆伤），与装备/成就加成同量纲走加数 */
+        val critRateBonus: Int, val critDmgBonus: Int
+    )
+
+    data class SchoolDef(
+        val name: String, val icon: String, val displayName: String, val description: String,
+        /** BASIC = 开局可选 / SPECIAL = 有等级+转数门槛（与 shared SchoolCategory 枚举名一致） */
+        val category: String,
+        val mods: SchoolMods,
+        /** 门槛按「选时」校验（已选流派转生后不回撤）；基础流派 requiredLevel=1/requiredPrestige=0 */
+        val requiredLevel: Int,
+        val requiredPrestige: Int
+    )
+
+    // 六流派（系数/名称/图标/描述与 shared ModelsExt.kt:615-641 逐字对照核验；门槛：后端节奏校准——
+    // SUPPORT Lv.50+1转 / CONTROL Lv.70+2转 / ASSASSIN Lv.90+3转，与 PRESTIGE_MIN_LEVEL=50 的
+    // 转生节奏和成就 prestige_1/prestige_3 对齐）
+    val SCHOOLS = listOf(
+        SchoolDef("BALANCED", "⚖️", "均衡流派", "全面发展，物法双修。\nHP×105% ATK×100% MATK×100% PDEF×105% MDEF×105% 暴击+5% 爆伤+5%",
+            "BASIC", SchoolMods(1.05, 1.00, 1.00, 1.05, 1.05, 5, 5), 1, 0),
+        SchoolDef("PHYSICAL", "⚔️", "物理流派", "近战强攻，重视物攻物防。\nHP×100% ATK×130% MATK×45% PDEF×115% MDEF×70% 暴击+8%",
+            "BASIC", SchoolMods(1.00, 1.30, 0.45, 1.15, 0.70, 8, 0), 1, 0),
+        SchoolDef("MAGIC", "🔮", "法系流派", "远程法术，重视魔攻魔防。\nHP×95% ATK×45% MATK×130% PDEF×70% MDEF×115% 爆伤+8%",
+            "BASIC", SchoolMods(0.95, 0.45, 1.30, 0.70, 1.15, 0, 8), 1, 0),
+        SchoolDef("SUPPORT", "🛡️", "辅助流派", "治疗增益，提升团队生存。\nHP×115% ATK×80% MATK×90% PDEF×120% MDEF×120% 暴击+3% 减伤+5%",
+            "SPECIAL", SchoolMods(1.15, 0.80, 0.90, 1.20, 1.20, 3, 0), 50, 1),
+        SchoolDef("CONTROL", "🌿", "控制流派", "控制敌人，限制行动。\nHP×105% ATK×95% MATK×110% PDEF×100% MDEF×105% 暴击+6% 爆伤+6%",
+            "SPECIAL", SchoolMods(1.05, 0.95, 1.10, 1.00, 1.05, 6, 6), 70, 2),
+        SchoolDef("ASSASSIN", "🗡️", "暗杀流派", "高暴发低防御，一击必杀。\nHP×90% ATK×140% MATK×50% PDEF×60% MDEF×60% 暴击+12% 爆伤+15%",
+            "SPECIAL", SchoolMods(0.90, 1.40, 0.50, 0.60, 0.60, 12, 15), 90, 3)
+    )
+
+    private val SCHOOL_BY_NAME = SCHOOLS.associateBy { it.name }
+
+    /** 枚举名反查（选流派校验 / 战斗组装查表共用）；未知名字（历史脏数据/非法入参）返回 null */
+    fun schoolByName(name: String): SchoolDef? = SCHOOL_BY_NAME[name]
+
+    /** 流派解锁判定（选时校验唯一写点）：等级与转数双门槛，与转生校验同款「选时」语义 */
+    fun isSchoolUnlocked(school: SchoolDef, level: Int, prestigeCount: Int): Boolean =
+        level >= school.requiredLevel && prestigeCount >= school.requiredPrestige
+
+    /**
+     * 改选流派定价（对齐 REAWAKEN_COST_GOLD 惯例）：首选免费、已有流派再选（重选）5000 金，
+     * 防零成本来回切换刷门槛差值；重选不限次数。
+     */
+    const val RESCHOOL_COST_GOLD = 5000L
 }

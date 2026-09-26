@@ -30,6 +30,8 @@ import org.springframework.stereotype.Service
  * detail 同步增加第 6 行 prestige（倍率增量单列），求和恒等从五行升级为六行。
  * 武魂集成（第十八轮）：bonusFor/bonus 本体不并入武魂（武魂单列 detail 第 7 行 soul，
  * 经 soulBonus 换算 + applyPrestige 乘倍率后由调用方并入战斗/战力口径），七行求和恒等。
+ * 流派集成（第十九轮）：流派系数经 applySchool 折进战力加成包（school=null 恒等零漂移），
+ * detail 增加第 8 行 school（差值法，prestige/soul 行同款），八行求和恒等。
  */
 /**
  * 单件装备折出的战斗加成（成就加成复用同一形状）。
@@ -211,9 +213,28 @@ class EquipmentPowerService(
         }
 
         /**
+         * 流派系数 → 战力口径（第十九轮流派）：把流派乘区折进加成包（powerOf 签名不变）。
+         * 战斗口径中流派乘「基础(已乘转生)+加成(已乘转生)」之和（GameService.playerCombatStats /
+         * schoolScaledMaxHp）；战力口径沿用 prestige 行先例——系数只作用于加成包（powerOf 的基础项
+         * 是固定等级函数，基础侧增量折入第 8 行 school 差值行），五属性逐项乘系数、暴击走加数。
+         * school=null 原样返回（未选流派零漂移）；getGameState 的 power 与 detail 第 8 行
+         * 必须用同一本函数口径，八行求和恒等才成立。
+         */
+        fun applySchool(b: EquipmentBonus, school: GameBalance.SchoolMods?): EquipmentBonus {
+            if (school == null) return b
+            return EquipmentBonus(
+                (b.atkBonus * school.atk).toLong(), (b.hpBonus * school.hp).toLong(),
+                (b.matkBonus * school.matk).toLong(),
+                (b.pdefBonus * school.pdef).toLong(), (b.mdefBonus * school.mdef).toLong(),
+                b.critRateBonus + school.critRateBonus, b.critDmgBonus + school.critDmgBonus
+            )
+        }
+
+        /**
          * 纯函数：战力明细拆分（任务#23；成就系统集成后五行不变量；转生集成后六行不变量；
-         * 第十八轮武魂觉醒后七行不变量）。复用与 bonus() 完全相同的单件公式，取整用最大余数法
-         * （largest remainder）保证拆分求和与 EquipmentBonus / powerOf 严格相等：
+         * 第十八轮武魂觉醒后七行不变量；第十九轮流派后八行不变量）。复用与 bonus() 完全相同的
+         * 单件公式，取整用最大余数法（largest remainder）保证拆分求和与 EquipmentBonus / powerOf
+         * 严格相等：
          *  - ringAtk + boneAtk + coreAtk == 装备部分的 atkBonus（不含成就加成）
          *  - ringHp + boneHp == 装备部分的 hpBonus（魂核只加攻击、玩家无基础生命 → coreHp/baseHp 恒 0）
          *  - basePower + ringPower + bonePower + corePower + achievement ==
@@ -225,7 +246,11 @@ class EquipmentPowerService(
          *    bonus() 单件拆分，无自然来源行，故用差值法与第 6 行同款手法；soul=null 时该行恒 0，
          *    退化为原六行拆分。倍率取整式与 GameService 战斗组装（applyPrestige(soulBonus, p) 后
          *    并入）逐位一致，防止 power 展示与战斗强度脱节）
-         *  achievementBonus / prestigeCount / soul 均为默认零/空时与既有调用行为完全一致。
+         *  - 上式七行 + school == powerOf(level, applySchool(含武魂合计, school))
+         *    （流派贡献单列第 8 行 = 含流派战力 − 七行之和，差值法延续；流派不经 bonus() 单件拆分、
+         *    又乘在「基础+加成」加总后（基础侧 powerOf 无法直接表达），全部增量归此行；school=null
+         *    时该行恒 0，退化为原七行拆分。applySchool 取整式与 getGameState 的 power 组装逐位一致）
+         *  achievementBonus / prestigeCount / soul / school 均为默认零/空时与既有调用行为完全一致。
          */
         fun detail(
             level: Int,
@@ -234,7 +259,8 @@ class EquipmentPowerService(
             cores: List<EquippedCore>,
             achievementBonus: EquipmentBonus = EquipmentBonus(0, 0),
             prestigeCount: Int = 0,
-            soul: GameBalance.MartialSoulDef? = null
+            soul: GameBalance.MartialSoulDef? = null,
+            school: GameBalance.SchoolMods? = null
         ): PowerDetailDto {
             val b = bonus(level, rings, bones, cores)
             val baseAtk = baseAttack(level)
@@ -276,11 +302,15 @@ class EquipmentPowerService(
             // 第 7 行 soul = 含武魂战力 − 六行之和（差值法，与第 6 行同款最大余数口径延续）；
             // 倍率取整式 applyPrestige(soulBonus, p) 与 GameService 战斗组装逐位一致（soulBonus 注释）
             val sixRowSum = fiveRowSum + prestigeRow
-            val soulRow = if (soul == null) 0L else
-                powerOf(
-                    level,
-                    plus(applyPrestige(combined, prestigeCount), applyPrestige(soulBonus(soul), prestigeCount))
-                ) - sixRowSum
+            // 含武魂合计（soul=null 时即不含武魂口径，与 GameService getGameState 的 combatBonus 同构）
+            val withSoul = if (soul == null) applyPrestige(combined, prestigeCount)
+            else plus(applyPrestige(combined, prestigeCount), applyPrestige(soulBonus(soul), prestigeCount))
+            val soulRow = if (soul == null) 0L else powerOf(level, withSoul) - sixRowSum
+            // 第 8 行 school = 含流派战力 − 七行之和（差值法延续）；applySchool 取整式与 getGameState
+            // 的 power 组装逐位一致（applySchool 注释）——未选流派该行恒 0，退化为原七行恒等
+            val sevenRowSum = sixRowSum + soulRow
+            val schoolRow = if (school == null) 0L else
+                powerOf(level, applySchool(withSoul, school)) - sevenRowSum
             return PowerDetailDto(
                 baseAtk = baseAtk,
                 baseHp = 0,
@@ -296,7 +326,8 @@ class EquipmentPowerService(
                 corePower = coreAtk,
                 achievement = achievementRow,
                 prestige = prestigeRow,
-                soul = soulRow
+                soul = soulRow,
+                school = schoolRow
             )
         }
 

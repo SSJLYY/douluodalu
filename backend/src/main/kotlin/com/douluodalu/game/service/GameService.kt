@@ -106,21 +106,33 @@ class GameService(
          *  签名不变（第十八轮武魂集成走加成通道）：调用方把武魂加成经 soulBonusOf（已乘转生倍率）
          *  并入 equip 后传入——武魂 hp/atk 由此进 maxHp/atk 基础战斗口径（hp 不入 CombatStats 包，
          *  由 maxHp 侧消费），五属性随包进结算；未觉醒并入零加成，数值零漂移。
+         *  第十九轮流派集成：school 尾参（默认 null 恒等）——atk/matk/pdef/mdef 在「基础(已乘转生)
+         *  + 加成包(已含转生倍率)」相加【之后】逐属性乘流派系数（GameBalance 流派区块注释写死的
+         *  系数口径，与 shared「基础+武魂之后乘流派」对齐——我们的武魂已折进加成包）；critRate/
+         *  critDmg 走加数（百分点直加）。school=null → 乘 1.0/加 0 逐位恒等（零漂移）。
          */
-        fun playerCombatStats(level: Int, prestigeCount: Int, equip: EquipmentBonus): CombatStats {
+        fun playerCombatStats(
+            level: Int,
+            prestigeCount: Int,
+            equip: EquipmentBonus,
+            school: GameBalance.SchoolMods? = null
+        ): CombatStats {
             fun scale(base: Long): Long =
                 if (prestigeCount <= 0) base
                 else (base * GameBalance.prestigeMultiplier(prestigeCount)).toLong()
+            // 流派乘区：只在「基础+加成」相加后整体乘（不在基础/加成两侧分别乘）；school=null 跳过乘法
+            fun schoolMul(v: Long, mod: Double): Long = if (school == null) v else (v * mod).toLong()
             val baseMatk = (GameBalance.PLAYER_ATK_BASE * GameBalance.PLAYER_MATK_BASE_FACTOR).toLong() +
                     (level * GameBalance.PLAYER_ATK_PER_LEVEL * GameBalance.PLAYER_MATK_BASE_FACTOR).toLong()
             val baseDef = level.toLong() * GameBalance.PLAYER_DEF_PER_LEVEL
             return CombatStats(
-                atk = scale(GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL) + equip.atkBonus,
-                matk = scale(baseMatk) + equip.matkBonus,
-                pdef = scale(baseDef) + equip.pdefBonus,
-                mdef = scale(baseDef) + equip.mdefBonus,
-                critRate = GameBalance.PLAYER_CRIT_RATE_BASE + equip.critRateBonus.toInt(),
-                critDmg = GameBalance.PLAYER_CRIT_DMG_BASE + equip.critDmgBonus.toInt()
+                atk = schoolMul(scale(GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL) + equip.atkBonus,
+                    school?.atk ?: 1.0),
+                matk = schoolMul(scale(baseMatk) + equip.matkBonus, school?.matk ?: 1.0),
+                pdef = schoolMul(scale(baseDef) + equip.pdefBonus, school?.pdef ?: 1.0),
+                mdef = schoolMul(scale(baseDef) + equip.mdefBonus, school?.mdef ?: 1.0),
+                critRate = GameBalance.PLAYER_CRIT_RATE_BASE + equip.critRateBonus.toInt() + (school?.critRateBonus ?: 0),
+                critDmg = GameBalance.PLAYER_CRIT_DMG_BASE + equip.critDmgBonus.toInt() + (school?.critDmgBonus ?: 0)
             )
         }
 
@@ -135,6 +147,23 @@ class GameService(
             val soul = martialSoulName?.let { GameBalance.soulByName(it) } ?: return EquipmentBonus(0, 0)
             return EquipmentPowerService.applyPrestige(EquipmentPowerService.soulBonus(soul), prestigeCount)
         }
+
+        /**
+         * 流派系数查表（第十九轮，纯函数四处同源：battle / towerBattle / getGameState / 仿真镜像）：
+         * 由 profile.chosenSchool（枚举名落库）反查流派 mods；未选/历史脏数据返回 null（恒等口径，
+         * 与 soulBonusOf 的反查失败兜底同款）。名字反查失败不抛异常——战斗组装对脏数据宽容。
+         */
+        fun schoolModsOf(chosenSchool: String?): GameBalance.SchoolMods? =
+            chosenSchool?.let { GameBalance.schoolByName(it)?.mods }
+
+        /**
+         * 流派 hp 乘区（maxHp 组装专用，battle/towerBattle/仿真镜像同源）：
+         * maxHp = (scaledBaseMaxHp + equip.hpBonus) × school.hp——乘在【加总后】而非只乘基础侧，
+         * 加成包里的装备/成就/武魂 hp 全部吃到系数（GameBalance 流派区块注释写死的口径，
+         * 与 shared「基础+武魂之后乘流派」对齐）；school=null 恒等返回（零漂移）。
+         */
+        fun schoolScaledMaxHp(basePlusBonus: Long, school: GameBalance.SchoolMods?): Long =
+            if (school == null) basePlusBonus else (basePlusBonus * school.hp).toLong()
 
         /**
          * shared 引擎同源减伤因子（GameEngine.kt defFactor）：def=0 → 1.0（无减免），
@@ -283,8 +312,11 @@ class GameService(
         val soulBonus = soulBonusOf(profile.martialSoulName, profile.prestigeCount)
         val bonus = EquipmentPowerService.applyPrestige(rawBonus, profile.prestigeCount)
         val combatBonus = EquipmentPowerService.plus(bonus, soulBonus)
-        // 第十七轮战斗模型扩展：玩家有效战斗属性（与 battle() 结算入参同源，含转生倍率）
-        val combat = playerCombatStats(profile.level, profile.prestigeCount, combatBonus)
+        // 第十九轮流派集成：chosenSchool 反查流派系数（未选 → null 恒等，零漂移）；power/powerDetail
+        // 与战斗属性同一含流派口径（detail 第 8 行差值法依赖此一致性，否则恒等破）
+        val school = schoolModsOf(profile.chosenSchool)
+        // 第十七轮战斗模型扩展：玩家有效战斗属性（与 battle() 结算入参同源，含转生倍率与流派系数）
+        val combat = playerCombatStats(profile.level, profile.prestigeCount, combatBonus, school)
         return GameStateResponse(
             profile = toProfileDto(profile),
             equippedRings = equippedRings,
@@ -293,14 +325,20 @@ class GameService(
             backpackItems = backpackRepo.findByUserIdOrderByCreatedAtAsc(userId).map { toBackpackItemDto(it) },
             talents = talents,
             achievements = achievementService.getStatus(userId),
-            power = EquipmentPowerService.powerOf(profile.level, combatBonus),
+            // 第十九轮流派：power 用同一含流派口径（applySchool 把流派乘区折进加成包，与 detail
+            // 第 8 行的 powerOf(applySchool(...)) 逐位同式）；未选流派 applySchool 恒等返回
+            power = EquipmentPowerService.powerOf(
+                profile.level,
+                EquipmentPowerService.applySchool(combatBonus, school)
+            ),
             ringLoad = RingLoadCalculator.totalRingLoad(rings),
             capacity = absorptionCapacityFor(profile, rawBonus),
             // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库；
-            // 七行含成就行、转生倍率增量行与武魂行，七行求和 == power）
+            // 八行含成就行、转生倍率增量行、武魂行与流派行，八行求和 == power）
             powerDetail = EquipmentPowerService.detail(
                 profile.level, rings, bones, cores, achBonus, profile.prestigeCount,
-                profile.martialSoulName?.let { GameBalance.soulByName(it) }
+                profile.martialSoulName?.let { GameBalance.soulByName(it) },
+                school
             ),
             // 第十七轮战斗模型扩展：玩家有效战斗属性（含成就/装备五属性加成与转生倍率，与 battle
             // 结算入参同源 playerCombatStats）；尾部新增带默认值，向后兼容
@@ -466,6 +504,66 @@ class GameService(
         )
     }
 
+    // ======== 流派选择（第十九轮） ========
+    /**
+     * 选择流派：六流派（GameBalance.SCHOOLS）择一，系数经 schoolModsOf 进战斗/战力组装四处
+     * （battle/towerBattle/getGameState/仿真镜像）。
+     *  - 校验顺序：未知流派 → 已选择该流派 → 门槛（level+prestige，message 给出要求）→
+     *    重选扣金（不足 success=false）→ 写 chosenSchool → save；
+     *  - 首选免费；重选（已有流派改选）花 GameBalance.RESCHOOL_COST_GOLD（对齐 REAWAKEN_COST_GOLD
+     *    惯例，防零成本来回切换）；门槛按「选时」校验（已选流派转生后不回撤——level 重置不影响
+     *    已生效系数，与「转生不清武魂」同一保留语义），转生不清 chosenSchool，prestige() 无需改动；
+     *  - 失败语义照 breakthrough：HTTP 200 + success=false + message，不抛异常、零改动。
+     *  注 1：不重 roll 武魂——shared chooseSchool 会 roll，实现分歧照 awaken 惯例留档
+     *  （GameBalance 流派区块注释）：后端流派选择与武魂觉醒解耦，零新增掷点。
+     *  注 2：不调 achievementService.sync——成就口径（level/胜场/塔层/已装备环数/转数）没有
+     *  流派类成就，选择流派不改变任何成就进度维度。
+     */
+    @Transactional
+    fun chooseSchool(userId: Long, schoolName: String): ChooseSchoolResponse {
+        val profile = getProfile(userId)
+        val def = GameBalance.schoolByName(schoolName)
+        if (def == null) {
+            return ChooseSchoolResponse(success = false, chosenSchool = "", message = "未知流派")
+        }
+        if (profile.chosenSchool == def.name) {
+            return ChooseSchoolResponse(
+                success = false, chosenSchool = "",
+                message = "已选择${def.displayName}，无需重复选择"
+            )
+        }
+        if (!GameBalance.isSchoolUnlocked(def, profile.level, profile.prestigeCount)) {
+            val requirement = buildString {
+                append("需要 Lv.").append(def.requiredLevel)
+                if (def.requiredPrestige > 0) append(" 且转生≥").append(def.requiredPrestige)
+            }
+            return ChooseSchoolResponse(
+                success = false, chosenSchool = "",
+                message = "门槛不足：$requirement（当前 Lv.${profile.level}/${profile.prestigeCount}转）"
+            )
+        }
+        val reschooling = profile.chosenSchool != null
+        if (reschooling) {
+            val cost = GameBalance.RESCHOOL_COST_GOLD
+            if (profile.gold < cost) {
+                return ChooseSchoolResponse(
+                    success = false, chosenSchool = "",
+                    message = "改选流派需要${cost}金币（当前${profile.gold}）"
+                )
+            }
+            profile.gold -= cost
+        }
+        profile.chosenSchool = def.name
+        profile.updatedAt = LocalDateTime.now()
+        profileRepo.save(profile)
+        return ChooseSchoolResponse(
+            success = true,
+            chosenSchool = def.name,
+            message = (if (reschooling) "改选成功！" else "选择成功！") +
+                    "${def.icon} 已加入${def.displayName}${if (reschooling) "（花费${GameBalance.RESCHOOL_COST_GOLD}金币）" else ""}"
+        )
+    }
+
     @Transactional
     fun battle(userId: Long): BattleResponse {
         val profile = getProfile(userId)
@@ -480,15 +578,18 @@ class GameService(
             equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount),
             soulBonusOf(profile.martialSoulName, profile.prestigeCount)
         )
-        val power = EquipmentPowerService.powerOf(profile.level, equip)
+        // 第十九轮流派集成：chosenSchool 反查系数（未选 → null 恒等）；power/maxHp/结算同口径
+        val school = schoolModsOf(profile.chosenSchool)
+        val power = EquipmentPowerService.powerOf(profile.level, EquipmentPowerService.applySchool(equip, school))
 
         // 生成怪物（第十七轮扩展：数据类含 matk/pdef/mdef）
         val monster = monsterStats(mapId, stage)
         val monsterName = "${MAP_NAMES.getOrElse(mapId) { "未知" }}·${stage}层怪物"
 
-        // 战斗计算：完整战斗属性 = 等级基础(×转生倍率) + 装备/成就加成(已含倍率，五属性全量)
-        val maxHp = scaledBaseMaxHp(profile) + equip.hpBonus
-        val player = playerCombatStats(profile.level, profile.prestigeCount, equip)
+        // 战斗计算：完整战斗属性 = 等级基础(×转生倍率) + 装备/成就/武魂加成(已含倍率，五属性全量)
+        // ×流派系数；maxHp 乘在加总后（schoolScaledMaxHp 注释：加成包里的武魂 hp 也吃到系数）
+        val maxHp = schoolScaledMaxHp(scaledBaseMaxHp(profile) + equip.hpBonus, school)
+        val player = playerCombatStats(profile.level, profile.prestigeCount, equip, school)
         val outcome = resolveBattle(
             player = player,
             playerHp = profile.currentHp.coerceAtMost(maxHp),
@@ -599,11 +700,14 @@ class GameService(
         // P2+P7 修复：胜率 = 1-(0.25+floor×0.005) 基础值 + 装备战力加成（floor=99 仍 >0，换装可登顶）
         // 成就属性加成经 bonusFor 并入（唯一 choke point，即时生效）；转生集成：加成已乘转生倍率
         // 第十八轮武魂集成：武魂加成（已乘转生倍率）并入，塔胜率/塔日志/战败回满与 battle 同口径
+        // 第十九轮流派集成：chosenSchool 反查系数（未选 → null 恒等）；power（含塔胜率）/maxHp/
+        // 塔日志玩家属性与 battle 同一含流派口径
         val equip = EquipmentPowerService.plus(
             equipmentPowerService.bonusFor(userId, profile.level, profile.prestigeCount),
             soulBonusOf(profile.martialSoulName, profile.prestigeCount)
         )
-        val power = EquipmentPowerService.powerOf(profile.level, equip)
+        val school = schoolModsOf(profile.chosenSchool)
+        val power = EquipmentPowerService.powerOf(profile.level, EquipmentPowerService.applySchool(equip, school))
         val won = Random.nextDouble() < EquipmentPowerService.towerWinChance(profile.towerFloor, power)
         val monsterName = GameBalance.TOWER_MONSTERS[Random.nextInt(GameBalance.TOWER_MONSTERS.size)]
         val rounds = 4 + Random.nextInt(6)
@@ -629,7 +733,8 @@ class GameService(
             profile.codexKills += 1
         } else {
             profile.totalBattleLosses += 1
-            profile.currentHp = scaledBaseMaxHp(profile) + equip.hpBonus
+            // 战败回满血：与 battle 同款含流派口径（schoolScaledMaxHp，乘在基础+加成加总后）
+            profile.currentHp = schoolScaledMaxHp(scaledBaseMaxHp(profile) + equip.hpBonus, school)
         }
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
@@ -645,10 +750,11 @@ class GameService(
         // （塔挑战以满血进行，与战败回满语义一致）。
         // 第十七轮扩展：塔日志重模拟的玩家属性与 battle() 完全同口径（playerCombatStats，
         // 含五属性与转生倍率——独立种子只复现掷点，属性入参必须与主路径一致）
-        val towerPlayerMaxHp = scaledBaseMaxHp(profile) + equip.hpBonus
+        // 第十九轮流派：塔日志玩家属性/生命与 battle() 同一含流派口径
+        val towerPlayerMaxHp = schoolScaledMaxHp(scaledBaseMaxHp(profile) + equip.hpBonus, school)
         val battleLog = buildTowerBattleLog(
             userId, foughtFloor, won,
-            playerCombatStats(profile.level, profile.prestigeCount, equip), towerPlayerMaxHp
+            playerCombatStats(profile.level, profile.prestigeCount, equip, school), towerPlayerMaxHp
         )
 
         return TowerResponse(

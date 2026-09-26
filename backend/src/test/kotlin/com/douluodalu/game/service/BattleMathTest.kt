@@ -262,4 +262,55 @@ class BattleMathTest {
         assertEquals(110L, zero.pdef)
         assertEquals(110L, zero.mdef)
     }
+
+    // ======== 第十九轮流派：乘区作用于「基础+加成」之和，暴击走加数 ========
+
+    @Test
+    fun `school mods multiply base plus bonus and add crit points`() {
+        val equip = EquipmentBonus(atkBonus = 100, hpBonus = 500, matkBonus = 50, pdefBonus = 20, mdefBonus = 20)
+        // Lv.50：atk 基础 550、matk 基础 275、双防基础 100；ASSASSIN(0.90,1.40,0.50,0.60,0.60,12,15)
+        val assassin = GameService.playerCombatStats(50, 0, equip, GameBalance.schoolByName("ASSASSIN")!!.mods)
+        // 650×1.4 的双精度表示为 909.999…（1.4 无法精确表示、向下圆整），沿用 .toLong() 截断惯例
+        // （与 applyPrestige 同款）→ 909
+        assertEquals(909L, assassin.atk, "atk (550+100)×1.40 截断")
+        assertEquals(162L, assassin.matk, "matk (275+50)×0.50 = 162.5 截断")
+        assertEquals(72L, assassin.pdef, "pdef (100+20)×0.60 = 72")
+        assertEquals(72L, assassin.mdef)
+        assertEquals(12, assassin.critRate, "暴击率走加数：0+12")
+        assertEquals(165, assassin.critDmg, "爆伤走加数：150+15")
+        // BALANCED：atk/matk ×1.00、双防 ×1.05、暴击 +5/+5
+        val balanced = GameService.playerCombatStats(50, 0, equip, GameBalance.schoolByName("BALANCED")!!.mods)
+        assertEquals(650L, balanced.atk)
+        assertEquals(325L, balanced.matk)
+        assertEquals(126L, balanced.pdef, "(100+20)×1.05 = 126")
+        assertEquals(126L, balanced.mdef)
+        assertEquals(5, balanced.critRate)
+        assertEquals(155, balanced.critDmg)
+        // school=null（未选流派）与旧口径逐位一致（零漂移回归）
+        val none = GameService.playerCombatStats(50, 0, equip)
+        assertEquals(650L, none.atk)
+        assertEquals(325L, none.matk)
+        assertEquals(120L, none.pdef)
+        assertEquals(120L, none.mdef)
+        assertEquals(0, none.critRate)
+        assertEquals(150, none.critDmg)
+    }
+
+    @Test
+    fun `assassin crit burst outdamages balanced school at the same seed`() {
+        // ASSASSIN（atk×1.40 + 暴击 12%/165%）vs BALANCED（×1.00 + 5%/155%）：
+        // 同种子、恒定零防怪、双方都打满 4000 回合，期望伤害比 ≈1.39（atk 1.4 × 暴击期望 1.078/1.0275）
+        val equip = EquipmentBonus(atkBonus = 100, hpBonus = 0, matkBonus = 50)
+        val balanced = GameService.playerCombatStats(50, 0, equip, GameBalance.schoolByName("BALANCED")!!.mods)
+        val assassin = GameService.playerCombatStats(50, 0, equip, GameBalance.schoolByName("ASSASSIN")!!.mods)
+        val monster = GameService.MonsterStats(hp = 10_000_000, atk = 1, matk = 1, pdef = 0, mdef = 0)
+        val rounds = 4000
+        val b = GameService.resolveBattle(balanced, 100_000, monster, rounds, Random(97))
+        val a = GameService.resolveBattle(assassin, 100_000, monster, rounds, Random(97))
+        val balancedDmg = b.log.sumOf { it.playerDamage }
+        val assassinDmg = a.log.sumOf { it.playerDamage }
+        assertTrue(b.log.size == rounds && a.log.size == rounds, "双方都应打满 $rounds 回合（量级自检）")
+        assertTrue(assassinDmg > balancedDmg * 12 / 10,
+            "ASSASSIN 暴击流总伤必须显著高于 BALANCED（实测 $assassinDmg vs $balancedDmg）")
+    }
 }

@@ -39,6 +39,10 @@ import kotlin.random.Random
  *   - awaken()               觉醒镜像（第十八轮：GameService.awaken + GameBalance.rollMartialSoul/soulBonusOf，
  *                            首醒免费/重醒 REAWAKEN_COST_GOLD；第 1 天首醒、每转重醒一次；
  *                            roll 注入镜像自身 rng、武魂加成计入战斗属性与塔战力），改动需同步
+ *   - chooseSchool()         流派镜像（第十九轮：GameService.chooseSchool + GameBalance.SCHOOLS）：
+ *                            第 1 天免费选 BALANCED（温和系数建模，不重 roll 武魂、不消耗掷点），
+ *                            系数经 GameService.schoolModsOf/playerCombatStats/schoolScaledMaxHp/
+ *                            EquipmentPowerService.applySchool 计入战斗属性、maxHp 与塔胜率战力，改动需同步
  * 平衡常量直接引用 GameBalance（单一事实来源），但公式结构如有改动需同步本文件。
  *
  * 断言刻意只放软性的健康检查（跑通、数量级不离谱）；主要产出是根目录
@@ -75,6 +79,8 @@ class LongRunSimulationTest {
         var checkInQuestBossCoin = 0L; var checkInQuestSoulPower = 0L
         // 第十八轮武魂觉醒镜像事件计数（当日；报告「觉醒事件」行汇总）
         var awakens = 0; var reawakens = 0
+        // 第十九轮流派镜像事件计数（当日；报告「流派事件」行汇总）
+        var schoolChoices = 0
     }
 
     /** 每日固定收入镜像（SimPlayer/EquipSimPlayer 共用，保证两组画像经济口径一致） */
@@ -144,12 +150,28 @@ class LongRunSimulationTest {
         var pendingReawaken = false
         var awakenTotal = 0
         var reawakenTotal = 0
+        // 第十九轮流派镜像（GameService.chooseSchool / GameBalance.SCHOOLS）：
+        // 第 1 天免费选 BALANCED（温和系数建模：HP/双防×1.05、暴击+5%；atk/matk ×1.0）
+        var chosenSchool: GameBalance.SchoolDef? = null
+        var schoolTotal = 0
 
         /** 成就属性加成（SimPlayer 不穿装 → 环数按 0 计；prestigeCount 参与成就解锁口径） */
         fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, 0, prestigeCount)
 
         /** 武魂加成镜像（GameService.soulBonusOf 同源纯函数：反查武魂池 + applyPrestige） */
         fun soulBonusOf(): EquipmentBonus = GameService.soulBonusOf(martialSoul?.name, prestigeCount)
+
+        /** 流派系数镜像（GameService.schoolModsOf 同源纯函数：chosenSchool 反查 mods） */
+        fun schoolMods(): GameBalance.SchoolMods? = GameService.schoolModsOf(chosenSchool?.name)
+
+        // ---- 流派选择镜像（GameService.chooseSchool：首选免费、零掷点；第 1 天执行）----
+        fun chooseSchool(s: DayStats) {
+            if (chosenSchool != null) return
+            chosenSchool = GameBalance.schoolByName("BALANCED")
+                ?: error("GameBalance.SCHOOLS 缺少 BALANCED 定义")
+            schoolTotal++
+            s.schoolChoices++
+        }
 
         // ---- 觉醒镜像（GameService.awaken：首醒免费、重醒扣 GameBalance.REAWAKEN_COST_GOLD，
         //      金币不足返回 false 零改动；roll 走生产纯函数但注入镜像自身 rng 保持可复现）----
@@ -235,9 +257,11 @@ class LongRunSimulationTest {
             val monster = GameService.monsterStats(oldMap, oldStage)
             // 画像不模拟穿装 → 装备加成恒为 0（P7 修复效果在报告「已修复项」中说明）；
             // 成就七字段加成按已解锁集合并入（与生产 bonusFor 口径一致，含转生倍率）；
-            // 战斗属性（含五属性与武魂）直接调生产纯函数 playerCombatStats 组装，与 battle() 逐位同源
-            val player = GameService.playerCombatStats(level, prestigeCount, equip)
-            val maxHp = scaledBaseMaxHp() + equip.hpBonus
+            // 战斗属性（含五属性、武魂与流派系数）直接调生产纯函数 playerCombatStats 组装，与 battle() 逐位同源
+            val school = schoolMods()
+            val player = GameService.playerCombatStats(level, prestigeCount, equip, school)
+            // 第十九轮流派镜像：maxHp 乘在「基础+加成包」加总后（GameService.schoolScaledMaxHp 同源）
+            val maxHp = GameService.schoolScaledMaxHp(scaledBaseMaxHp() + equip.hpBonus, school)
             val outcome = GameService.resolveBattle(
                 player, hp, monster, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
@@ -277,11 +301,15 @@ class LongRunSimulationTest {
         // ---- 塔镜像：胜率直接调用生产纯函数 EquipmentPowerService.towerWinChance（P2+P7 修复后同源）----
         fun tower(s: DayStats) {
             // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就合计 ×转生倍率）+ 武魂加成（第十八轮）
+            // + 流派系数（第十九轮 applySchool，与生产 towerBattle 同一含流派口径）
             val power = EquipmentPowerService.powerOf(
                 level,
-                EquipmentPowerService.plus(
-                    EquipmentPowerService.applyPrestige(achBonus(), prestigeCount),
-                    soulBonusOf()
+                EquipmentPowerService.applySchool(
+                    EquipmentPowerService.plus(
+                        EquipmentPowerService.applyPrestige(achBonus(), prestigeCount),
+                        soulBonusOf()
+                    ),
+                    schoolMods()
                 )
             )
             val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
@@ -367,6 +395,9 @@ class LongRunSimulationTest {
         val finalSoul: GameBalance.MartialSoulDef? = null,
         val awakenTotal: Int = 0,
         val reawakenTotal: Int = 0,
+        // 第十九轮流派镜像汇总（报告「流派事件」行）：90 天末所选流派与累计选择事件
+        val finalSchool: String? = null,
+        val schoolTotal: Int = 0,
     ) {
         val final: DayRow get() = rows.last()
         fun last(n: Int) = rows.takeLast(n)
@@ -421,6 +452,8 @@ class LongRunSimulationTest {
             // （金币 ≥REAWAKEN_COST_GOLD 即执行，不足留待后续登录——镜像「金币在后期充裕」）
             if (d == 1) p.awaken(s)
             if (p.pendingReawaken && p.awaken(s)) p.pendingReawaken = false
+            // 第十九轮流派镜像：第 1 天首次登录免费选 BALANCED（温和系数建模，不消耗掷点）
+            if (d == 1) p.chooseSchool(s)
             for (i in loginHours.indices) {
                 val t = (d - 1) * 24.0 + loginHours[i]
                 p.claimOffline(t, s)
@@ -438,7 +471,7 @@ class LongRunSimulationTest {
                 p.mapId, p.stage, p.towerFloor, p.items.size, p.capacity, stuckStreak, p.prestigeCount))
         }
         return SimOutcome(rows, p.dropLostTotal, gained, p.offlineWastedSeconds / 3600.0,
-            p.martialSoul, p.awakenTotal, p.reawakenTotal)
+            p.martialSoul, p.awakenTotal, p.reawakenTotal, p.chosenSchool?.name, p.schoolTotal)
     }
 
     // ======== 任务#22：魂环负荷反馈回路专项 ========
@@ -503,8 +536,12 @@ class LongRunSimulationTest {
         var rejectsToday = 0
         var totalBattleWins = 0L         // 镜像 profile.totalBattleWins（战斗胜 + 塔胜 + 离线折算，成就 BATTLE 口径）
         var prestigeCount = 0            // 镜像 profile.prestigeCount（talentPoints 不建模：对属性/收入曲线无反馈）
+        // 第十九轮流派镜像（与 SimPlayer 同策略：第 1 天免费选 BALANCED 温和系数建模）
+        var chosenSchool: GameBalance.SchoolDef? = null
         /** 成就属性加成（SOUL_RING 口径 = 已装备槽位数；prestigeCount 参与成就解锁口径） */
         fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, slotsFilled(), prestigeCount)
+        /** 流派系数镜像（GameService.schoolModsOf 同源纯函数：chosenSchool 反查 mods） */
+        fun schoolMods(): GameBalance.SchoolMods? = GameService.schoolModsOf(chosenSchool?.name)
         /** 成功穿上的最高年份档位随时间的演进：档位 y → 首次穿上该档位环的天 */
         val firstEquipDayByYear = mutableMapOf<Int, Int>()
         var currentDay = 0
@@ -650,9 +687,11 @@ class LongRunSimulationTest {
             // 镜像 bonusFor(userId, level, prestigeCount)：装备+成就七字段合计 ×转生倍率
             val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
             val equip = EquipmentPowerService.applyPrestige(EquipmentPowerService.plus(raw, ach), prestigeCount)
-            // 战斗属性（含五属性）直接调生产纯函数 playerCombatStats 组装，与生产 battle() 逐位同源
-            val player = GameService.playerCombatStats(level, prestigeCount, equip)
-            val maxHp = scaledBaseMaxHp() + equip.hpBonus
+            // 战斗属性（含五属性、武魂【无——本画像未建模武魂】与流派系数）直接调生产纯函数
+            // playerCombatStats 组装，与生产 battle() 逐位同源；maxHp 乘在基础+加成加总后
+            val school = schoolMods()
+            val player = GameService.playerCombatStats(level, prestigeCount, equip, school)
+            val maxHp = GameService.schoolScaledMaxHp(scaledBaseMaxHp() + equip.hpBonus, school)
             val outcome = GameService.resolveBattle(
                 player, min(hp, maxHp), monster, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
@@ -700,9 +739,13 @@ class LongRunSimulationTest {
             val ach = achBonus()
             val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
             // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就七字段合计 ×转生倍率；powerOf 含五属性折算）
+            // + 流派系数（第十九轮 applySchool，与生产 towerBattle 同一含流派口径）
             val power = EquipmentPowerService.powerOf(
                 level,
-                EquipmentPowerService.applyPrestige(EquipmentPowerService.plus(raw, ach), prestigeCount)
+                EquipmentPowerService.applySchool(
+                    EquipmentPowerService.applyPrestige(EquipmentPowerService.plus(raw, ach), prestigeCount),
+                    schoolMods()
+                )
             )
             val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
             rndInt(GameBalance.TOWER_MONSTERS.size) // 镜像 monsterName 抽卡（保持 RNG 流同构）
@@ -843,6 +886,8 @@ class LongRunSimulationTest {
             s.checkInGold += inc.checkInGold; s.questGold += inc.questGold
             s.bossCoins += inc.bossCoin
             s.checkInQuestSoulPower += inc.soulPower
+            // 第十九轮流派镜像：第 1 天免费选 BALANCED（与 SimPlayer 同策略，温和系数建模）
+            if (d == 1) p.chosenSchool = GameBalance.schoolByName("BALANCED")
             for (i in loginHours.indices) {
                 val t = (d - 1) * 24.0 + loginHours[i]
                 p.claimOffline(t, s)
@@ -1128,6 +1173,10 @@ class LongRunSimulationTest {
         appendLine("- 武魂觉醒（第十八轮镜像，GameService.awaken / GameBalance 武魂池同源）：第 1 天免费首醒（0 转池），")
         appendLine("  每次转生后重醒一次（REAWAKEN_COST_GOLD=${GameBalance.REAWAKEN_COST_GOLD} 金，金币不足留待后续登录）；")
         appendLine("  武魂七属性经 soulBonusOf（已乘转生倍率）计入镜像战斗属性与塔胜率战力（报告末尾附觉醒事件行）。")
+        appendLine("- 流派（第十九轮镜像，GameService.chooseSchool / GameBalance.SCHOOLS 同源）：第 1 天免费选 BALANCED")
+        appendLine("  （温和系数建模：HP×105%、双防×105%、暴击+5%/爆伤+5%，atk/matk ×1.0；选流派不重 roll 武魂、零掷点），")
+        appendLine("  系数经 schoolModsOf/playerCombatStats/schoolScaledMaxHp/applySchool 计入镜像战斗属性、maxHp 与")
+        appendLine("  塔胜率战力（报告附流派事件行）。")
         appendLine("- 未建模：宗门 Boss、天赋、穿装行为——画像只捡/卖装备不穿戴，故装备战力加成按 0 计")
         appendLine("  （装备对战力的贡献已由 EquipmentPowerServiceTest 单测覆盖，见「已修复项」P7；成就加成不属装备，照常计入）。")
         appendLine("  **注（任务#22）**：上文各节维持「零装备基线」口径；穿装画像 + 魂环负荷/容量反馈回路的专项仿真")
@@ -1157,6 +1206,13 @@ class LongRunSimulationTest {
             o.finalSoul?.let { "${it.name}（${it.rarity.displayName}，战力值 ${GameBalance.martialSoulPower(it)}）" } ?: "未觉醒"
         appendLine("| 武魂觉醒事件（首醒/重醒累计） | ${r30.awakenTotal}/${r30.reawakenTotal} | ${r90.awakenTotal}/${r90.reawakenTotal} |")
         appendLine("| 期末武魂 | ${soulLabel(r30)} | ${soulLabel(r90)} |")
+        // 第十九轮流派事件行（第 1 天免费选 BALANCED 温和系数建模；改选 RESCHOOL_COST_GOLD 金，画像不改选）
+        fun schoolLabel(o: SimOutcome): String = o.finalSchool?.let {
+            val def = GameBalance.schoolByName(it)
+            "${def?.icon ?: ""}${def?.displayName ?: it}（HP/双防×105%、暴击+5%，累计选择 ${o.schoolTotal} 次）"
+        } ?: "未选流派"
+        appendLine("| 流派事件（第 1 天免费选择，累计选择次数） | ${r30.schoolTotal} | ${r90.schoolTotal} |")
+        appendLine("| 期末流派 | ${schoolLabel(r30)} | ${schoolLabel(r90)} |")
         appendLine()
         appendLine("## 发现的平衡问题（P1/P2/P7 已于任务#20 修复，前后对账见文末「已修复项」）")
         appendLine()

@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import api, { BattleResult, OfflineReward, normalizeAchievements } from '@/lib/api';
 import { PRESTIGE_MIN_LEVEL, prestigeHint } from '@/lib/prestige';
 import { awakenToast, REAWAKEN_COST_GOLD, soulPoolHint, soulRarityMeta } from '@/lib/soul';
+import { RESCHOOL_COST_GOLD, SCHOOL_META, schoolBadgeMeta, schoolUnlockHint, schoolUnlocked } from '@/lib/school';
 import { useGameData } from '@/lib/hooks';
 import { BootState } from '@/components/StateViews';
 import BattleReplay from '@/components/BattleReplay';
@@ -32,6 +33,9 @@ export default function GamePage() {
     // 重醒确认弹窗（重醒花 5000 金，破坏性弱于转生但仍需确认）：同转生弹窗模板
     const [reawakenOpen, setReawakenOpen] = useState(false);
     const reawakenCancelRef = useRef<HTMLButtonElement>(null);
+    // 流派选择弹窗（首选免费/重选 5000 金；门槛不足的流派项禁用，确认失败弹窗保持打开便于改选）
+    const [schoolOpen, setSchoolOpen] = useState(false);
+    const schoolCancelRef = useRef<HTMLButtonElement>(null);
 
     // 进入主页领取一次离线收益：有实际产出才弹窗，0 收益静默关闭
     useEffect(() => {
@@ -147,6 +151,29 @@ export default function GamePage() {
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [reawakenOpen]);
 
+    // 选择/重选流派：后端失败（未知流派/门槛不足/已选择该流派/重选金币不足）也是 200 + success:false
+    // → message 照显且弹窗保持打开（门槛/金币不足时玩家可直接改选其他项）；仅 success=true 关闭弹窗，
+    // runAction 自动 refresh 拉新 chosenSchool 与战力明细第 8 行。
+    const handleChooseSchool = (school: string) => runAction(
+        () => api.chooseSchool(school),
+        (r) => {
+            setMessage(r.message);
+            if (r.success) setSchoolOpen(false);
+        },
+        '选择流派失败',
+    );
+
+    // 流派选择弹窗可达性：照重醒弹窗模板——打开聚焦「取消」，Escape 关闭，遮罩点击关闭。
+    useEffect(() => {
+        if (!schoolOpen) return;
+        schoolCancelRef.current?.focus();
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setSchoolOpen(false);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [schoolOpen]);
+
     // 每日签到：runAction 成功回调 + 自动 refresh 拉新签到状态；已签由后端 400 → message 提示
     const handleCheckin = () => runAction(
         () => api.checkin(),
@@ -175,6 +202,10 @@ export default function GamePage() {
     const p = gameState.profile;
     // 武魂稀有度徽章元数据：旧后端 soulRarity 缺失/未知 → null（只显名字不显徽章）
     const soulMeta = soulRarityMeta(p.soulRarity);
+    // 流派徽章元数据：未选/旧后端 null/未知枚举 → null（降级为「未选流派」灰字）
+    const schoolMeta = schoolBadgeMeta(p.chosenSchool);
+    // 当前流派完整元数据（弹窗头文案与「选择/重选」措辞共用；未知枚举/未选 → null）
+    const currentSchoolMeta = p.chosenSchool ? SCHOOL_META[p.chosenSchool] ?? null : null;
     const realmName = REALM_NAMES[Math.min(Math.floor((p.level - 1) / 10), REALM_NAMES.length - 1)];
     const mapName = MAP_NAMES[p.currentMapId] || '未知';
     const maxHp = 50 * p.level + 100;
@@ -197,9 +228,10 @@ export default function GamePage() {
                             </span>
                         </div>
                         {/* 武魂状态：已觉醒 → 名字+稀有度徽章+重醒入口；未觉醒 → 名字占位+觉醒按钮（首醒免费，不弹窗）。
-                            375px：徽章 text-[11px] shrink-0、名字 truncate、按钮 min-h-11 触达高度，行不溢出 */}
+                            同一 flex 行尾追加流派徽章（已选：icon+中文名，点击可重选）或「未选流派」灰字+选流派入口；
+                            375px：徽章 text-[11px] shrink-0、名字 truncate、行 flex-wrap 兜底换行、按钮 min-h-11 触达高度，零溢出 */}
                         <div className="text-sm text-gray-400 min-w-0 max-w-full flex flex-col items-start sm:items-end gap-1">
-                            <div className="flex items-center gap-2 min-w-0 max-w-full">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 max-w-full">
                                 {p.martialSoulName ? (
                                     <>
                                         <span className="truncate">武魂: {p.martialSoulName}</span>
@@ -214,6 +246,32 @@ export default function GamePage() {
                                     </>
                                 ) : (
                                     <span>未觉醒武魂</span>
+                                )}
+                                {schoolMeta ? (
+                                    <button
+                                        type="button"
+                                        data-testid="school-badge"
+                                        onClick={() => setSchoolOpen(true)}
+                                        disabled={actionLoading}
+                                        title={`当前流派：${schoolMeta.label}（点击重选，花费 ${RESCHOOL_COST_GOLD} 金币）`}
+                                        className={`shrink-0 min-h-11 inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-semibold leading-none transition hover:brightness-110 disabled:opacity-50 ${schoolMeta.className}`}
+                                    >
+                                        <span aria-hidden>{schoolMeta.icon}</span>{schoolMeta.label}
+                                    </button>
+                                ) : (
+                                    <>
+                                        <span className="shrink-0 text-gray-500">未选流派</span>
+                                        <button
+                                            type="button"
+                                            data-testid="school-btn"
+                                            onClick={() => setSchoolOpen(true)}
+                                            disabled={actionLoading}
+                                            title="选择流派（首选免费）"
+                                            className="shrink-0 min-h-11 px-1 text-xs text-yellow-500 hover:text-yellow-400 underline underline-offset-2 transition disabled:opacity-50"
+                                        >
+                                            选流派
+                                        </button>
+                                    </>
                                 )}
                             </div>
                             {p.martialSoulName ? (
@@ -543,6 +601,93 @@ export default function GamePage() {
                                 {actionLoading ? '重醒中...' : '确认重醒'}
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 流派选择弹窗：照重醒弹窗模板（role=dialog/aria-modal、Escape/遮罩关闭、打开聚焦取消钮）。
+                六流派单列卡片：门槛未达标 → 确认禁用+门槛文案；当前流派 → 标「当前」不可再选；
+                其余项确认为重选（文案注明 5000 金）。375px：max-h-[85vh] overflow-y-auto、按钮 min-h-11 */}
+            {schoolOpen && (
+                <div
+                    className="dl-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="流派选择"
+                    data-testid="school-dialog"
+                    onClick={() => setSchoolOpen(false)}
+                >
+                    <div
+                        className="dl-pop bg-surface border border-indigo-500/50 rounded-2xl p-6 max-w-sm w-full shadow-2xl max-h-[85vh] overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3 className="text-lg font-bold text-indigo-400 mb-1">
+                            <span aria-hidden>🎓</span> 流派
+                        </h3>
+                        <p className="text-xs text-gray-400 mb-3">
+                            {currentSchoolMeta
+                                ? `当前 ${currentSchoolMeta.icon}${currentSchoolMeta.label}；重选花费 ${RESCHOOL_COST_GOLD} 金币，系数立即切换`
+                                : '首选免费，流派系数立即作用于全部战斗属性（含武魂）'}
+                        </p>
+                        {/* 六流派卡片：375px 单列堆叠（space-y 纵向排布，无横向挤压） */}
+                        <div className="space-y-2 mb-4">
+                            {Object.entries(SCHOOL_META).map(([key, meta]) => {
+                                const unlocked = schoolUnlocked(key, p.level, p.prestigeCount);
+                                const isCurrent = p.chosenSchool === key;
+                                const hint = schoolUnlockHint(key, p.level, p.prestigeCount);
+                                return (
+                                    <div
+                                        key={key}
+                                        data-testid={`school-option-${key}`}
+                                        className={`rounded-lg border p-3 ${isCurrent ? 'border-indigo-500/70 bg-indigo-500/10' : 'border-line bg-gray-900/30'} ${!unlocked && !isCurrent ? 'opacity-60' : ''}`}
+                                    >
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <span className="text-sm font-bold text-gray-200">
+                                                        <span aria-hidden>{meta.icon}</span> {meta.label}
+                                                    </span>
+                                                    {isCurrent && (
+                                                        <span className="shrink-0 rounded border border-indigo-500/60 bg-indigo-500/30 px-1 py-0.5 text-[10px] font-semibold text-indigo-300 leading-none">
+                                                            当前
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-[11px] text-gray-400 mt-0.5 leading-relaxed">{meta.description}</p>
+                                                <p className="text-[11px] text-gray-300 mt-0.5 leading-relaxed">系数：{meta.modsSummary}</p>
+                                                <p className={`text-[11px] mt-0.5 leading-relaxed ${unlocked ? 'text-gray-500' : 'text-red-300'}`}>{hint}</p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                data-testid={`school-confirm-${key}`}
+                                                onClick={() => handleChooseSchool(key)}
+                                                disabled={actionLoading || isCurrent || !unlocked}
+                                                title={isCurrent
+                                                    ? '已是当前流派'
+                                                    : !unlocked
+                                                        ? hint
+                                                        : currentSchoolMeta
+                                                            ? `重选花费 ${RESCHOOL_COST_GOLD} 金币`
+                                                            : '首选免费'}
+                                                className="shrink-0 self-center min-h-11 px-3 rounded-lg text-xs font-bold text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:from-indigo-600 disabled:hover:to-blue-600"
+                                            >
+                                                {isCurrent ? '当前' : currentSchoolMeta ? '重选' : '选择'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <button
+                            type="button"
+                            ref={schoolCancelRef}
+                            data-testid="school-cancel"
+                            onClick={() => setSchoolOpen(false)}
+                            disabled={actionLoading}
+                            className="w-full min-h-11 bg-gray-700 hover:bg-gray-600 rounded-lg font-bold transition disabled:opacity-50"
+                        >
+                            取消
+                        </button>
                     </div>
                 </div>
             )}

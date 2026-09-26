@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { SOUL_POOL_TABLE, SOUL_RARITY_META, SOUL_RARITY_WEIGHTS, soulRarityMeta } from '@/lib/soul';
+import { RESCHOOL_COST_GOLD, SCHOOL_META, schoolRequirementText } from '@/lib/school';
 
 // 品质池门槛表：0/1/2/3/5 转各一档（数据与 lib/soul.ts 同源，避免双份硬编码）
 const SOUL_POOL_ROWS = SOUL_POOL_TABLE.map((row) => ({
@@ -26,6 +27,13 @@ const SOUL_RARITY_ROWS = Object.entries(SOUL_RARITY_META).map(([key, meta]) => (
     rarity: key,
     weight: SOUL_RARITY_WEIGHTS[key] ?? 0,
     description: SOUL_RARITY_DESCRIPTIONS[key] ?? '',
+}));
+
+// 六流派表（与 lib/school.ts SCHOOL_META 同源：名称/定位/系数摘要逐字，勿改措辞；门槛徽章文案由 schoolRequirementText 生成）
+const SCHOOL_ROWS = Object.entries(SCHOOL_META).map(([key, meta]) => ({
+    name: `${meta.icon} ${meta.label}`,
+    description: `${meta.description}；系数：${meta.modsSummary}`,
+    requirement: schoolRequirementText(key),
 }));
 
 const WIKI_CATEGORIES = [
@@ -96,6 +104,16 @@ const WIKI_CATEGORIES = [
         ]
     },
     {
+        id: 'school',
+        title: '流派系统',
+        icon: '🎓',
+        content: [
+            { name: '流派机制', description: `共 6 流派：均衡/物理/法系 3 个基础流派开局可选，辅助/控制/暗杀 3 个特殊流派需等级+转数门槛解锁（按选择时校验）；首选免费，重选花费 ${RESCHOOL_COST_GOLD} 金币；转生不会清除流派；流派系数作用于全部战斗属性（含武魂加成），主页状态卡可随时查看/更换` },
+            // 六流派表：名称/定位/系数摘要/门槛（与后端 School 枚举同源，逐字对照）
+            ...SCHOOL_ROWS,
+        ]
+    },
+    {
         id: 'rings',
         title: '魂环系统',
         icon: '💍',
@@ -155,7 +173,7 @@ export default function WikiPage() {
         <div className="space-y-6">
             <h1 className="text-2xl font-bold text-yellow-400">百科</h1>
 
-            {/* 分类标签（8 个 tab：375px 下用横向滚动收纳为一行，避免换行挤压内容区） */}
+            {/* 分类标签（9 个 tab：375px 下用横向滚动收纳为一行，避免换行挤压内容区） */}
             <div className="flex gap-2 dl-scroll-x pb-1">
                 {WIKI_CATEGORIES.map((category) => (
                     <button
@@ -222,6 +240,11 @@ export default function WikiPage() {
                                         {'weight' in item && (
                                             <span className="bg-gray-600 dl-badge-outline px-2 py-1 rounded text-sm shrink-0 tabular-nums">
                                                 权重 {item.weight}
+                                            </span>
+                                        )}
+                                        {'requirement' in item && (
+                                            <span className="bg-indigo-600 px-2 py-1 rounded text-sm shrink-0">
+                                                {item.requirement}
                                             </span>
                                         )}
                                     </div>

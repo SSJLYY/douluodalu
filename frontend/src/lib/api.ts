@@ -147,6 +147,18 @@ class ApiClient {
         return this.request<AwakenResult>('/api/action/awaken', { method: 'POST' });
     }
 
+    /**
+     * 选择/重选流派：首选免费，重选 5000 金（前端镜像常量见 lib/school.ts RESCHOOL_COST_GOLD）。
+     * 失败（未知流派/门槛不足/已选择该流派/重选金币不足）也是 200 + success:false + message
+     * （照 prestige/awaken 惯例，前端只透传 message）；门槛按选择时校验；转生不清流派。
+     */
+    async chooseSchool(school: string) {
+        return this.request<ChooseSchoolResult>('/api/action/school', {
+            method: 'POST',
+            body: JSON.stringify({ school }),
+        });
+    }
+
     async battle() {
         return this.request<BattleResult>('/api/action/battle', { method: 'POST' });
     }
@@ -404,7 +416,7 @@ export interface CombatStats {
     /**
      * 对应后端 PowerDetailDto（任务#23）。
      * 后端保证：ringAtk+boneAtk+coreAtk == 攻击加成总值、ringHp+boneHp == 生命加成总值、
-     * 四行 power* 求和 == power（后端补 achievement/prestige/soul 字段后为五行/六行/七行：+ achievement + prestige + soul）。
+     * 四行 power* 求和 == power（后端补 achievement/prestige/soul/school 字段后为五行/六行/七行/八行：+ achievement + prestige + soul + school）。
      * 魂核只加攻击（coreHp=0），玩家模型无基础生命（baseHp=0）。
      */
 export interface PowerDetail {
@@ -426,6 +438,8 @@ export interface PowerDetail {
     prestige?: number;
     /** 武魂加成折算战力（第 7 行，武魂七属性折算）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：base+ring+core+bone+achievement+prestige+soul == power */
     soul?: number;
+    /** 流派加成折算战力（第 8 行）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：base+ring+core+bone+achievement+prestige+soul+school == power */
+    school?: number;
 }
 
 /** 成就属性奖励（Achievement.rewards）。matk/pdef/mdef/critRate/critDmg 后端暂未生效，前端只展示 hp/atk */
@@ -612,6 +626,17 @@ export interface AwakenResult {
     goldSpent: number;
     /** false=首次觉醒 / true=重醒 */
     reawakened: boolean;
+    message: string;
+}
+
+/**
+ * POST /api/action/school 响应：失败（未知流派/门槛不足/已选择该流派/重选金币不足）也是
+ * 200 + success:false + message（照 prestige/awaken 惯例，前端只透传 message）；
+ * 失败时 chosenSchool=""，成功为所选流派枚举名（BALANCED|PHYSICAL|MAGIC|SUPPORT|CONTROL|ASSASSIN）。
+ */
+export interface ChooseSchoolResult {
+    success: boolean;
+    chosenSchool: string;
     message: string;
 }
 

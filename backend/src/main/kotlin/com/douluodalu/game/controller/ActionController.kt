@@ -4,6 +4,7 @@ import com.douluodalu.game.dto.*
 import com.douluodalu.game.service.GameService
 import io.swagger.v3.oas.annotations.Operation
 import io.swagger.v3.oas.annotations.tags.Tag
+import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.Authentication
 import org.springframework.web.bind.annotation.*
@@ -40,6 +41,13 @@ class ActionController(
     fun awaken(auth: Authentication): ResponseEntity<AwakenResponse> {
         val userId = auth.principal as Long
         return ResponseEntity.ok(gameService.awaken(userId))
+    }
+
+    @Operation(summary = "选择流派", description = "六流派择一（基础流派开局可选，进阶流派有等级+转数门槛）；首选免费，重选需 5000 金币")
+    @PostMapping("/school")
+    fun chooseSchool(auth: Authentication, @Valid @RequestBody request: ChooseSchoolRequest): ResponseEntity<ChooseSchoolResponse> {
+        val userId = auth.principal as Long
+        return ResponseEntity.ok(gameService.chooseSchool(userId, request.school))
     }
 
     @Operation(summary = "战斗", description = "与当前关卡怪物战斗")
