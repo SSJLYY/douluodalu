@@ -296,6 +296,16 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 6. **集成验证**：mvn test 基线 197→**213 全绿**（SchoolIntegrationTest 14 + BattleMathTest 2）；真库冒烟：门槛拦截（精确当前进度提示）/PHYSICAL 免费选（atk×1.30、matk 13=30×0.45 逐位）/同派拒绝/无金拒绝/改选扣金 5000/SUPPORT 门槛解锁（matk 271=302×0.90 截断）/八行恒等（school 行 40）；浏览器 E2E：徽章/弹窗六卡门槛状态/当前标记/375px 零溢出/console 0 error。
 7. **遗留**：武魂 school 归属字段与流派池过滤（shared randomAwakenForSchool 当前恒等全池，实装无增益）；武魂技能（文档 §16.1，需技能架构）；battleSoulPower 与流派系数未挂钩（宗门 Boss 伤害不受流派影响，口径留档）。
 
+## ✨ 第二十轮：武魂技能系统（战斗最后一环）（2026-09-26）
+
+1. **触发模型——冷却制、零新增掷点**：技能在第 r 回合释放当且仅当 `(r-1) % cooldown == 0`（cooldown 3~5，首回合即放）；技能回合的三掷照常发生（保持 RNG 流逐位不变），技能只改变伤害结算或改为治疗。**BattleMathTest 一行未改全绿** + 专项测试证明「cooldown 极大的技能流与无技能流同种子整场逐位相等」——无技能路径零漂移的硬性验收达成。
+2. **四类结算**（12 武魂技能值从 shared Models.kt 逐字移植，4 条 cooldown 以 shared 为权威修正）：单体（缠绕 140%…海神之怒 250%，过 defFactor+暴击）、多段（幽冥突刺 2段×100% = 总倍率 2.0 单发等价，段数=(power/50).coerceIn(2,5)）、**无视防御（有效防御 ×0.5 软化**——文档「完全无视」会随怪防无限放大击穿平衡，按 shared 破甲击系先例重标定，power 180/300 照文档）、治疗（回复 maxHp×power/30~50%，该回合不攻击，封顶 maxHp）。BERSERK 无实现锚点留档。
+3. **回放与展示**：BattleRoundLog 尾部 `skillName` 可空字段（技能回合标记，随 battleLog 返回）；前端回放技能高亮行 ✨（flex-wrap 换行不溢出）+ 治疗回合 💚 标记（替代误导性「输出 0」）；状态卡武魂区展示技能名；ProfileDto 尾部 soulSkillName；wiki 武魂分类补技能段（冷却机制+四类表）。测试 72→**76**。
+4. **四处同源**：battle/towerBattle/getGameState/塔日志重模拟统一从 profile.martialSoulName 反查技能（CombatStats.skill 携带 + playerMaxHp 尾参），塔日志回放一致性断言保持。
+5. **集成验证**：mvn test 基线 213→**226 全绿**（SoulSkillTest 11 + 集成 2）；真库冒烟：觉醒后 soulSkillName 暴露、3 场战斗全部第 1 回合触发缠绕、治疗回合 200→274（+74 ≈ maxHp×30%）；浏览器 E2E：回放第 1 回合「✨ 技能「缠绕」」高亮 + 状态卡「技能：缠绕」+ wiki 技能段，375px 零溢出、console 0 error。
+6. **仿真收敛锁原样通过**：主画像技能正向 buff——90 天推图 7-2→**8-10**（首次抵达 8 号图终局）、金币 +19%、等级 29→30；负荷回路画像（无武魂）逐位不变。
+7. **遗留**：BERSERK 类型无实现锚点（副作用机制不存在）；HEAL 与跨场次 currentHp 持久化的长线影响未专项仿真；怪物技能（v1 明确不做）；README 特性清单本轮已刷新至 20 轮现状。
+
 ---
 
 ## 🔮 后续建议
