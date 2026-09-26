@@ -11,11 +11,12 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
 import org.springframework.web.servlet.HandlerInterceptor
+import java.net.InetAddress
 import java.time.Duration
 
 /**
  * 基于 Bucket4j 的速率限制拦截器。
- * - 通过 IP 限流。
+ * - 通过 IP 限流（XFF 仅在可信代理背后采信，见 clientIp 注释——防伪造头绕过限流）。
  * - 不同路径前缀可用不同的桶配置（auth 路径更严格）。
  */
 @Component
@@ -60,11 +61,39 @@ class RateLimitInterceptor(
             .build()
     }
 
+    /**
+     * 取限流键用的客户端 IP。安全审计修复：不能无条件信任 X-Forwarded-For /
+     * X-Real-IP——请求方（或中间任何一跳）都可以自行携带伪造的 XFF 头，逐请求轮换
+     * 即可让「按 IP 限流」完全失效（登录接口的 10 RPM 防爆破随之被绕过）。
+     *
+     * 现在仅当 TCP 对端（remoteAddr）是可信代理（本机回环 / 内网地址，覆盖
+     * DEPLOY.md 部署形态：nginx 与应用同机、proxy_pass http://127.0.0.1:8080）
+     * 时才采信转发头；且取 XFF 的【最后一段】——nginx 的 $proxy_add_x_forwarded_for
+     * 是「追加」语义，最后一段才是代理实际看到的直连客户端地址，客户端可伪造的
+     * 前几段全部弃用。对端不可信（公网直连）时一律用 remoteAddr，转发头仅作参考。
+     */
     private fun clientIp(req: HttpServletRequest): String {
+        val remote = req.remoteAddr ?: "unknown"
+        if (!isTrustedProxy(remote)) return remote
+
         val xff = req.getHeader("X-Forwarded-For")
-        if (!xff.isNullOrBlank()) return xff.split(",").first().trim()
+        if (!xff.isNullOrBlank()) {
+            val last = xff.split(",").map { it.trim() }.lastOrNull { it.isNotEmpty() }
+            if (!last.isNullOrBlank()) return last
+        }
         val real = req.getHeader("X-Real-IP")
         if (!real.isNullOrBlank()) return real
-        return req.remoteAddr ?: "unknown"
+        return remote
+    }
+
+    /** 可信代理：本机回环、全零地址或 RFC1918/站点内网（nginx 同机部署即覆盖） */
+    private fun isTrustedProxy(remoteAddr: String): Boolean {
+        return try {
+            val addr = InetAddress.getByName(remoteAddr)
+            addr.isLoopbackAddress || addr.isAnyLocalAddress || addr.isSiteLocalAddress
+        } catch (e: Exception) {
+            // 无法解析的地址按不可信处理，回落到 remoteAddr 本身
+            false
+        }
     }
 }

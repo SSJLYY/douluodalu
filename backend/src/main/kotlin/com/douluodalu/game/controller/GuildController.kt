@@ -8,6 +8,10 @@ import com.douluodalu.game.entity.Guild
 import com.douluodalu.game.model.GuildShopData
 import com.douluodalu.game.service.GuildService
 import com.douluodalu.game.service.ShopService
+import jakarta.validation.Valid
+import jakarta.validation.constraints.Min
+import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Size
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.Authentication
 import org.springframework.web.bind.annotation.*
@@ -59,7 +63,7 @@ class GuildController(
     @PostMapping("/create")
     fun createGuild(
         auth: Authentication,
-        @RequestBody request: CreateGuildRequest
+        @Valid @RequestBody request: CreateGuildRequest
     ): ResponseEntity<Any> {
         val userId = auth.principal as Long
         val result = guildService.createGuild(userId, request.name, request.description)
@@ -100,7 +104,7 @@ class GuildController(
     @PostMapping("/kick")
     fun kickMember(
         auth: Authentication,
-        @RequestBody request: KickMemberRequest
+        @Valid @RequestBody request: KickMemberRequest
     ): ResponseEntity<Any> {
         val userId = auth.principal as Long
         val success = guildService.kickMember(userId, request.targetUserId)
@@ -114,7 +118,7 @@ class GuildController(
     @PostMapping("/transfer")
     fun transferLeadership(
         auth: Authentication,
-        @RequestBody request: TransferLeaderRequest
+        @Valid @RequestBody request: TransferLeaderRequest
     ): ResponseEntity<Any> {
         val userId = auth.principal as Long
         val success = guildService.transferLeadership(userId, request.targetUserId)
@@ -139,7 +143,7 @@ class GuildController(
     @PostMapping("/donate")
     fun donateGuild(
         auth: Authentication,
-        @RequestBody request: DonateRequest
+        @Valid @RequestBody request: DonateRequest
     ): ResponseEntity<Any> {
         val userId = auth.principal as Long
         val result = guildService.donate(userId, request.amount)
@@ -207,7 +211,32 @@ class GuildController(
     }
 }
 
-data class CreateGuildRequest(val name: String, val description: String)
-data class DonateRequest(val amount: Long)
-data class KickMemberRequest(val targetUserId: Long)
-data class TransferLeaderRequest(val targetUserId: Long)
+/**
+ * 安全审计修复：此前无任何校验注解且缺 @Valid——超长 name/description 直接落库
+ * 触发 Data too long（500 + DB 细节日志）。@Size 上限与 V1 迁移的列宽严格对齐：
+ * guild.name VARCHAR(64)、guild.notice VARCHAR(500)。
+ */
+data class CreateGuildRequest(
+    @field:NotBlank(message = "宗门名称不能为空")
+    @field:Size(max = 64, message = "宗门名称最长 64 字符")
+    val name: String,
+
+    @field:Size(max = 500, message = "宗门公告最长 500 字符")
+    val description: String
+)
+
+/** @Min(1) 把「负数/零金额」在参数层挡成 400；服务层 amount<=0 校验保留作纵深防御（第十轮修复仍在） */
+data class DonateRequest(
+    @field:Min(value = 1, message = "捐献金额必须为正数")
+    val amount: Long
+)
+
+data class KickMemberRequest(
+    @field:Min(value = 1, message = "目标用户 ID 非法")
+    val targetUserId: Long
+)
+
+data class TransferLeaderRequest(
+    @field:Min(value = 1, message = "目标用户 ID 非法")
+    val targetUserId: Long
+)

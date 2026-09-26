@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse
 import io.swagger.v3.oas.annotations.responses.ApiResponses
 import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.validation.Valid
+import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.Authentication
 import org.springframework.web.bind.annotation.*
@@ -31,8 +32,12 @@ class AuthController(
 
     @Operation(summary = "获取当前用户信息", description = "通过 JWT Token 获取用户信息")
     @GetMapping("/me")
-    fun getMe(auth: Authentication): ResponseEntity<UserInfoResponse> {
-        val userId = auth.principal as Long
+    fun getMe(auth: Authentication?): ResponseEntity<UserInfoResponse> {
+        // /api/auth/** 在白名单内匿名可达：匿名访问时 Spring Security 的
+        // getUserPrincipal() 对匿名 token 返回 null（旧代码非空参数直接 NPE → 500，
+        // 携带伪造 JWT 时 principal 也可能非 Long）。这里统一安全降级为 401。
+        val userId = auth?.principal as? Long
+            ?: return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build()
         return ResponseEntity.ok(authService.getUserInfo(userId))
     }
 

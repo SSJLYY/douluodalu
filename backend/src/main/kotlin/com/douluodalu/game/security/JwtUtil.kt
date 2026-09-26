@@ -29,11 +29,19 @@ class JwtUtil(
     }
 
     /**
+     * 安全审计修复：黑名单条目必须存活到 token 自然失效为止。若配置的
+     * jwt.blacklist.expiration 短于 token 有效期（默认 1h < 24h），登出被拉黑的
+     * token 在条目过期驱逐后会「复活」——validateToken 查不到 jti 又恢复有效。
+     * 因此取两者较大值：黑名单至少覆盖整个 token 生命周期。
+     */
+    val effectiveBlacklistTtlMs: Long = maxOf(blacklistExpirationMs, expiration)
+
+    /**
      * 黑名单：使用 Caffeine 内存缓存，TTL 到期自动驱逐，避免无限增长。
      * 后续如需多实例同步，可替换为 Redis 实现同接口。
      */
     private val revokedTokens: ConcurrentMap<String, Long> = Caffeine.newBuilder()
-        .expireAfterWrite(Duration.ofMillis(blacklistExpirationMs))
+        .expireAfterWrite(Duration.ofMillis(effectiveBlacklistTtlMs))
         .maximumSize(100_000)
         .build<String, Long>()
         .asMap()
