@@ -45,6 +45,9 @@ class EquipmentFlowTest {
     @Mock
     private lateinit var webSocketService: WebSocketService
 
+    @Mock
+    private lateinit var checkInService: CheckInService
+
     @Captor
     private lateinit var savedRingCaptor: ArgumentCaptor<EquippedRing>
 

@@ -17,7 +17,9 @@ data class GameStateResponse(
     /** 魂环吸收容量 = 根骨×6（超负荷装环会被 400 拒绝） */
     val capacity: Long = 0,
     /** 任务#23：战力明细分解（攻击/生命按来源拆分，拆分求和与 power 严格一致） */
-    val powerDetail: PowerDetailDto = PowerDetailDto()
+    val powerDetail: PowerDetailDto = PowerDetailDto(),
+    /** 每日签到状态（尾部新增带默认值，向后兼容） */
+    val checkIn: CheckInStatusDto = CheckInStatusDto()
 )
 
 /**
@@ -116,6 +118,35 @@ data class BackpackItemDto(
     val coreLevel: Int,
     /** 若为魂环：该环负荷（前端"装得下/装不下"预览用）；其他类型为 0。任务#21，向后兼容 */
     val load: Long = 0
+)
+
+// ======== 每日签到 ========
+/** POST /api/game/checkin 的签到结果 */
+data class CheckInResult(
+    val goldGained: Long,
+    val bossCoinGained: Long,
+    val soulPowerGained: Long,
+    val streak: Long,
+    val totalDays: Long,
+    /** 本次签到落在 7 日循环的第几天（1-7） */
+    val cycleDay: Int
+)
+
+/** 签到状态（GameStateResponse.checkIn）。nextCycleDay = (streak % 7) + 1：已签时代表明天，未签时代表今天 */
+data class CheckInStatusDto(
+    val signedToday: Boolean = false,
+    val streak: Long = 0,
+    val totalDays: Long = 0,
+    val nextCycleDay: Int = 1,
+    /** 固定返回 7 天循环全表（含数值），前端据此渲染预览格，避免前后端数值表漂移 */
+    val rewards: List<CheckInRewardDto> = emptyList()
+)
+
+data class CheckInRewardDto(
+    val day: Int = 0,
+    val gold: Long = 0,
+    val bossCoin: Long = 0,
+    val soulPower: Long = 0
 )
 
 // ======== 操作响应 ========

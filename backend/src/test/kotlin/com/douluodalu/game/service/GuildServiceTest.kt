@@ -176,10 +176,14 @@ class GuildServiceTest {
         doReturn(Optional.of(guild)).whenever(guildRepository).findById(9L)
         doAnswer { guild.currentMembers -= 1; 1 }.whenever(guildRepository).tryLeaveMemberCount(9L)
 
-        val ok = guildService.leaveGuild(1L)
+        val result = guildService.leaveGuild(1L)
 
-        assertTrue(ok)
+        assertNotNull(result)
         assertEquals(3, guild.currentMembers)
+        // 普通成员退出：message 兼容旧契约，无解散/转让分歧
+        assertEquals("已退出宗门", result!!.message)
+        assertFalse(result.disbanded)
+        assertNull(result.transferredTo)
         verify(guildMemberRepository).deleteByUserId(1L)
         verify(guildRepository, never()).save(any())
     }
@@ -192,7 +196,7 @@ class GuildServiceTest {
         // 计数已被历史竞态压到 0：条件 UPDATE 影响 0 行，但玩家退出本身不能被阻塞
         doReturn(0).whenever(guildRepository).tryLeaveMemberCount(9L)
 
-        assertTrue(guildService.leaveGuild(1L))
+        assertNotNull(guildService.leaveGuild(1L))
 
         verify(guildMemberRepository).deleteByUserId(1L)
     }
@@ -560,14 +564,20 @@ class GuildServiceTest {
             .whenever(guildMemberRepository).findByGuildId(9L)
         doReturn(1).whenever(guildRepository).transferLeaderId(9L, 2L, 1L)
         doAnswer { guild.currentMembers -= 1; 1 }.whenever(guildRepository).tryLeaveMemberCount(9L)
+        // 继任者昵称走 findById（单 id 无 N+1 场景）
+        val successor = stubOtherUser(2L, guildId = 9L)
 
-        assertTrue(guildService.leaveGuild(1L))
+        val result = guildService.leaveGuild(1L)
 
+        assertNotNull(result)
         verify(guildRepository).transferLeaderId(9L, 2L, 1L)
         assertEquals("LEADER", early.role)
         verify(guildMemberRepository).save(early)
         verify(guildMemberRepository).deleteByUserId(1L)
         assertEquals(2, guild.currentMembers)
+        // 转让分歧：disbanded=false 且 transferredTo 带继任者昵称
+        assertFalse(result!!.disbanded)
+        assertEquals(successor.nickname, result.transferredTo)
     }
 
     @Test
@@ -577,13 +587,18 @@ class GuildServiceTest {
         doReturn(listOf(GuildMember(guildId = 9L, userId = 1L, role = "LEADER")))
             .whenever(guildMemberRepository).findByGuildId(9L)
 
-        assertTrue(guildService.leaveGuild(1L))
+        val result = guildService.leaveGuild(1L)
 
+        assertNotNull(result)
         verify(guildMemberRepository).deleteByGuildId(9L)
         verify(guildRepository).delete(guild)
         assertNull(profile.guildId)
         // 走解散路径：不再需要递减人数
         verify(guildRepository, never()).tryLeaveMemberCount(any())
+        // 解散分歧：disbanded=true，message 兼容字段保留
+        assertTrue(result!!.disbanded)
+        assertNull(result.transferredTo)
+        assertEquals("已退出宗门", result.message)
     }
 
     @Test
@@ -596,7 +611,7 @@ class GuildServiceTest {
         )).whenever(guildMemberRepository).findByGuildId(9L)
         doReturn(0).whenever(guildRepository).transferLeaderId(9L, 2L, 1L)
 
-        assertFalse(guildService.leaveGuild(1L))
+        assertNull(guildService.leaveGuild(1L))
 
         verify(guildMemberRepository, never()).deleteByUserId(any())
         verify(guildRepository, never()).tryLeaveMemberCount(any())

@@ -111,10 +111,14 @@ export default function GuildPage() {
         ).then(loadGuilds);
     };
 
+    // 任务：leave 响应升级（{message, disbanded?, transferredTo?}）——
+    // disbanded=true 宗门已随退出解散；transferredTo 为继任者昵称；旧后端仅 {message} 走兜底文案
     const handleLeaveGuild = () => runAction(
         () => api.leaveGuild(),
-        () => {
-            setMessage('已退出宗门');
+        (result) => {
+            if (result.disbanded) setMessage('宗门已解散');
+            else if (result.transferredTo) setMessage(`已退出，宗主转让给 ${result.transferredTo}`);
+            else setMessage(result.message || '已退出宗门');
             setMyGuild(null);
         },
         '退出失败',

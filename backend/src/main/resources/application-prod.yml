@@ -22,3 +22,10 @@ management:
     health:
       show-details: never
       show-components: never
+
+# 3) Prometheus 指标生产双保险：SecurityConfig 检测到本开关为 false 后
+#    不再匿名放行 /actuator/prometheus（exposure 亦已不含 prometheus，
+#    端点本身不下发）。如需内网抓取，改回 true 并配合反代 ACL 限制来源。
+app:
+  monitoring:
+    prometheus-public: false

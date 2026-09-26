@@ -2,6 +2,7 @@ package com.douluodalu.game.service
 
 import com.douluodalu.game.dto.GuildBossResponse
 import com.douluodalu.game.dto.GuildMemberResponse
+import com.douluodalu.game.dto.LeaveGuildResponse
 import com.douluodalu.game.entity.Guild
 import com.douluodalu.game.entity.GuildMember
 import com.douluodalu.game.entity.PlayerProfileEntity
@@ -146,26 +147,32 @@ class GuildService(
     }
 
     @Transactional
-    fun leaveGuild(userId: Long): Boolean {
-        val user = userRepository.findById(userId).orElse(null) ?: return false
-        val player = user.player ?: return false
-        val guildId = player.guildId ?: return false
+    fun leaveGuild(userId: Long): LeaveGuildResponse? {
+        val user = userRepository.findById(userId).orElse(null) ?: return null
+        val player = user.player ?: return null
+        val guildId = player.guildId ?: return null
 
-        val guild = guildRepository.findById(guildId).orElse(null) ?: return false
+        val guild = guildRepository.findById(guildId).orElse(null) ?: return null
 
         // 宗主退出不再是死路（旧逻辑直接拒绝，宗主永远甩不掉宗门）：
         // 只剩自己 → 等价解散；还有其他成员 → 自动转让给加入最早的成员后再正常退出
+        var transferredTo: String? = null
         if (guild.leaderId == userId) {
             val successors = guildMemberRepository.findByGuildId(guildId)
                 .filter { it.userId != userId }
                 .sortedWith(compareBy({ it.joinedAt }, { it.userId }))
-            if (successors.isEmpty()) return disbandLocked(user, player, guild)
+            if (successors.isEmpty()) {
+                disbandLocked(user, player, guild)
+                return LeaveGuildResponse(disbanded = true)
+            }
             val successor = successors.first()
             // compare-and-set 转让：并发下已被别人换掉宗主则影响 0 行，本次退出让路
-            if (guildRepository.transferLeaderId(guildId, successor.userId, userId) == 0) return false
+            if (guildRepository.transferLeaderId(guildId, successor.userId, userId) == 0) return null
             successor.role = "LEADER"
             guildMemberRepository.save(successor)
             // 自己这行的 role 无需改：下面正常退出流程会直接删除它
+            // 继任者昵称（单个 id 走 findById 即可，无 N+1 场景）
+            transferredTo = userRepository.findById(successor.userId).orElse(null)?.nickname
         }
 
         // 退出宗门（同步维护 guild_member 表；计数走条件原子递减，防并发减成负数）
@@ -174,7 +181,7 @@ class GuildService(
         guildRepository.tryLeaveMemberCount(guildId)
         userRepository.save(user)
 
-        return true
+        return LeaveGuildResponse(message = "已退出宗门", disbanded = false, transferredTo = transferredTo)
     }
 
     /**

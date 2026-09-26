@@ -85,10 +85,11 @@ class GuildController(
     @PostMapping("/leave")
     fun leaveGuild(auth: Authentication): ResponseEntity<Any> {
         val userId = auth.principal as Long
-        val success = guildService.leaveGuild(userId)
-        return if (success) {
-            // 宗主退出时服务端已自动处理：有成员→转让给加入最早者；只剩自己→解散
-            ResponseEntity.ok(mapOf("message" to "已退出宗门"))
+        val result = guildService.leaveGuild(userId)
+        return if (result != null) {
+            // 宗主退出时服务端已自动处理：有成员→转让给加入最早者（transferredTo=继任昵称）；
+            // 只剩自己→解散（disbanded=true）；message 沿用旧契约固定文案
+            ResponseEntity.ok(result)
         } else {
             ResponseEntity.badRequest().body(mapOf("error" to "退出失败"))
         }

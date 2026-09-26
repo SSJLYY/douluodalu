@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import api, { BattleResult, OfflineReward, PowerDetail } from '@/lib/api';
+import api, { BattleResult, CheckInStatus, OfflineReward, PowerDetail } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
-import { BootState } from '@/components/StateViews';
+import { BootState, EmptyPanel } from '@/components/StateViews';
+import BattleReplay from '@/components/BattleReplay';
 
 const MAP_NAMES = ['圣魂村', '诺丁城外', '星斗外围', '落日森林', '极北之地', '海神岛', '杀戮之都外域', '神界废墟'];
 const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣', '魂斗罗', '封号斗罗', '极限斗罗', '半神', '神祇', '神王', '至高神王', '创世神'];
@@ -78,6 +79,102 @@ function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetai
 // 模块级标记：跨组件StrictMode双挂载/客户端导航只领取一次离线收益（刷新页面会重新领取，符合放置游戏惯例）
 let offlineClaimAttempted = false;
 
+/**
+ * 每日签到卡（7 日循环）：奖励表由后端下发（rewards），前端不硬编码数值。
+ * 后端响应升级前 gameState.checkIn 可能缺失/为空 → 整卡降级为标题+「暂不可用」灰字，不留破图。
+ */
+function CheckinCard({
+    checkIn,
+    actionLoading,
+    onCheckin,
+}: {
+    checkIn?: CheckInStatus;
+    actionLoading: boolean;
+    onCheckin: () => void;
+}) {
+    const rewards = checkIn?.rewards ? [...checkIn.rewards].sort((a, b) => a.day - b.day) : [];
+    const usable = rewards.length > 0;
+    const signed = Boolean(checkIn?.signedToday);
+    const nextDay = checkIn?.nextCycleDay ?? 1;
+    // 已领取格判定：未签时 day < nextCycleDay；已签时 day <= 本次 cycleDay
+    // （本次 cycleDay = nextCycleDay 的前一天，7→1 环绕时取 7）
+    const signedCycleDay = signed ? (nextDay === 1 ? 7 : nextDay - 1) : 0;
+    const isClaimed = (day: number) => (signed ? day <= signedCycleDay : day < nextDay);
+
+    return (
+        <div className="dl-fade-up [animation-delay:80ms] bg-surface/80 rounded-xl p-4 border border-line" data-testid="checkin-card">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-3">
+                <h2 className="text-sm font-semibold text-orange-400">
+                    <span aria-hidden>📅</span> 每日签到
+                </h2>
+                {usable && (
+                    <div className="flex items-center gap-2 text-xs">
+                        <span className="px-2 py-0.5 rounded bg-yellow-600/20 border border-yellow-600 text-yellow-400">
+                            连续 {checkIn?.streak ?? 0} 天
+                        </span>
+                        <span className="text-gray-400">累计 {checkIn?.totalDays ?? 0} 天</span>
+                    </div>
+                )}
+            </div>
+
+            {!usable ? (
+                // 降级路径：后端未升级（checkIn 缺失 / rewards 空）→ 空态灰字，不渲染按钮与破图
+                <EmptyPanel message="签到功能暂不可用" testId="checkin-empty" />
+            ) : (
+                <>
+                    {/* 7 天奖励网格：窄屏 4 列（4+3 两行）避免 7 列过挤，sm 起单行 7 列；零水平溢出 */}
+                    <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                        {rewards.map((r) => {
+                            const isToday = !signed && r.day === nextDay;
+                            const claimed = isClaimed(r.day);
+                            return (
+                                <div
+                                    key={r.day}
+                                    data-testid={`checkin-day-${r.day}`}
+                                    aria-current={isToday ? 'date' : undefined}
+                                    className={`rounded-lg p-2 border text-center min-w-0 ${
+                                        isToday
+                                            ? 'border-yellow-500 bg-yellow-500/15'
+                                            : claimed
+                                                ? 'border-line bg-gray-700/40 opacity-60'
+                                                : 'border-line bg-gray-700/50'
+                                    }`}
+                                >
+                                    <div className="text-xs font-medium flex items-center justify-center gap-1">
+                                        {claimed && <span className="text-green-400" aria-hidden>✓</span>}
+                                        <span className={isToday ? 'text-yellow-400' : 'text-gray-300'}>第{r.day}天</span>
+                                    </div>
+                                    {isToday && <div className="text-[10px] font-bold text-yellow-400">今日</div>}
+                                    {/* 奖励摘要：数值为 0 的币种不显示；CJK 可自然换行，窄屏不溢出 */}
+                                    <div className="mt-1 space-y-0.5 text-[11px] leading-tight">
+                                        {r.gold > 0 && <div className="text-yellow-400 tabular-nums">+{r.gold.toLocaleString()}金币</div>}
+                                        {r.bossCoin > 0 && <div className="text-purple-400 tabular-nums">+{r.bossCoin.toLocaleString()}Boss币</div>}
+                                        {r.soulPower > 0 && <div className="text-blue-400 tabular-nums">+{r.soulPower.toLocaleString()}魂力</div>}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    <button
+                        type="button"
+                        data-testid="checkin-btn"
+                        onClick={onCheckin}
+                        disabled={signed || actionLoading}
+                        className={`w-full mt-3 px-4 min-h-11 rounded-lg font-bold transition disabled:opacity-50 ${
+                            signed
+                                ? 'bg-gray-700'
+                                : 'bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 dl-btn-sheen'
+                        }`}
+                    >
+                        {signed ? '今日已签 ✓' : actionLoading ? '签到中...' : '签到'}
+                    </button>
+                </>
+            )}
+        </div>
+    );
+}
+
 export default function GamePage() {
     const { user, isLoading, logout } = useAuth();
     const router = useRouter();
@@ -124,6 +221,13 @@ export default function GamePage() {
         () => api.breakthrough(),
         (result) => setMessage(result.message),
         '突破失败',
+    );
+
+    // 每日签到：runAction 成功回调 + 自动 refresh 拉新签到状态；已签由后端 400 → message 提示
+    const handleCheckin = () => runAction(
+        () => api.checkin(),
+        (r) => setMessage(`签到成功！第${r.cycleDay}天：+${r.goldGained}金币${r.bossCoinGained > 0 ? ` +${r.bossCoinGained}Boss币` : ''}`),
+        '签到失败',
     );
 
     if (isLoading || !gameState) {
@@ -204,8 +308,11 @@ export default function GamePage() {
                 {/* 任务#23：战力明细（可折叠，默认收起；放在状态栏下方，与 ⚔️ 战力 同一视觉区） */}
                 <PowerDetailPanel power={gameState.power} detail={gameState.powerDetail} />
 
+                {/* 每日签到（后端未升级时 checkIn 缺失 → 卡内降级为空态） */}
+                <CheckinCard checkIn={gameState.checkIn} actionLoading={actionLoading} onCheckin={handleCheckin} />
+
                 {/* 战斗区域 */}
-                <div className="dl-fade-up [animation-delay:80ms] bg-surface/80 rounded-xl p-4 border border-line">
+                <div className="dl-fade-up [animation-delay:160ms] bg-surface/80 rounded-xl p-4 border border-line">
                     <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-4">
                         <div className="min-w-0">
                             <h2 className="text-lg font-bold text-orange-400">{mapName}</h2>
@@ -243,11 +350,15 @@ export default function GamePage() {
                                 {battleResult.won && ` +${battleResult.goldGained}金币 +${battleResult.expGained}魂力`}
                                 {battleResult.drops.length > 0 && ` 掉落${battleResult.drops.length}件装备`}
                             </div>
-                            {battleResult.battleLog && battleResult.battleLog.length > 0 && (
+                            {battleResult.battleLog && battleResult.battleLog.length > 0 ? (
+                                // 回放组件：battleLog 非空时替代静态日志（新结果自动重置回放）
+                                <BattleReplay battleLog={battleResult.battleLog} monsterName={battleResult.monsterName} />
+                            ) : (
+                                // 降级路径：battleLog 缺失/为空（旧后端）→ 保留静态回合日志，信息不丢失
                                 <details className="mt-2 text-xs text-gray-400">
                                     <summary className="cursor-pointer select-none">回合日志</summary>
                                     <ul className="mt-1 space-y-0.5">
-                                        {battleResult.battleLog.map((r) => (
+                                        {battleResult.battleLog?.map((r) => (
                                             <li key={r.round}>
                                                 第{r.round}回合: 我输出{r.playerDamage}，受{r.monsterDamage} |
                                                 我HP {r.playerHpBefore}→{r.playerHpAfter}，敌HP {r.monsterHpBefore}→{r.monsterHpAfter}
@@ -289,7 +400,7 @@ export default function GamePage() {
                 </div>
 
                 {/* 快捷导航 */}
-                <div className="dl-fade-up [animation-delay:160ms] grid grid-cols-4 gap-3">
+                <div className="dl-fade-up [animation-delay:240ms] grid grid-cols-4 gap-3">
                     <button onClick={() => router.push('/game/equipment')} className="bg-surface/80 rounded-xl p-4 border border-line hover:border-yellow-500 hover:-translate-y-0.5 transition text-center">
                         <div className="text-2xl mb-1">⚔️</div>
                         <div className="text-sm text-gray-300">装备</div>

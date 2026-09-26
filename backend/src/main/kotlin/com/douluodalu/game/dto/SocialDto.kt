@@ -43,6 +43,17 @@ data class GuildBossResponse(
     val message: String
 )
 
+/**
+ * 退出宗门响应（POST /api/guild/leave）。message 为兼容字段（旧契约固定文案）：
+ * 普通退出 disbanded=false、transferredTo=null；宗主退出时服务端自动处理——
+ * 有其他成员则转让给加入最早者（transferredTo=继任者昵称），仅剩自己则解散（disbanded=true）。
+ */
+data class LeaveGuildResponse(
+    val message: String = "已退出宗门",
+    val disbanded: Boolean = false,
+    val transferredTo: String? = null
+)
+
 data class RankEntryResponse(
     val rank: Int,
     val userId: Long,

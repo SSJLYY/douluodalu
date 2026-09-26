@@ -1,5 +1,6 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.dto.CheckInStatusDto
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
@@ -49,6 +50,9 @@ class GameServiceTest {
 
     @Mock
     private lateinit var webSocketService: WebSocketService
+
+    @Mock
+    private lateinit var checkInService: CheckInService
 
     @InjectMocks
     private lateinit var gameService: GameService
@@ -168,6 +172,28 @@ class GameServiceTest {
 
         assertNotNull(dto)
         verify(backpackRepo).save(any())
+    }
+
+    @Test
+    fun `getGameState should assemble checkIn status from CheckInService`() {
+        val p = profile()
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(talentRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.findByUserIdOrderByCreatedAtAsc(1L)).thenReturn(emptyList())
+        whenever(checkInService.getCheckInStatus(1L)).thenReturn(
+            CheckInStatusDto(signedToday = true, streak = 3, totalDays = 10, nextCycleDay = 4)
+        )
+
+        val response = gameService.getGameState(1L)
+
+        assertTrue(response.checkIn.signedToday)
+        assertEquals(3L, response.checkIn.streak)
+        assertEquals(10L, response.checkIn.totalDays)
+        assertEquals(4, response.checkIn.nextCycleDay)
+        verify(checkInService).getCheckInStatus(1L)
     }
 
     @Test

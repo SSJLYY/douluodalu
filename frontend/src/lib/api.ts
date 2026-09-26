@@ -107,6 +107,11 @@ class ApiClient {
         return this.request<OfflineReward>('/api/game/offline-claim', { method: 'POST' });
     }
 
+    // Check-in（每日签到）
+    async checkin() {
+        return this.request<CheckInResult>('/api/game/checkin', { method: 'POST' });
+    }
+
     // Actions
     async cultivate() {
         return this.request<CultivateResult>('/api/action/cultivate', { method: 'POST' });
@@ -210,7 +215,7 @@ class ApiClient {
     }
 
     async leaveGuild() {
-        return this.request<{ message: string }>('/api/guild/leave', {
+        return this.request<LeaveGuildResult>('/api/guild/leave', {
             method: 'POST',
         });
     }
@@ -349,6 +354,8 @@ export interface GameState {
     capacity: number;
     /** 任务#23：战力明细（来源拆分；basePower+ringPower+bonePower+corePower == power） */
     powerDetail: PowerDetail;
+    /** 每日签到状态（7 日循环）。后端响应升级前该字段可能缺失（undefined），消费方须判空降级 */
+    checkIn: CheckInStatus;
 }
 
 /**
@@ -500,6 +507,38 @@ export interface OfflineReward {
     battleWins: number;
 }
 
+/** 每日签到：单日奖励（7 日一循环）。数值表由后端下发，前端不得硬编码 */
+export interface CheckInReward {
+    day: number;
+    gold: number;
+    bossCoin: number;
+    soulPower: number;
+}
+
+/** 每日签到状态（GameState.checkIn）。后端升级前字段可能 undefined，消费方判空降级 */
+export interface CheckInStatus {
+    /** 今日是否已签 */
+    signedToday: boolean;
+    /** 当前连续签到天数 */
+    streak: number;
+    /** 累计签到天数 */
+    totalDays: number;
+    /** 下次签到落在 7 日循环第几天（1-7） */
+    nextCycleDay: number;
+    /** 7 天奖励全表（后端下发） */
+    rewards: CheckInReward[];
+}
+
+/** POST /api/game/checkin 响应；已签返回 400（message=「今日已签到，明天再来吧」） */
+export interface CheckInResult {
+    goldGained: number;
+    bossCoinGained: number;
+    soulPowerGained: number;
+    streak: number;
+    totalDays: number;
+    cycleDay: number;
+}
+
 export interface RankEntry {
     rank: number;
     userId: number;
@@ -543,6 +582,18 @@ export interface GuildMemberInfo {
     joinedAt: string;
     contribution: number;
     isLeader: boolean;
+}
+
+/**
+ * POST /api/guild/leave 响应。后端升级后附带退出结局标记：
+ * - disbanded=true：退出即宗门解散（如只剩自己时退出）；
+ * - transferredTo：退出时宗主已自动转让给该成员（继任者昵称）。
+ * 旧后端仅返回 {message}，两字段均可选，消费方按存在性容错。
+ */
+export interface LeaveGuildResult {
+    message: string;
+    disbanded?: boolean;
+    transferredTo?: string;
 }
 
 export interface GuildBossResult {

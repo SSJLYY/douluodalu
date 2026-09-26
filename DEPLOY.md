@@ -458,6 +458,24 @@ firewall-cmd --list-all     # 查看当前规则
 firewall-cmd --reload       # 重载规则
 ```
 
+### Prometheus 监控
+
+后端通过 `micrometer-registry-prometheus` 暴露指标端点 `GET http://127.0.0.1:8080/actuator/prometheus`（文本格式）。
+
+- 非生产环境：默认匿名可访问（`app.monitoring.prometheus-public=true`），本地 `curl` 即可验证。
+- 生产环境（`SPRING_PROFILES_ACTIVE=prod`）：默认不放行且 exposure 仅 health，双保险关闭；如需抓取，在 env.sh 加 `export APP_MONITORING_PROMETHEUS_PUBLIC=true`（Spring 宽松绑定映射 `app.monitoring.prometheus-public`），并仅限内网/反代 ACL 访问。
+
+Prometheus 服务端 `prometheus.yml` 抓取片段示例：
+
+```yaml
+scrape_configs:
+  - job_name: douluo-backend
+    metrics_path: /actuator/prometheus
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['your-server:8080']
+```
+
 ---
 
 ## 13. Docker 部署（未在本机验证）

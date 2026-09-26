@@ -27,7 +27,11 @@ class SecurityConfig(
     // 文档端点是否公开，与 springdoc.api-docs.enabled 联动：
     // 非 prod 默认 true（放行 Swagger）；prod profile 在 application-prod.yml 里置 false，
     // 既关闭 springdoc 本身，也不再放行文档路径（届时 /v3/api-docs 等需认证，且实际返回 404）
-    @Value("\${springdoc.api-docs.enabled:true}") private val docsEnabled: Boolean
+    @Value("\${springdoc.api-docs.enabled:true}") private val docsEnabled: Boolean,
+    // Prometheus 指标端点是否匿名放行（仿 springdoc 的条件放行模式）：
+    // 非 prod 默认 true 便于本地/内网抓取；prod 在 application-prod.yml 置 false，
+    // 届时 /actuator/prometheus 需认证（且 exposure 仅 health，端点本身不下发）
+    @Value("\${app.monitoring.prometheus-public:true}") private val prometheusPublic: Boolean
 ) {
 
     @Bean
@@ -45,10 +49,14 @@ class SecurityConfig(
                     // 前者供容器/负载均衡探活，后者供业务侧查看依赖状态）；
                     // 其余端点（env/beans/configprops 等）不在暴露清单且不放行
                     .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
-                    // WebSocket/STOMP：浏览器原生 WS 握手与 SockJS 各传输（/ws/info、
-                    // /ws/{server}/{session}/xhr 等）无法携带 Authorization 头，
-                    // 握手一律放行（SockJS 子路径 + 原生端点 /ws-native），鉴权在应用层消息处理中做
-                    .requestMatchers("/ws", "/ws/**", "/ws-native").permitAll()
+                // prometheus-public=false 时（prod）不再匿名放行，指标端点回到认证保护
+                if (prometheusPublic) {
+                    auth.requestMatchers("/actuator/prometheus").permitAll()
+                }
+                // WebSocket/STOMP：浏览器原生 WS 握手与 SockJS 各传输（/ws/info、
+                // /ws/{server}/{session}/xhr 等）无法携带 Authorization 头，
+                // 握手一律放行（SockJS 子路径 + 原生端点 /ws-native），鉴权在应用层消息处理中做
+                auth.requestMatchers("/ws", "/ws/**", "/ws-native").permitAll()
                 // springdoc 关闭时（prod）这些路径不再匿名放行，且端点本身 404
                 if (docsEnabled) {
                     auth.requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
@@ -75,7 +83,8 @@ class SecurityConfig(
         val allowedOrigins = System.getenv("CORS_ORIGINS")
             ?.split(",")
             ?.map { it.trim() }
-            ?: listOf("http://localhost:3000", "http://localhost:8080")
+            // localhost 与 127.0.0.1 是不同 Origin，本地联调两边都要放行
+            ?: listOf("http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8080")
 
         val config = CorsConfiguration().apply {
             this.allowedOrigins = allowedOrigins

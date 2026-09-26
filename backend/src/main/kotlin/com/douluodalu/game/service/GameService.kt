@@ -32,7 +32,8 @@ class GameService(
     private val equippedBoneRepo: EquippedBoneRepository,
     private val equippedCoreRepo: EquippedCoreRepository,
     private val userRepository: UserRepository,
-    private val webSocketService: WebSocketService
+    private val webSocketService: WebSocketService,
+    private val checkInService: CheckInService
 ) {
     companion object {
         val REALM_NAMES = listOf(
@@ -126,7 +127,9 @@ class GameService(
             ringLoad = RingLoadCalculator.totalRingLoad(rings),
             capacity = absorptionCapacityFor(profile, bonus),
             // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库）
-            powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores)
+            powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores),
+            // 每日签到状态（CheckInService 只读查询，无循环依赖：CheckInService 不反向依赖本类）
+            checkIn = checkInService.getCheckInStatus(userId)
         )
     }
 

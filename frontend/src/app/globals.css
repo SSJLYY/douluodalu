@@ -314,6 +314,11 @@ span:is(.bg-purple-600, .bg-blue-600, .bg-yellow-600, .bg-red-600, .bg-green-600
   animation: dl-spin 0.7s linear infinite;
 }
 
+/* 战斗回放 HP 条：宽度过渡集中在此定义，便于 reduced-motion 统一关闭（见文件底部） */
+.dl-hp-bar {
+  transition: width 0.5s ease-out;
+}
+
 /* ---------- 登录页：漂移光斑 / 玻璃输入 / 按钮高光 ---------- */
 .dl-blob-slow { animation: dl-blob-drift 18s ease-in-out infinite; }
 .dl-blob-slower { animation: dl-blob-drift 26s ease-in-out infinite reverse; }
@@ -417,4 +422,6 @@ span:is(.bg-purple-600, .bg-blue-600, .bg-yellow-600, .bg-red-600, .bg-green-600
   /* 输入框/按钮的颜色过渡同样收敛为即时切换 */
   .dl-glass-input,
   .dl-btn-sheen { transition: none; }
+  /* 战斗回放 HP 条宽度过渡收敛为即时切换 */
+  .dl-hp-bar { transition: none; }
 }

@@ -103,4 +103,26 @@ object GameBalance {
     const val TOWER_POWER_WIN_BONUS_CAP = 0.15
     const val TOWER_WIN_CHANCE_MIN = 0.05
     const val TOWER_WIN_CHANCE_MAX = 0.95
+
+    // ======== 每日签到（7 日循环）========
+    // 量级依据（《数值仿真报告-90天.md》）：主动日收入约 7,000 金，离线 12h ≈ 2,100~4,200 金。
+    // 单日签到金币控制在 100~500 ≈ 挂机 1~2 小时量级，全循环合计 1,900 金 ≈ 挂机半天，
+    // 只作留存钩子、不冲击主动玩法；soulPower 固定 100/日（商店 300 金 = 500 魂力的比价下
+    // 约 60 金/日，纯小额补贴）；第 7 天发 bossCoin 大奖 10 枚——参照宗门 Boss 单次胜利
+    // 6~26 枚、爬塔期望 ~0.6 枚/场、商店最低 bossCoin 商品 50 币档，攒一周才够摸到门槛，
+    // 给循环一个可期待的终点又不破坏 bossCoin 定价。
+    data class CheckInReward(val day: Int, val gold: Long, val bossCoin: Long, val soulPower: Long)
+
+    val CHECK_IN_REWARDS = listOf(
+        CheckInReward(1, gold = 100, bossCoin = 0, soulPower = 100),
+        CheckInReward(2, gold = 150, bossCoin = 0, soulPower = 100),
+        CheckInReward(3, gold = 200, bossCoin = 0, soulPower = 100),
+        CheckInReward(4, gold = 250, bossCoin = 0, soulPower = 100),
+        CheckInReward(5, gold = 300, bossCoin = 0, soulPower = 100),
+        CheckInReward(6, gold = 400, bossCoin = 0, soulPower = 100),
+        CheckInReward(7, gold = 500, bossCoin = 10, soulPower = 100)
+    )
+
+    /** 7 日循环天数上限：cycleDay = ((streak - 1) % CHECK_IN_CYCLE) + 1 */
+    const val CHECK_IN_CYCLE = 7
 }
