@@ -5,6 +5,7 @@ import com.douluodalu.game.entity.EquippedBone
 import com.douluodalu.game.entity.EquippedCore
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.model.GameBalance
+import com.douluodalu.game.repository.AchievementRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
 import com.douluodalu.game.repository.EquippedRingRepository
@@ -22,24 +23,32 @@ import org.springframework.stereotype.Service
  *
  * 品质倍率表取自《魂环负荷与年份对应关系.md》的 qualityMult [1.0, 1.2, 1.5, 1.8, 2.2]。
  * 注：魂环年份负荷校验在任务#21 由 RingLoadCalculator 实现（逐行移植 shared SoulRingSystem）。
+ * 成就系统集成：bonusFor（实例方法，战斗/塔/状态组装的唯一 choke point）把已解锁成就的
+ * hp/atk 加成并入返回值；只依赖 AchievementRepository（查已解锁 id 集合→按定义求和），
+ * 不依赖 AchievementService（防循环）。
  */
-/** 单件装备折出的攻击/生命加成 */
+/** 单件装备折出的攻击/生命加成（成就加成复用同一形状） */
 data class EquipmentBonus(val atkBonus: Long, val hpBonus: Long)
 
 @Service
 class EquipmentPowerService(
     private val equippedRingRepo: EquippedRingRepository,
     private val equippedBoneRepo: EquippedBoneRepository,
-    private val equippedCoreRepo: EquippedCoreRepository
+    private val equippedCoreRepo: EquippedCoreRepository,
+    private val achievementRepo: AchievementRepository
 ) {
 
-    /** 读取该玩家已装备的魂环/魂骨/魂核，计算攻防加成与战斗力 */
-    fun bonusFor(userId: Long, level: Int): EquipmentBonus = bonus(
-        level,
-        equippedRingRepo.findByUserId(userId),
-        equippedBoneRepo.findByUserId(userId),
-        equippedCoreRepo.findByUserId(userId)
-    )
+    /** 读取该玩家已装备的魂环/魂骨/魂核 + 已解锁成就，计算攻防加成与战斗力（成就加成即时生效） */
+    fun bonusFor(userId: Long, level: Int): EquipmentBonus {
+        val equip = bonus(
+            level,
+            equippedRingRepo.findByUserId(userId),
+            equippedBoneRepo.findByUserId(userId),
+            equippedCoreRepo.findByUserId(userId)
+        )
+        val ach = achievementBonus(achievementRepo.findByUserId(userId).map { it.achievementId })
+        return EquipmentBonus(equip.atkBonus + ach.atkBonus, equip.hpBonus + ach.hpBonus)
+    }
 
     companion object {
         private fun qualityMult(ordinal: Int): Double =
@@ -79,12 +88,32 @@ class EquipmentPowerService(
             (GameBalance.CORE_ATK_PCT_WEIGHT * c.coreValue / 100.0 *
                     qualityMult(c.rarityOrdinal)).coerceAtMost(GameBalance.CORE_ATK_PCT_CAP)
 
-        /** 纯函数：由装备列表与等级计算加成（不依赖 Spring，便于测试与仿真镜像复用） */
+        /**
+         * 纯函数：已解锁成就集合的 hp/atk 加成求和（AchievementService.unlockedBonus 与
+         * bonusFor 同源，防止两处口径漂移）。只兑现 hp/atk：matk/pdef/mdef/critRate/critDmg
+         * 后端战斗模型未消费（resolveBattle 只吃 atk/hp），数据保留待属性系统扩展后生效。
+         * 未知 id（定义表已下线的历史记录行）静默忽略。
+         */
+        fun achievementBonus(unlockedIds: Collection<String>): EquipmentBonus {
+            var atk = 0L
+            var hp = 0L
+            for (id in unlockedIds) {
+                GameBalance.ACHIEVEMENT_BY_ID[id]?.let {
+                    atk += it.rewards.atk
+                    hp += it.rewards.hp
+                }
+            }
+            return EquipmentBonus(atk, hp)
+        }
+
+        /** 纯函数：由装备列表与等级计算加成（不依赖 Spring，便于测试与仿真镜像复用）。
+         *  achievementBonus：成就加成并入返回值（默认零 = 既有四参调用行为不变）。 */
         fun bonus(
             level: Int,
             rings: List<EquippedRing>,
             bones: List<EquippedBone>,
-            cores: List<EquippedCore>
+            cores: List<EquippedCore>,
+            achievementBonus: EquipmentBonus = EquipmentBonus(0, 0)
         ): EquipmentBonus {
             var atk = 0.0
             var hp = 0.0
@@ -100,7 +129,7 @@ class EquipmentPowerService(
             for (c in cores) {
                 atk += coreAtkOf(c, baseAtk)
             }
-            return EquipmentBonus(atk.toLong(), hp.toLong())
+            return EquipmentBonus(atk.toLong() + achievementBonus.atkBonus, hp.toLong() + achievementBonus.hpBonus)
         }
 
         /** 基础攻击（等级部分），powerOf / detail 同源 */
@@ -108,17 +137,20 @@ class EquipmentPowerService(
             GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
 
         /**
-         * 纯函数：战力明细拆分（任务#23）。复用与 bonus() 完全相同的单件公式，
-         * 取整用最大余数法（largest remainder）保证拆分求和与 EquipmentBonus / powerOf 严格相等：
-         *  - ringAtk + boneAtk + coreAtk == bonus().atkBonus
-         *  - ringHp + boneHp == bonus().hpBonus（魂核只加攻击、玩家无基础生命 → coreHp/baseHp 恒 0）
-         *  - basePower + ringPower + bonePower + corePower == powerOf(level, bonus())
+         * 纯函数：战力明细拆分（任务#23；成就系统集成后五行不变量）。复用与 bonus() 完全相同的
+         * 单件公式，取整用最大余数法（largest remainder）保证拆分求和与 EquipmentBonus / powerOf 严格相等：
+         *  - ringAtk + boneAtk + coreAtk == 装备部分的 atkBonus（不含成就加成）
+         *  - ringHp + boneHp == 装备部分的 hpBonus（魂核只加攻击、玩家无基础生命 → coreHp/baseHp 恒 0）
+         *  - basePower + ringPower + bonePower + corePower + achievement ==
+         *    powerOf(level, bonus(level, rings, bones, cores, achievementBonus))
+         *  achievementBonus 为默认零时退化为原四行拆分（既有调用不破坏）。
          */
         fun detail(
             level: Int,
             rings: List<EquippedRing>,
             bones: List<EquippedBone>,
-            cores: List<EquippedCore>
+            cores: List<EquippedCore>,
+            achievementBonus: EquipmentBonus = EquipmentBonus(0, 0)
         ): PowerDetailDto {
             val b = bonus(level, rings, bones, cores)
             val baseAtk = baseAttack(level)
@@ -136,13 +168,14 @@ class EquipmentPowerService(
             val ringHp = hpAlloc.take(rings.size).sum()
             val boneHp = hpAlloc.takeLast(bones.size).sum()
 
-            // 战力拆分：生命折算（/POWER_HP_DIVISOR）的取整余数按“环/骨生命总量”最大余数法分配，
-            // 保证四行战力求和 == powerOf（powerOf = 常数 + 等级 + 基础攻击 + atkBonus + hpBonus/D）
+            // 战力拆分：生命折算（/POWER_HP_DIVISOR）的取整余数按「环/骨/成就生命总量」最大余数法分配，
+            // 保证五行战力求和 == powerOf（powerOf = 常数 + 等级 + 基础攻击 + atkBonus(装备+成就) + hpBonus(装备+成就)/D）
             val basePower = GameBalance.POWER_BASE + GameBalance.POWER_LEVEL_WEIGHT * level + baseAtk
-            val hpPowerTotal = (b.hpBonus / GameBalance.POWER_HP_DIVISOR).toLong()
+            val hpPowerTotal = ((b.hpBonus + achievementBonus.hpBonus) / GameBalance.POWER_HP_DIVISOR).toLong()
             val hpPowerAlloc = allocate(
                 listOf(hpParts.take(rings.size).sum() / GameBalance.POWER_HP_DIVISOR,
-                        hpParts.takeLast(bones.size).sum() / GameBalance.POWER_HP_DIVISOR),
+                        hpParts.takeLast(bones.size).sum() / GameBalance.POWER_HP_DIVISOR,
+                        achievementBonus.hpBonus / GameBalance.POWER_HP_DIVISOR),
                 hpPowerTotal
             )
             return PowerDetailDto(
@@ -157,7 +190,8 @@ class EquipmentPowerService(
                 bonePower = boneAtk + hpPowerAlloc[1],
                 coreAtk = coreAtk,
                 coreHp = 0,
-                corePower = coreAtk
+                corePower = coreAtk,
+                achievement = achievementBonus.atkBonus + hpPowerAlloc[2]
             )
         }
 

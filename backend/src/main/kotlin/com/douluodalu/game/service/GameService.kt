@@ -34,7 +34,9 @@ class GameService(
     private val userRepository: UserRepository,
     private val webSocketService: WebSocketService,
     private val checkInService: CheckInService,
-    private val dailyQuestService: DailyQuestService
+    private val dailyQuestService: DailyQuestService,
+    private val equipmentPowerService: EquipmentPowerService,
+    private val achievementService: AchievementService
 ) {
     companion object {
         val REALM_NAMES = listOf(
@@ -165,7 +167,9 @@ class GameService(
         val equippedBones = bones.map { EquippedBoneDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.enhanceLevel, null, null) }
         val equippedCores = cores.map { EquippedCoreDto(it.slotType, it.coreName, it.rarityOrdinal, null, it.coreValue, it.coreLevel) }
         // 任务#21：战力 + 魂环负荷/容量（公式同源：EquipmentPowerService / RingLoadCalculator）
-        val bonus = EquipmentPowerService.bonus(profile.level, rings, bones, cores)
+        // 成就系统集成：已解锁成就的 hp/atk 加成并入 bonus（power/容量/明细五行同口径即时生效）
+        val achBonus = achievementService.unlockedBonus(userId)
+        val bonus = EquipmentPowerService.bonus(profile.level, rings, bones, cores, achBonus)
         return GameStateResponse(
             profile = toProfileDto(profile),
             equippedRings = equippedRings,
@@ -173,12 +177,12 @@ class GameService(
             equippedCores = equippedCores,
             backpackItems = backpackRepo.findByUserIdOrderByCreatedAtAsc(userId).map { toBackpackItemDto(it) },
             talents = talents,
-            achievements = emptyList(),
+            achievements = achievementService.getStatus(userId),
             power = EquipmentPowerService.powerOf(profile.level, bonus),
             ringLoad = RingLoadCalculator.totalRingLoad(rings),
             capacity = absorptionCapacityFor(profile, bonus),
-            // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库）
-            powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores),
+            // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库；五行含成就行）
+            powerDetail = EquipmentPowerService.detail(profile.level, rings, bones, cores, achBonus),
             // 每日签到状态（CheckInService 只读查询，无循环依赖：CheckInService 不反向依赖本类）
             checkIn = checkInService.getCheckInStatus(userId),
             // 每日任务面板（DailyQuestService 只读查询不建行，无循环依赖：它不反向依赖本类）
@@ -196,6 +200,8 @@ class GameService(
         profileRepo.save(profile)
         // 每日任务挂点（副路径）：修炼成功即计数，失败不击穿主流程（见 DailyQuestService）
         dailyQuestService.recordCultivate(userId)
+        // 成就挂点（副路径）：等级达标即自动解锁，失败不击穿主流程（见 AchievementService）
+        achievementService.sync(userId)
         return CultivateResponse(gain, profile.soulPower, profile.level)
     }
 
@@ -213,6 +219,8 @@ class GameService(
         profile.level += 1
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
+        // 成就挂点（副路径）：仅突破成功出口触发（等级达标即自动解锁，失败不击穿主流程）
+        achievementService.sync(userId)
         return BreakthroughResponse(true, profile.level, "突破成功！当前境界：${getRealmName(profile.level)} Lv.${profile.level}")
     }
 
@@ -222,13 +230,8 @@ class GameService(
         val mapId = profile.currentMapId
         val stage = profile.currentStage
 
-        // 装备战力接入（P7 修复）：已装备魂环/魂骨/魂核折算攻防加成
-        val equip = EquipmentPowerService.bonus(
-            profile.level,
-            equippedRingRepo.findByUserId(userId),
-            equippedBoneRepo.findByUserId(userId),
-            equippedCoreRepo.findByUserId(userId)
-        )
+        // 装备战力接入（P7 修复）+ 成就属性加成（bonusFor 唯一 choke point，即时生效）
+        val equip = equipmentPowerService.bonusFor(userId, profile.level)
         val power = EquipmentPowerService.powerOf(profile.level, equip)
 
         // 生成怪物
@@ -323,6 +326,10 @@ class GameService(
             webSocketService.broadcastBattleResult(userId, user.username, monsterName, won)
         }
 
+        // 成就挂点（副路径）：胜败都可触发——totalBattleWins/等级在两侧都有跳变点，
+        // sync 便宜且统一（失败不击穿主流程，见 AchievementService）
+        achievementService.sync(userId)
+
         return BattleResponse(
             won = won, rounds = rounds, monsterName = monsterName, monsterMaxHp = monsterHp,
             expGained = expGained, goldGained = goldGained,
@@ -341,12 +348,8 @@ class GameService(
         val towerLevel = profile.towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
         val foughtFloor = profile.towerFloor // 塔战日志种子取挑战时楼层（胜利分支随后会 +1）
         // P2+P7 修复：胜率 = 1-(0.25+floor×0.005) 基础值 + 装备战力加成（floor=99 仍 >0，换装可登顶）
-        val equip = EquipmentPowerService.bonus(
-            profile.level,
-            equippedRingRepo.findByUserId(userId),
-            equippedBoneRepo.findByUserId(userId),
-            equippedCoreRepo.findByUserId(userId)
-        )
+        // 成就属性加成经 bonusFor 并入（唯一 choke point，即时生效）
+        val equip = equipmentPowerService.bonusFor(userId, profile.level)
         val power = EquipmentPowerService.powerOf(profile.level, equip)
         val won = Random.nextDouble() < EquipmentPowerService.towerWinChance(profile.towerFloor, power)
         val monsterName = GameBalance.TOWER_MONSTERS[Random.nextInt(GameBalance.TOWER_MONSTERS.size)]
@@ -378,6 +381,8 @@ class GameService(
 
         // 每日任务挂点（副路径）：挑战即计数，不论胜负（失败不击穿主流程，见 DailyQuestService）
         dailyQuestService.recordTower(userId)
+        // 成就挂点（副路径）：塔层/胜场跳变点，胜败都可触发（失败不击穿主流程，见 AchievementService）
+        achievementService.sync(userId)
 
         // 塔战逐回合日志：插在全部既有掷点之后、用独立种子模拟（不改胜负判定、不动 RNG 次序，
         // LongRunSimulationTest 的 towerWinChance/resolveBattle 镜像契约不受影响）。
@@ -462,6 +467,8 @@ class GameService(
         profile.lastLogoutTime = LocalDateTime.now()
         profile.updatedAt = LocalDateTime.now()
         profileRepo.save(profile)
+        // 成就挂点（副路径）：totalBattleWins 跳变点（离线胜场折算可能一次跨过 battle_10/battle_50）
+        achievementService.sync(userId)
 
         return OfflineRewardResponse(effectiveSeconds, goldGained, expGained, battleWins)
     }
@@ -584,6 +591,10 @@ class GameService(
             )
         )
         backpackRepo.delete(ring)
+        // 成就挂点（副路径）：SOUL_RING 口径 = 已装备魂环数，成功装环后同步（失败不击穿主流程）。
+        // 注：上方容量校验按装备口径（companion bonus，不含成就加成）——校验保守方向，
+        // 差异带 ≤ 成就 hp/atk 折算的容量增量。
+        achievementService.sync(userId)
         return true
     }
 

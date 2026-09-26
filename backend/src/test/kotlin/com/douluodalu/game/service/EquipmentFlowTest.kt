@@ -3,6 +3,7 @@ package com.douluodalu.game.service
 import com.douluodalu.game.entity.BackpackItemEntity
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.PlayerProfileEntity
+import com.douluodalu.game.repository.AchievementRepository
 import com.douluodalu.game.repository.BackpackItemRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
@@ -50,6 +51,17 @@ class EquipmentFlowTest {
 
     @Mock
     private lateinit var dailyQuestService: DailyQuestService
+
+    // 成就系统集成：GameService 构造新增 EquipmentPowerService 与 AchievementService，
+    // equipRing 成功出口会调 achievementService.sync（mock no-op）
+    @Mock
+    private lateinit var equipmentPowerService: EquipmentPowerService
+
+    @Mock
+    private lateinit var achievementService: AchievementService
+
+    @Mock
+    private lateinit var achievementRepo: AchievementRepository
 
     @Captor
     private lateinit var savedRingCaptor: ArgumentCaptor<EquippedRing>

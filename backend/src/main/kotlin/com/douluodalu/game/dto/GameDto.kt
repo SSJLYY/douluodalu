@@ -8,7 +8,8 @@ data class GameStateResponse(
     val equippedCores: List<EquippedCoreDto>,
     val backpackItems: List<BackpackItemDto>,
     val talents: Map<String, Int>,
-    val achievements: List<String>,
+    /** 成就面板（AchievementService.getStatus 合成；解锁在写事务内自动发生，无领取端点） */
+    val achievements: List<AchievementDto> = emptyList(),
     // ======== 任务#21：战力 + 魂环负荷体系（全部带默认值，向后兼容） ========
     /** 总战斗力（EquipmentPowerService.powerOf，与战斗/爬塔响应同源） */
     val power: Long = 0,
@@ -27,10 +28,11 @@ data class GameStateResponse(
 /**
  * 战力明细（任务#23）。全部字段带默认值 0，向后兼容。
  * 拆分不变量（EquipmentPowerService.detail 保证，测试断言）：
- *  - ringAtk + boneAtk + coreAtk == EquipmentBonus.atkBonus
+ *  - ringAtk + boneAtk + coreAtk == EquipmentBonus.atkBonus（不含成就加成）
  *  - ringHp + boneHp == EquipmentBonus.hpBonus（魂核只加攻击百分比，coreHp 恒为 0；
  *    玩家模型无基础生命维度，baseHp 恒为 0，均为真实来源语义）
- *  - basePower + ringPower + bonePower + corePower == power（powerOf 同式）
+ *  - basePower + ringPower + bonePower + corePower + achievement == power（powerOf 同式，
+ *    成就加成单列一行：achievement = 成就 atk + 成就 hp/POWER_HP_DIVISOR 折算）
  */
 data class PowerDetailDto(
     /** 基础攻击 = PLAYER_ATK_BASE + level × PLAYER_ATK_PER_LEVEL */
@@ -40,14 +42,42 @@ data class PowerDetailDto(
     val basePower: Long = 0,
     val ringAtk: Long = 0,
     val ringHp: Long = 0,
-    /** 魂环战力贡献 = ringAtk + 魂环生命折算（余数按最大余数法分配，保证四行求和==power） */
+    /** 魂环战力贡献 = ringAtk + 魂环生命折算（余数按最大余数法分配，保证五行求和==power） */
     val ringPower: Long = 0,
     val boneAtk: Long = 0,
     val boneHp: Long = 0,
     val bonePower: Long = 0,
     val coreAtk: Long = 0,
     val coreHp: Long = 0,
-    val corePower: Long = 0
+    val corePower: Long = 0,
+    /** 成就加成战力行（已解锁成就 hp/atk 求和折算；未解锁任何成就时为 0） */
+    val achievement: Long = 0
+)
+
+// ======== 成就 ========
+/** 成就奖励（全字段照带；第一版战斗模型只消费 hp/atk，其余待属性系统扩展后生效） */
+data class AchievementRewardDto(
+    val hp: Long = 0,
+    val atk: Int = 0,
+    val matk: Int = 0,
+    val pdef: Int = 0,
+    val mdef: Int = 0,
+    val critRate: Int = 0,
+    val critDmg: Int = 0
+)
+
+/** 单条成就状态（GameStateResponse.achievements；category：CULTIVATION/SOUL_RING/BATTLE/TOWER/PRESTIGE） */
+data class AchievementDto(
+    val id: String = "",
+    val name: String = "",
+    val description: String = "",
+    val category: String = "",
+    val target: Long = 0,
+    val progress: Long = 0,
+    val unlocked: Boolean = false,
+    /** 解锁日期 yyyy-MM-dd（LocalDate.toString()）；未解锁为 null */
+    val unlockedAt: String? = null,
+    val rewards: AchievementRewardDto = AchievementRewardDto()
 )
 
 data class ProfileDto(

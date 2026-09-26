@@ -4,6 +4,7 @@ import com.douluodalu.game.entity.EquippedBone
 import com.douluodalu.game.entity.EquippedCore
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.model.GameBalance
+import com.douluodalu.game.service.AchievementService
 import com.douluodalu.game.service.EquipmentBonus
 import com.douluodalu.game.service.EquipmentPowerService
 import com.douluodalu.game.service.GameService
@@ -28,6 +29,9 @@ import kotlin.random.Random
  *   - tower()/rollDrop       奖励与掉落结构镜像自 GameService.towerBattle / rollBackpackDrop，改动需同步
  *   - claimOffline()         公式镜像自 GameService.claimOfflineReward（P1 修复后按小时计费、12h 截断）
  *   - sellJunk()/buyExpand() 公式镜像自 GameService.sellBackpackItem / NormalShopData 205 号商品，改动需同步
+ *   - dailyIncome()          签到（CHECK_IN_REWARDS 7 日循环）+ 每日任务（DAILY_QUESTS 全清上界假设），改动需同步
+ *   - achievementBonusOf()   成就属性加成（调用生产纯函数 AchievementService.progressOf +
+ *                            EquipmentPowerService.achievementBonus，按镜像玩家状态算已解锁集合）
  * 平衡常量直接引用 GameBalance（单一事实来源），但公式结构如有改动需同步本文件。
  *
  * 断言刻意只放软性的健康检查（跑通、数量级不离谱）；主要产出是根目录
@@ -40,6 +44,15 @@ import kotlin.random.Random
  */
 class LongRunSimulationTest {
 
+    companion object {
+        // ======== 每日任务收入镜像（全清上界假设） ========
+        // 上界假设：经济在全清上界下不崩即安全。直接读 DAILY_QUESTS 求和（当前 5 任务合计
+        // 600 金/2 Boss币/1000 魂力/日），不硬编码，定义表调参自动跟随。
+        private val QUEST_GOLD_PER_DAY = GameBalance.DAILY_QUESTS.sumOf { it.rewardGold }
+        private val QUEST_BOSS_COIN_PER_DAY = GameBalance.DAILY_QUESTS.sumOf { it.rewardBossCoin }
+        private val QUEST_SOUL_POWER_PER_DAY = GameBalance.DAILY_QUESTS.sumOf { it.rewardSoulPower }
+    }
+
     // ======== 镜像状态 ========
 
     private class DayStats {
@@ -49,6 +62,48 @@ class LongRunSimulationTest {
         var sellGold = 0L; var bossCoins = 0L
         var dropsGained = 0L; var dropsLost = 0L
         var breakthroughs = 0
+        // 签到+任务（每日固定收入镜像，经济占比核算用）
+        var checkInGold = 0L; var questGold = 0L
+        var checkInQuestBossCoin = 0L; var checkInQuestSoulPower = 0L
+    }
+
+    /** 每日固定收入镜像（SimPlayer/EquipSimPlayer 共用，保证两组画像经济口径一致） */
+    private data class DailyIncome(
+        val gold: Long, val soulPower: Long, val bossCoin: Long,
+        val checkInGold: Long, val questGold: Long
+    )
+
+    /**
+     * 签到 + 每日任务的当日收入：
+     *  - 签到：逐日按 CHECK_IN_REWARDS[((day-1)%7)]（7 日循环，day 从 1 起）；
+     *  - 任务：全清上界假设（DAILY_QUESTS 求和，见 companion 注释）。
+     */
+    private fun dailyIncome(day: Int): DailyIncome {
+        val cir = GameBalance.CHECK_IN_REWARDS[(day - 1) % GameBalance.CHECK_IN_CYCLE]
+        return DailyIncome(
+            gold = cir.gold + QUEST_GOLD_PER_DAY,
+            soulPower = cir.soulPower + QUEST_SOUL_POWER_PER_DAY,
+            bossCoin = cir.bossCoin + QUEST_BOSS_COIN_PER_DAY,
+            checkInGold = cir.gold,
+            questGold = QUEST_GOLD_PER_DAY
+        )
+    }
+
+    /**
+     * 成就属性加成镜像：按镜像玩家状态算已解锁集合，hp/atk 计入战斗属性。
+     * 口径映射与求和**直接调用生产纯函数**（AchievementService.progressOf +
+     * EquipmentPowerService.achievementBonus），不手抄；matk/pdef/mdef/crit 不计入——与生产
+     * 「只兑现 hp/atk」口径一致。SimPlayer 不穿装 → 环数按 0 计；EquipSimPlayer 传实际槽位数。
+     */
+    private fun achievementBonusOf(
+        level: Int, totalBattleWins: Long, towerFloor: Int, equippedRingCount: Int, prestigeCount: Int
+    ): EquipmentBonus {
+        val ids = GameBalance.AchievementDefs.all
+            .filter {
+                AchievementService.progressOf(it.category, level, totalBattleWins, towerFloor, equippedRingCount, prestigeCount) >=
+                        it.requiredValue
+            }.map { it.id }
+        return EquipmentPowerService.achievementBonus(ids)
     }
 
     /** 一件背包物品只需品质即可参与（卖出/整理）决策：sellPrice = 100 + quality*50 */
@@ -70,6 +125,10 @@ class LongRunSimulationTest {
         var dropLostTotal = 0L           // 满包丢掉落次数（battle 提示/tower 静默丢失合并统计）
         var offlineBattleWins = 0L       // 离线收益折算的 totalBattleWins
         var offlineWastedSeconds = 0L    // 因 12h 上限被截断的离线秒数
+        var totalBattleWins = 0L         // 镜像 profile.totalBattleWins（战斗胜 + 塔胜 + 离线折算，成就 BATTLE 口径）
+
+        /** 成就属性加成（SimPlayer 不穿装 → 环数按 0 计；prestige 无玩法恒 0） */
+        fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, 0, 0)
 
         private fun rndLong(bound: Long): Long = if (bound <= 0) 0 else rng.nextLong(bound)
         private fun rndInt(bound: Int): Int = if (bound <= 0) 0 else rng.nextInt(bound)
@@ -96,21 +155,25 @@ class LongRunSimulationTest {
 
         // ---- battle 镜像：直接调用生产纯函数 GameService.monsterStats/resolveBattle（P7 修复后同源）----
         fun battle(s: DayStats) {
+            val ach = achBonus()
             val oldMap = mapId
             val oldStage = stage          // 生产代码掉落/奖励均用战前快照
             val (monsterHp, monsterAtk) = GameService.monsterStats(oldMap, oldStage)
-            // 画像不模拟穿装 → 装备攻击加成恒为 0（P7 修复效果在报告「已修复项」中说明）
-            val playerAtk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL
+            // 画像不模拟穿装 → 装备攻击加成恒为 0（P7 修复效果在报告「已修复项」中说明）；
+            // 成就 hp/atk 加成按已解锁集合并入（与生产 bonusFor 口径一致）
+            val playerAtk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL + ach.atkBonus
+            val maxHp = getMaxHp() + ach.hpBonus
             val outcome = GameService.resolveBattle(
                 playerAtk, hp, monsterHp, monsterAtk, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
             if (!outcome.won) {                                                // 30 回合未杀 → 败
                 s.battleLosses++
-                hp = getMaxHp()                                                 // 死亡回满血
+                hp = maxHp                                                     // 死亡回满血（含成就生命加成）
                 stage = 1                                                       // 退回第 1 关
                 return
             }
             s.battleWins++
+            totalBattleWins++
             val goldGained = GameBalance.WIN_GOLD_BASE + oldMap * GameBalance.WIN_GOLD_PER_MAP +
                     oldStage * GameBalance.WIN_GOLD_PER_STAGE
             val expGained = GameBalance.WIN_EXP_BASE + oldMap * GameBalance.WIN_EXP_PER_MAP +
@@ -136,10 +199,11 @@ class LongRunSimulationTest {
 
         // ---- 塔镜像：胜率直接调用生产纯函数 EquipmentPowerService.towerWinChance（P2+P7 修复后同源）----
         fun tower(s: DayStats) {
-            val power = EquipmentPowerService.powerOf(level, EquipmentBonus(0, 0))
+            val power = EquipmentPowerService.powerOf(level, achBonus())
             val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
             if (!won) { s.towerLosses++; return }
             s.towerWins++
+            totalBattleWins++                                                  // 生产 towerBattle：胜场 +1
             val towerLevel = towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
             val goldGained = GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL
             gold += goldGained; s.towerGold += goldGained
@@ -172,6 +236,7 @@ class LongRunSimulationTest {
             soulPower += expGained; s.offlineExp += expGained
             val wins = eff / GameBalance.OFFLINE_SECONDS_PER_BATTLE_WIN
             offlineBattleWins += wins; s.offlineWins += wins
+            totalBattleWins += wins                                            // 生产 claimOfflineReward：胜场折算入账
         }
 
         // ---- 公式镜像自 GameService.sellBackpackItem（100+quality*50，与装备类型/等级无关）----
@@ -213,14 +278,23 @@ class LongRunSimulationTest {
     ) {
         val final: DayRow get() = rows.last()
         fun last(n: Int) = rows.takeLast(n)
+        private fun DayRow.passiveGold(): Long = stats.checkInGold + stats.questGold
         fun offlineShareLast(n: Int): Double {
             val ls = last(n)
             val off = ls.sumOf { it.stats.offlineGold }
-            val tot = ls.sumOf { it.stats.offlineGold + it.stats.battleGold + it.stats.towerGold + it.stats.sellGold }
+            val tot = ls.sumOf { it.stats.offlineGold + it.stats.battleGold + it.stats.towerGold + it.stats.sellGold + it.passiveGold() }
             return if (tot == 0L) 0.0 else off * 100.0 / tot
         }
         fun avgDailyTotalGold(n: Int): Double =
-            last(n).sumOf { it.stats.offlineGold + it.stats.battleGold + it.stats.towerGold + it.stats.sellGold } / n.toDouble()
+            last(n).sumOf { it.stats.offlineGold + it.stats.battleGold + it.stats.towerGold + it.stats.sellGold + it.passiveGold() } / n.toDouble()
+        fun avgDailyPassiveGold(n: Int): Double = last(n).sumOf { it.passiveGold() } / n.toDouble()
+        /** 「签到+任务」日收入占主动玩法（战斗+塔+卖装备）日收入的百分比 */
+        fun passiveVsActiveShareLast(n: Int): Double {
+            val ls = last(n)
+            val passive = ls.sumOf { it.passiveGold() }
+            val active = ls.sumOf { it.stats.battleGold + it.stats.towerGold + it.stats.sellGold }
+            return if (active == 0L) 0.0 else passive * 100.0 / active
+        }
         fun avgDailyBossCoin(n: Int): Double = last(n).sumOf { it.stats.bossCoins } / n.toDouble()
         fun avgDailyOfflineWins(n: Int): Double = last(n).sumOf { it.stats.offlineWins } / n.toDouble()
         fun maxTowerWinsLast(n: Int): Long = last(n).maxOf { it.stats.towerWins }
@@ -245,6 +319,12 @@ class LongRunSimulationTest {
         val towersPerSession = listOf(5, 5, 8)
         for (d in 1..days) {
             val s = DayStats()
+            // 每日固定收入镜像：签到（7 日循环）+ 每日任务全清上界假设（见 dailyIncome 注释）
+            val inc = dailyIncome(d)
+            p.gold += inc.gold; p.soulPower += inc.soulPower; p.bossCoin += inc.bossCoin
+            s.checkInGold += inc.checkInGold; s.questGold += inc.questGold
+            s.bossCoins += inc.bossCoin
+            s.checkInQuestSoulPower += inc.soulPower
             for (i in loginHours.indices) {
                 val t = (d - 1) * 24.0 + loginHours[i]
                 p.claimOffline(t, s)
@@ -324,6 +404,9 @@ class LongRunSimulationTest {
         // ---- 观察指标 ----
         var firstRejectDay = 0; var firstRejectMap = -1; var firstRejectLevel = 0; var firstRejectLoad = 0L; var firstRejectYear = -1
         var rejectsToday = 0
+        var totalBattleWins = 0L         // 镜像 profile.totalBattleWins（战斗胜 + 塔胜 + 离线折算，成就 BATTLE 口径）
+        /** 成就属性加成（SOUL_RING 口径 = 已装备槽位数；prestige 无玩法恒 0） */
+        fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, slotsFilled(), 0)
         /** 成功穿上的最高年份档位随时间的演进：档位 y → 首次穿上该档位环的天 */
         val firstEquipDayByYear = mutableMapOf<Int, Int>()
         var currentDay = 0
@@ -348,6 +431,7 @@ class LongRunSimulationTest {
             cores.mapIndexedNotNull { s, i -> i?.toEquippedCore(s) }
 
         fun equippedLoad(): Long = RingLoadCalculator.totalRingLoad(equippedRingList())
+        // 容量按装备口径（不含成就加成）——镜像生产 equipRing 容量校验（保守方向，差异带 ≤ 成就加成折算量）
         fun capacity(): Long = RingLoadCalculator.absorptionCapacity(
             RingLoadCalculator.calcRootBone(
                 maxHp = getMaxHp(level) + bonus().hpBonus,
@@ -431,12 +515,13 @@ class LongRunSimulationTest {
         }
 
         fun battle(s: DayStats) {
+            val ach = achBonus()
             val oldMap = mapId
             val oldStage = stage
             val (monsterHp, monsterAtk) = GameService.monsterStats(oldMap, oldStage)
             val equip = bonus()
-            val playerAtk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL + equip.atkBonus
-            val maxHp = getMaxHp(level) + equip.hpBonus
+            val playerAtk = GameBalance.PLAYER_ATK_BASE + level * GameBalance.PLAYER_ATK_PER_LEVEL + equip.atkBonus + ach.atkBonus
+            val maxHp = getMaxHp(level) + equip.hpBonus + ach.hpBonus
             val outcome = GameService.resolveBattle(
                 playerAtk, min(hp, maxHp), monsterHp, monsterAtk, GameBalance.MAX_BATTLE_ROUNDS, rng
             )
@@ -447,6 +532,7 @@ class LongRunSimulationTest {
                 return
             }
             s.battleWins++
+            totalBattleWins++
             val goldGained = GameBalance.WIN_GOLD_BASE + oldMap * GameBalance.WIN_GOLD_PER_MAP +
                     oldStage * GameBalance.WIN_GOLD_PER_STAGE
             val expGained = GameBalance.WIN_EXP_BASE + oldMap * GameBalance.WIN_EXP_PER_MAP +
@@ -478,12 +564,17 @@ class LongRunSimulationTest {
         }
 
         fun tower(s: DayStats) {
-            val power = EquipmentPowerService.powerOf(level, bonus())
+            val ach = achBonus()
+            val equip = bonus()
+            val power = EquipmentPowerService.powerOf(
+                level, EquipmentBonus(equip.atkBonus + ach.atkBonus, equip.hpBonus + ach.hpBonus)
+            )
             val won = rng.nextDouble() < EquipmentPowerService.towerWinChance(towerFloor, power)
             rndInt(GameBalance.TOWER_MONSTERS.size) // 镜像 monsterName 抽卡（保持 RNG 流同构）
             rndInt(6)                                // 镜像 rounds 抽卡
             if (!won) { s.towerLosses++; return }
             s.towerWins++
+            totalBattleWins++                        // 生产 towerBattle：胜场 +1
             val towerLevel = towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
             val goldGained = GameBalance.TOWER_GOLD_BASE + towerLevel * GameBalance.TOWER_GOLD_PER_LEVEL
             gold += goldGained; s.towerGold += goldGained
@@ -533,7 +624,9 @@ class LongRunSimulationTest {
             gold += goldGained; s.offlineGold += goldGained
             val expGained = (expPerHour * effHours).toLong()
             soulPower += expGained; s.offlineExp += expGained
-            s.offlineWins += eff / GameBalance.OFFLINE_SECONDS_PER_BATTLE_WIN
+            val wins = eff / GameBalance.OFFLINE_SECONDS_PER_BATTLE_WIN
+            s.offlineWins += wins
+            totalBattleWins += wins            // 生产 claimOfflineReward：胜场折算入账
         }
 
         fun sellJunk(reserve: Int = 5): Long {
@@ -604,6 +697,12 @@ class LongRunSimulationTest {
         for (d in 1..days) {
             p.currentDay = d
             val s = DayStats()
+            // 每日固定收入镜像：与 SimPlayer 同口径（签到 7 日循环 + 每日任务全清上界假设）
+            val inc = dailyIncome(d)
+            p.gold += inc.gold; p.soulPower += inc.soulPower; p.bossCoin += inc.bossCoin
+            s.checkInGold += inc.checkInGold; s.questGold += inc.questGold
+            s.bossCoins += inc.bossCoin
+            s.checkInQuestSoulPower += inc.soulPower
             for (i in loginHours.indices) {
                 val t = (d - 1) * 24.0 + loginHours[i]
                 p.claimOffline(t, s)
@@ -792,6 +891,7 @@ class LongRunSimulationTest {
         "| ${r.day} | ${r.level} | ${eng(r.gold)} | ${eng(r.soulPower)} | ${eng(r.bossCoin)} " +
                 "| ${r.mapId + 1}-${r.stage} | ${r.towerFloor} | ${r.bagCount}/${r.capacity} " +
                 "| ${eng(r.stats.offlineGold)} | ${eng(r.stats.battleGold + r.stats.towerGold + r.stats.sellGold)} " +
+                "| ${eng(r.stats.checkInGold + r.stats.questGold)} " +
                 "| ${r.stats.dropsLost} | ${r.stuckStreak} |"
 
     private fun buildReport(r30: SimOutcome, r90: SimOutcome, elapsedMs: Long): String = buildString {
@@ -809,11 +909,15 @@ class LongRunSimulationTest {
         appendLine("- 玩家画像（中活跃）：每天 3 次登录（08:00/14:00/22:00，离线 6h/8h/10h，均 <12h 上限），")
         appendLine("  每次登录领离线收益、修炼 8 次、自动突破直到魂力不足、日均战斗 20 次 + 魂塔 18 次，")
         appendLine("  登录收尾卖最低品质装备保留 5 格，金币 ≥3000 即买背包扩展券（至 80 格）。")
+        appendLine("- 每日固定收入（镜像）：逐日签到（CHECK_IN_REWARDS 7 日循环）+ 每日任务**全清上界假设**")
+        appendLine("  （DAILY_QUESTS 求和：${QUEST_GOLD_PER_DAY} 金 / ${QUEST_BOSS_COIN_PER_DAY} Boss币 / ${QUEST_SOUL_POWER_PER_DAY} 魂力 每日）")
+        appendLine("  ——上界假设：经济在全清上界下不崩即安全。成就属性加成按镜像状态（level/totalBattleWins/")
+        appendLine("  towerFloor/已装备环数/prestige）经生产纯函数解锁并计入战斗 atk/hp（只兑现 hp/atk 口径）。")
         appendLine("- 镜像范围：cultivate / breakthrough(120·L^1.55) / battle（调用生产纯函数 monsterStats+resolveBattle，")
         appendLine("  HP 跨场次持久化、败退回到 1 关）/ towerBattle（调用生产纯函数 towerWinChance）/")
-        appendLine("  claimOfflineReward（12h 截断、P1 修复后按**小时**计费）/ 掉落与背包容量 / 扩展券。")
+        appendLine("  claimOfflineReward（12h 截断、P1 修复后按**小时**计费）/ 掉落与背包容量 / 扩展券 / 签到+任务+成就。")
         appendLine("- 未建模：宗门 Boss、天赋、穿装行为——画像只捡/卖装备不穿戴，故装备战力加成按 0 计")
-        appendLine("  （装备对战力的贡献已由 EquipmentPowerServiceTest 单测覆盖，见「已修复项」P7）。")
+        appendLine("  （装备对战力的贡献已由 EquipmentPowerServiceTest 单测覆盖，见「已修复项」P7；成就加成不属装备，照常计入）。")
         appendLine("  **注（任务#22）**：上文各节维持「零装备基线」口径；穿装画像 + 魂环负荷/容量反馈回路的专项仿真")
         appendLine("  见文末《魂环负荷反馈回路专项复核（任务#22）》一章。")
         appendLine()
@@ -825,6 +929,8 @@ class LongRunSimulationTest {
         appendLine("| 金币存量 | ${f30.gold} | ${f90.gold} |")
         appendLine("| 近10日日均总收入(金币) | ${String.format("%.3e", r30.avgDailyTotalGold(10))} | ${String.format("%.3e", r90.avgDailyTotalGold(10))} |")
         appendLine("| 近10日日均\"主动玩法\"收入(战斗+塔+卖装备) | ${String.format("%.0f", r30.avgDailyActiveGold(10))} | ${String.format("%.0f", r90.avgDailyActiveGold(10))} |")
+        appendLine("| 近10日\"签到+任务\"日均收入(金币) | ${String.format("%.0f", r30.avgDailyPassiveGold(10))} | ${String.format("%.0f", r90.avgDailyPassiveGold(10))} |")
+        appendLine("| 近10日\"签到+任务\"占主动玩法收入比例 | ${String.format("%.1f", r30.passiveVsActiveShareLast(10))}% | ${String.format("%.1f", r90.passiveVsActiveShareLast(10))}% |")
         appendLine("| 近10日离线收入占比 | ${String.format("%.1f", r30.offlineShareLast(10))}% | ${String.format("%.1f", r90.offlineShareLast(10))}% |")
         appendLine("| 近10日日均 Boss 币 | ${String.format("%.0f", r30.avgDailyBossCoin(10))} | ${String.format("%.0f", r90.avgDailyBossCoin(10))} |")
         appendLine("| 近10日日均离线折算\"战斗胜利\" | ${String.format("%.0f", r30.avgDailyOfflineWins(10))} | ${String.format("%.0f", r90.avgDailyOfflineWins(10))} |")
@@ -901,9 +1007,14 @@ class LongRunSimulationTest {
         appendLine()
         appendLine("推图列 = 地图-关卡（8-15 表示 7 号图\"杀戮之都外域\"满星后原地驻留）；金币等大额用 k/M/B 缩写。")
         appendLine()
-        appendLine("| 天 | 等级 | 金币存量 | 魂力 | Boss币 | 推图 | 塔层 | 背包 | 当日离线金 | 当日主动金 | 满包丢掉落 | 连续未突破天数 |")
-        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        appendLine("| 天 | 等级 | 金币存量 | 魂力 | Boss币 | 推图 | 塔层 | 背包 | 当日离线金 | 当日主动金 | 当日签到+任务金 | 满包丢掉落 | 连续未突破天数 |")
+        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         r90.rows.forEach { appendLine(fmtRow(it)) }
+        appendLine()
+        appendLine("> 收入/属性分项来源说明（每日固定收入 + 成就属性加成镜像，与生产端同源）：")
+        appendLine("> ① 每日签到：逐日按 `CHECK_IN_REWARDS[((day-1)%7)]`（CHECK_IN_CYCLE=7，day 从 1 起）计入 gold/soulPower/bossCoin；")
+        appendLine("> ② 每日任务：全清上界假设（直接读 `DAILY_QUESTS` 求和，当前 ${QUEST_GOLD_PER_DAY} 金/${QUEST_BOSS_COIN_PER_DAY} Boss币/${QUEST_SOUL_POWER_PER_DAY} 魂力/日）——上界假设：经济在全清上界下不崩即安全；")
+        appendLine("> ③ 成就属性加成：按镜像玩家状态（level/totalBattleWins/towerFloor/已装备环数/prestige）算已解锁集合（生产纯函数 AchievementService.progressOf + EquipmentPowerService.achievementBonus），hp/atk 计入战斗属性镜像（matk/pdef/mdef/crit 不计入——与生产只兑现 hp/atk 的口径一致）。")
         appendLine()
         appendLine("## 30 天时间线（独立跑批，同种子）")
         appendLine()

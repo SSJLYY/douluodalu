@@ -1,11 +1,13 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.dto.AchievementDto
 import com.douluodalu.game.dto.CheckInStatusDto
 import com.douluodalu.game.dto.DailyQuestsDto
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.PlayerProfileEntity
 import com.douluodalu.game.entity.UserEntity
 import com.douluodalu.game.model.GameBalance
+import com.douluodalu.game.repository.AchievementRepository
 import com.douluodalu.game.repository.BackpackItemRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
@@ -16,7 +18,6 @@ import com.douluodalu.game.repository.UserRepository
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.mockito.InjectMocks
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
 import org.mockito.kotlin.any
@@ -58,13 +59,26 @@ class GameServiceTest {
     @Mock
     private lateinit var dailyQuestService: DailyQuestService
 
-    @InjectMocks
+    @Mock
+    private lateinit var achievementRepo: AchievementRepository
+
+    @Mock
+    private lateinit var achievementService: AchievementService
+
     private lateinit var gameService: GameService
 
     @BeforeEach
     fun setUp() {
         MockitoAnnotations.openMocks(this)
         doAnswer { it.arguments[0] }.whenever(profileRepo).save(any())
+        // 真实 EquipmentPowerService（wire 同一组 mock 仓库）：battle/塔/状态组装走 bonusFor 真实公式；
+        // 成就加成默认空（Mockito 对 List 返回类型的默认值即空表 → 成就加成 0）
+        gameService = GameService(
+            profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
+            userRepository, webSocketService, checkInService, dailyQuestService,
+            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
+            achievementService
+        )
     }
 
     private fun profile(userId: Long = 1L) = PlayerProfileEntity(userId = userId, level = 5)
@@ -193,6 +207,11 @@ class GameServiceTest {
         whenever(dailyQuestService.getTodayStatus(1L)).thenReturn(
             DailyQuestsDto(date = "2026-09-26", quests = emptyList())
         )
+        // 成就系统集成：unlockedBonus 并入 power/明细，getStatus 透出成就面板
+        whenever(achievementService.unlockedBonus(1L)).thenReturn(EquipmentBonus(atkBonus = 5, hpBonus = 100))
+        whenever(achievementService.getStatus(1L)).thenReturn(
+            listOf(AchievementDto(id = "cult_10", name = "初出茅庐", category = "CULTIVATION", unlocked = true, unlockedAt = "2026-09-26"))
+        )
 
         val response = gameService.getGameState(1L)
 
@@ -204,6 +223,16 @@ class GameServiceTest {
         // 每日任务面板同样委托 DailyQuestService 只读查询
         assertEquals("2026-09-26", response.dailyQuests.date)
         verify(dailyQuestService).getTodayStatus(1L)
+        // 成就面板委托 AchievementService.getStatus 原样组装
+        assertEquals(1, response.achievements.size)
+        assertEquals("cult_10", response.achievements[0].id)
+        assertTrue(response.achievements[0].unlocked)
+        assertEquals("2026-09-26", response.achievements[0].unlockedAt)
+        // 五行求和不变量：base + ring + core + bone + achievement == power（成就行 = atk 5 + hp 100/10）
+        val d = response.powerDetail
+        assertEquals(15L, d.achievement)
+        assertEquals(response.power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
+            "getGameState 的 power 与五行明细必须严格一致（含成就行）")
     }
 
     @Test
@@ -249,6 +278,8 @@ class GameServiceTest {
 
         assertTrue(response.won, "level=5 满血打 1-1 怪应确定性获胜")
         verify(dailyQuestService).recordBattleWin(1L)
+        // 成就挂点：胜利侧 totalBattleWins 跳变 → sync
+        verify(achievementService).sync(1L)
     }
 
     @Test
@@ -266,6 +297,8 @@ class GameServiceTest {
 
         assertFalse(response.won, "level=1 打 7-15 怪应确定性战败")
         verify(dailyQuestService, never()).recordBattleWin(any())
+        // 成就挂点：胜败都 sync（sync 便宜且统一；战败不记每日任务但成就仍要同步）
+        verify(achievementService).sync(1L)
     }
 
     // ==================== 塔战逐回合日志 ====================
@@ -282,6 +315,8 @@ class GameServiceTest {
 
         // 挑战即计数，不论胜负
         verify(dailyQuestService).recordTower(1L)
+        // 成就挂点：塔层/胜场跳变点，挑战即 sync
+        verify(achievementService).sync(1L)
         assertTrue(response.battleLog.isNotEmpty(), "塔战必须产出逐回合日志（前端塔页复用 BattleReplay）")
         assertEquals(response.battleLog.size, response.rounds, "rounds 应与日志回放一致")
         var lastRound = 0

@@ -1,18 +1,27 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.entity.AchievementEntity
 import com.douluodalu.game.entity.EquippedBone
 import com.douluodalu.game.entity.EquippedCore
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.model.GameBalance
+import com.douluodalu.game.repository.AchievementRepository
+import com.douluodalu.game.repository.EquippedBoneRepository
+import com.douluodalu.game.repository.EquippedCoreRepository
+import com.douluodalu.game.repository.EquippedRingRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.doReturn
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.whenever
 import kotlin.random.Random
 
 /**
  * 任务#20：装备战力公式（P7）与塔胜率（P2）的纯函数断言。
  * 全部走 EquipmentPowerService / GameService 的 companion 纯函数，不依赖 Spring。
+ * 成就系统集成：bonusFor 并入已解锁成就 hp/atk；detail 五行求和不变量（base+ring+core+bone+achievement）。
  */
 class EquipmentPowerServiceTest {
 
@@ -89,6 +98,35 @@ class EquipmentPowerServiceTest {
         assertTrue(strongOutcome.playerHpLeft > weakOutcome.playerHpLeft)
     }
 
+    // ======== 成就系统集成：bonusFor 并入成就加成 ========
+
+    @Test
+    fun `bonusFor should include achievement bonus on top of equipment bonus`() {
+        val ringRepo = mock<EquippedRingRepository>()
+        val boneRepo = mock<EquippedBoneRepository>()
+        val coreRepo = mock<EquippedCoreRepository>()
+        val achRepo = mock<AchievementRepository>()
+        whenever(ringRepo.findByUserId(1L)).thenReturn(listOf(ring(year = 2, quality = 1, percentage = 500)))
+        whenever(boneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(coreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(achRepo.findByUserId(1L)).thenReturn(
+            listOf(AchievementEntity(userId = 1L, achievementId = "cult_10"), AchievementEntity(userId = 1L, achievementId = "battle_10"))
+        )
+
+        val b = EquipmentPowerService(ringRepo, boneRepo, coreRepo, achRepo).bonusFor(1L, 10)
+
+        val equipOnly = EquipmentPowerService.bonus(10, listOf(ring(year = 2, quality = 1, percentage = 500)), emptyList(), emptyList())
+        val ach = EquipmentPowerService.achievementBonus(listOf("cult_10", "battle_10"))
+        assertTrue(ach.atkBonus > 0 && ach.hpBonus > 0, "cult_10+battle_10 应有非零 hp/atk 成就加成")
+        assertEquals(equipOnly.atkBonus + ach.atkBonus, b.atkBonus, "bonusFor 应等于装备加成 + 成就加成")
+        assertEquals(equipOnly.hpBonus + ach.hpBonus, b.hpBonus)
+        // 求和与定义表同源（achievementBonus 纯函数幂等）
+        val defSumAtk = (GameBalance.ACHIEVEMENT_BY_ID.getValue("cult_10").rewards.atk + GameBalance.ACHIEVEMENT_BY_ID.getValue("battle_10").rewards.atk).toLong()
+        val defSumHp = GameBalance.ACHIEVEMENT_BY_ID.getValue("cult_10").rewards.hp + GameBalance.ACHIEVEMENT_BY_ID.getValue("battle_10").rewards.hp
+        assertEquals(defSumAtk, ach.atkBonus)
+        assertEquals(defSumHp, ach.hpBonus)
+    }
+
     // ======== 任务#23：战力明细拆分（拆分求和 == bonus/power 总值） ========
 
     @Test
@@ -99,6 +137,7 @@ class EquipmentPowerServiceTest {
         assertEquals(0L, d.ringAtk); assertEquals(0L, d.ringHp); assertEquals(0L, d.ringPower)
         assertEquals(0L, d.boneAtk); assertEquals(0L, d.boneHp); assertEquals(0L, d.bonePower)
         assertEquals(0L, d.coreAtk); assertEquals(0L, d.coreHp); assertEquals(0L, d.corePower)
+        assertEquals(0L, d.achievement, "无成就加成时成就行必须为 0")
         val power = EquipmentPowerService.powerOf(30, EquipmentBonus(0, 0))
         assertEquals(power, d.basePower)
     }
@@ -112,12 +151,13 @@ class EquipmentPowerServiceTest {
         val b = EquipmentPowerService.bonus(level, rings, bones, cores)
         val d = EquipmentPowerService.detail(level, rings, bones, cores)
 
-        // 攻击/生命拆分求和 == bonus 总值（含取整余数）
+        // 攻击/生命拆分求和 == bonus 总值（含取整余数；拆分行保持装备口径，不含成就加成）
         assertEquals(b.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "攻击拆分求和必须等于 atkBonus")
         assertEquals(b.hpBonus, d.ringHp + d.boneHp, "生命拆分求和必须等于 hpBonus")
-        // 四行战力求和 == powerOf 总值
+        // 五行战力求和 == powerOf 总值（成就加成缺省为 0，成就行 = 0）
         val power = EquipmentPowerService.powerOf(level, b)
-        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower, "战力明细四行求和必须等于总战力")
+        assertEquals(0L, d.achievement)
+        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement, "战力明细五行求和必须等于总战力")
         // 来源语义：魂核只加攻击、玩家模型无基础生命
         assertEquals(0L, d.coreHp)
         assertEquals(0L, d.baseHp)
@@ -149,10 +189,36 @@ class EquipmentPowerServiceTest {
             assertEquals(b.hpBonus, d.ringHp + d.boneHp, "hp 拆分失衡: level=$level $rings $bones $cores")
             assertEquals(
                 EquipmentPowerService.powerOf(level, b),
-                d.basePower + d.ringPower + d.bonePower + d.corePower,
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
                 "战力拆分失衡: level=$level $rings $bones $cores"
             )
         }
+    }
+
+    @Test
+    fun `power detail with achievement bonus keeps five-row sum invariant`() {
+        val level = 47
+        val rings = listOf(ring(year = 1, quality = 2, percentage = 137), ring(year = 3, quality = 1, percentage = 903))
+        val bones = listOf(bone(year = 2, quality = 3, enhance = 5))
+        val cores = listOf(core(rarity = 3, value = 173))
+        // 成就加成（cult_50 + battle_50 + tower_50 + tower_30 量级）：atk 245 / hp 4600（可被 10 整除便于精确断言）
+        val ach = EquipmentBonus(atkBonus = 245, hpBonus = 4600)
+
+        val combined = EquipmentPowerService.bonus(level, rings, bones, cores, ach)
+        val d = EquipmentPowerService.detail(level, rings, bones, cores, ach)
+        val power = EquipmentPowerService.powerOf(level, combined)
+
+        // 五行求和不变量：base + ring + core + bone + achievement == power
+        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
+            "含成就加成的五行战力求和必须等于总战力")
+        // 成独行 = 成就 atk + 成就 hp 折算（hp 可被 POWER_HP_DIVISOR 整除 → 精确）
+        assertEquals(ach.atkBonus + (ach.hpBonus / GameBalance.POWER_HP_DIVISOR).toLong(), d.achievement)
+        // 装备拆分行保持装备口径（不含成就加成）
+        val equipOnly = EquipmentPowerService.bonus(level, rings, bones, cores)
+        assertEquals(equipOnly.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk)
+        assertEquals(equipOnly.hpBonus, d.ringHp + d.boneHp)
+        assertEquals(combined.atkBonus, equipOnly.atkBonus + ach.atkBonus)
+        assertEquals(combined.hpBonus, equipOnly.hpBonus + ach.hpBonus)
     }
 
     // ======== P2：塔胜率修复 ========

@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import api, { BattleResult, OfflineReward, PowerDetail } from '@/lib/api';
+import api, { BattleResult, OfflineReward, PowerDetail, normalizeAchievements } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
 import { BootState } from '@/components/StateViews';
 import BattleReplay from '@/components/BattleReplay';
@@ -17,14 +17,33 @@ const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂�
  * 任务#23：战力明细可折叠面板（默认收起）。
  * 后端 PowerDetailDto 保证 basePower+ringPower+bonePower+corePower == 总战力（拆分求和恒等），
  * 每行显示攻击/生命贡献与占总战力百分比；颜色全部走主题调色板变量，亮暗两色主题均可读。
+ * 后端补 achievement 字段后追加第 5 行「🏆 成就」（五行求和 == 总战力）；
+ * 旧后端无此字段 → undefined 按 0 处理、行隐藏，脚注回退「四行」。
  */
+interface PowerRow {
+    key: string;
+    icon: string;
+    label: string;
+    /** 成就行无独立攻/生拆分（契约只有折算战力）→ null，行内不渲染攻/生子标签 */
+    atk: number | null;
+    hp: number | null;
+    share: number;
+    bar: string;
+    ariaLabel: string;
+}
+
 function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetail }) {
     const [open, setOpen] = useState(false);
-    const rows = [
-        { key: 'base', icon: '🛡️', label: '基础（等级+攻击）', atk: detail.baseAtk, hp: detail.baseHp, share: detail.basePower, bar: 'bg-gray-500' },
-        { key: 'ring', icon: '💜', label: '魂环', atk: detail.ringAtk, hp: detail.ringHp, share: detail.ringPower, bar: 'bg-blue-500' },
-        { key: 'bone', icon: '🦴', label: '魂骨', atk: detail.boneAtk, hp: detail.boneHp, share: detail.bonePower, bar: 'bg-purple-500' },
-        { key: 'core', icon: '🔮', label: '魂核', atk: detail.coreAtk, hp: detail.coreHp, share: detail.corePower, bar: 'bg-yellow-500' },
+    const achPower = detail.achievement ?? 0;
+    const rows: PowerRow[] = [
+        { key: 'base', icon: '🛡️', label: '基础（等级+攻击）', atk: detail.baseAtk, hp: detail.baseHp, share: detail.basePower, bar: 'bg-gray-500', ariaLabel: '基础（等级+攻击）战力贡献' },
+        { key: 'ring', icon: '💜', label: '魂环', atk: detail.ringAtk, hp: detail.ringHp, share: detail.ringPower, bar: 'bg-blue-500', ariaLabel: '魂环战力贡献' },
+        { key: 'bone', icon: '🦴', label: '魂骨', atk: detail.boneAtk, hp: detail.boneHp, share: detail.bonePower, bar: 'bg-purple-500', ariaLabel: '魂骨战力贡献' },
+        { key: 'core', icon: '🔮', label: '魂核', atk: detail.coreAtk, hp: detail.coreHp, share: detail.corePower, bar: 'bg-yellow-500', ariaLabel: '魂核战力贡献' },
+        ...(achPower > 0 ? [{
+            key: 'achievement', icon: '🏆', label: '成就', atk: null, hp: null,
+            share: achPower, bar: 'bg-amber-500', ariaLabel: '成就加成',
+        }] : []),
     ];
     return (
         <div className="dl-fade-up bg-surface/80 rounded-xl border border-line" data-testid="power-detail-panel">
@@ -50,7 +69,9 @@ function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetai
                                 <div className="flex flex-wrap items-baseline justify-between gap-x-2 text-xs mb-1">
                                     <span className="text-gray-300 min-w-0">
                                         {r.icon} {r.label}
-                                        <span className="text-gray-500 ml-2">攻 +{r.atk.toLocaleString()} · 生 +{r.hp.toLocaleString()}</span>
+                                        {r.atk != null && r.hp != null && (
+                                            <span className="text-gray-500 ml-2">攻 +{r.atk.toLocaleString()} · 生 +{r.hp.toLocaleString()}</span>
+                                        )}
                                     </span>
                                     <span className="text-gray-400 tabular-nums shrink-0">
                                         {r.share.toLocaleString()}（{pct.toFixed(1)}%）
@@ -62,7 +83,7 @@ function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetai
                                     aria-valuemin={0}
                                     aria-valuemax={Math.max(power, 1)}
                                     aria-valuenow={r.share}
-                                    aria-label={`${r.label}战力贡献`}
+                                    aria-label={r.ariaLabel}
                                 >
                                     <div className={`h-full ${r.bar} rounded-full transition-all duration-700 ease-out`} style={{ width: `${pct}%` }} />
                                 </div>
@@ -70,7 +91,7 @@ function PowerDetailPanel({ power, detail }: { power: number; detail: PowerDetai
                         );
                     })}
                     <p className="text-[11px] text-gray-500 leading-relaxed">
-                        战力 = 基础 + 装备攻击加成 + 装备生命÷10；四行求和恒等于总战力（后端同源拆分）。
+                        战力 = 基础 + 装备攻击加成 + 装备生命÷10{achPower > 0 ? ' + 成就加成' : ''}；{achPower > 0 ? '五' : '四'}行求和恒等于总战力（后端同源拆分）。
                     </p>
                 </div>
             )}
@@ -99,6 +120,27 @@ export default function GamePage() {
             })
             .catch(() => undefined);
     }, []);
+
+    // 成就解锁 toast：每次 refresh 落地后 diff 新解锁的 id。
+    // 首拉（seenUnlockedRef 为 null）只建档不提示；已见过的 id 不重复提示；
+    // achievements 缺失/旧后端 string[] 形状 → normalizeAchievements 返回空数组，静默跳过。
+    // 多条同时解锁：取第一条 + 数量（`X 等 N 项`），不逐条拼接以免 message 条过长溢出。
+    const seenUnlockedRef = useRef<Set<string> | null>(null);
+    useEffect(() => {
+        if (!gameState) return;
+        const unlocked = normalizeAchievements(gameState.achievements).filter((a) => a.unlocked);
+        const seen = seenUnlockedRef.current;
+        if (seen === null) {
+            seenUnlockedRef.current = new Set(unlocked.map((a) => a.id));
+            return;
+        }
+        const fresh = unlocked.filter((a) => !seen.has(a.id));
+        if (fresh.length === 0) return;
+        for (const a of unlocked) seen.add(a.id);
+        setMessage(fresh.length === 1
+            ? `🏆 成就解锁：${fresh[0].name}！属性已生效`
+            : `🏆 成就解锁：${fresh[0].name} 等${fresh.length}项！属性已生效`);
+    }, [gameState, setMessage]);
 
     const dismissOffline = () => {
         setOffline(null);
@@ -240,7 +282,9 @@ export default function GamePage() {
                                 : message.includes('战败') || message.includes('失败')
                                     ? 'bg-red-500/20 border border-red-500/50 text-red-300'
                                     : 'bg-blue-500/20 border border-blue-500/50 text-blue-300'
-                        }`}>
+                        }`}
+                            data-testid={message.startsWith('🏆 成就解锁') ? 'achievement-toast' : undefined}
+                        >
                             {message}
                         </div>
                     )}
@@ -307,8 +351,8 @@ export default function GamePage() {
                     </div>
                 </div>
 
-                {/* 快捷导航 */}
-                <div className="dl-fade-up [animation-delay:320ms] grid grid-cols-4 gap-3">
+                {/* 快捷导航：5 格 → grid-cols-3（375px 下 3+2 两行，每格约 106px 宽裕容纳图标+四字标签，无孤行格且零水平溢出） */}
+                <div className="dl-fade-up [animation-delay:320ms] grid grid-cols-3 gap-3">
                     <button onClick={() => router.push('/game/equipment')} className="bg-surface/80 rounded-xl p-4 border border-line hover:border-yellow-500 hover:-translate-y-0.5 transition text-center">
                         <div className="text-2xl mb-1">⚔️</div>
                         <div className="text-sm text-gray-300">装备</div>
@@ -324,6 +368,10 @@ export default function GamePage() {
                     <button onClick={() => router.push('/game/social/rank')} className="bg-surface/80 rounded-xl p-4 border border-line hover:border-yellow-500 hover:-translate-y-0.5 transition text-center">
                         <div className="text-2xl mb-1">🏆</div>
                         <div className="text-sm text-gray-300">排行榜</div>
+                    </button>
+                    <button data-testid="nav-achievements" onClick={() => router.push('/game/achievements')} className="bg-surface/80 rounded-xl p-4 border border-line hover:border-yellow-500 hover:-translate-y-0.5 transition text-center">
+                        <div className="text-2xl mb-1" aria-hidden>🏅</div>
+                        <div className="text-sm text-gray-300">成就</div>
                     </button>
                 </div>
             </div>

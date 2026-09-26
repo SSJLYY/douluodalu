@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import api, { STATE_REFRESH_EVENT, UNAUTHORIZED_EVENT } from '@/lib/api';
+import api, { normalizeAchievements, STATE_REFRESH_EVENT, UNAUTHORIZED_EVENT } from '@/lib/api';
+import type { Achievement } from '@/lib/api';
 
 /** 与 vitest.config.mts 固定的 NEXT_PUBLIC_API_URL 一致（api.ts 的 API_BASE 在模块加载时固化） */
 const API_BASE = 'http://localhost:8080';
@@ -109,5 +110,41 @@ describe('ApiClient.request', () => {
         expect(url).toBe(`${API_BASE}/api/game/quests/claim`);
         expect(init.method).toBe('POST');
         expect(JSON.parse(init.body as string)).toEqual({ questId: 'battle_wins' });
+    });
+});
+
+/** 新形状合法单条：GameState.achievements 升级后的元素 */
+const ACH: Achievement = {
+    id: 'cultivate_100',
+    name: '修炼百次',
+    description: '累计修炼100次',
+    category: 'CULTIVATION',
+    target: 100,
+    progress: 40,
+    unlocked: false,
+    unlockedAt: null,
+    rewards: { hp: 100, atk: 5, matk: 0, pdef: 0, mdef: 0, critRate: 0, critDmg: 0 },
+};
+
+describe('normalizeAchievements（成就运行时形状守卫）', () => {
+    it('合法新形状数组原样透传（元素引用不变）', () => {
+        const list: Achievement[] = [ACH, { ...ACH, id: 'battle_1', unlocked: true }];
+        expect(normalizeAchievements(list)).toEqual(list);
+    });
+
+    it('元素非对象或缺 id 字段被过滤，合法项保留', () => {
+        const ok = { ...ACH, id: 'ok' };
+        const dirty: unknown[] = [ok, null, undefined, 'str', 42, true, { name: '缺id字段' }, []];
+        expect(normalizeAchievements(dirty)).toEqual([ok]);
+    });
+
+    it('旧后端 string[]（每项是 string）→ 全部过滤返回空数组', () => {
+        expect(normalizeAchievements(['cultivate_100', 'battle_1'])).toEqual([]);
+    });
+
+    it('非数组输入（undefined/null/普通对象）→ 空数组', () => {
+        expect(normalizeAchievements(undefined)).toEqual([]);
+        expect(normalizeAchievements(null)).toEqual([]);
+        expect(normalizeAchievements({ id: 'x' })).toEqual([]);
     });
 });

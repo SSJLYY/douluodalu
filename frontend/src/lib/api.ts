@@ -353,14 +353,15 @@ export interface GameState {
     equippedCores: EquippedCore[];
     backpackItems: BackpackItem[];
     talents: Record<string, number>;
-    achievements: string[];
+    /** 成就（后端 15 条全量定义，含未解锁进度）。旧后端返回 string[] → 消费方须先过 normalizeAchievements 形状守卫降级 */
+    achievements: Achievement[];
     /** 任务#21：总战斗力（含装备加成，与战斗/爬塔响应同源） */
     power: number;
     /** 当前已装备魂环总负荷 */
     ringLoad: number;
     /** 魂环吸收容量（=根骨×6）；装环超容量后端返回 400 */
     capacity: number;
-    /** 任务#23：战力明细（来源拆分；basePower+ringPower+bonePower+corePower == power） */
+    /** 任务#23：战力明细（来源拆分；basePower+ringPower+bonePower+corePower(+achievement) == power） */
     powerDetail: PowerDetail;
     /** 每日签到状态（7 日循环）。后端响应升级前该字段可能缺失（undefined），消费方须判空降级 */
     checkIn: CheckInStatus;
@@ -368,11 +369,12 @@ export interface GameState {
     dailyQuests?: DailyQuests;
 }
 
-/**
- * 对应后端 PowerDetailDto（任务#23）。
- * 后端保证：ringAtk+boneAtk+coreAtk == 攻击加成总值、ringHp+boneHp == 生命加成总值、
- * 四行 power* 求和 == power。魂核只加攻击（coreHp=0），玩家模型无基础生命（baseHp=0）。
- */
+    /**
+     * 对应后端 PowerDetailDto（任务#23）。
+     * 后端保证：ringAtk+boneAtk+coreAtk == 攻击加成总值、ringHp+boneHp == 生命加成总值、
+     * 四行 power* 求和 == power（后端补 achievement 字段后为五行：+ achievement）。
+     * 魂核只加攻击（coreHp=0），玩家模型无基础生命（baseHp=0）。
+     */
 export interface PowerDetail {
     baseAtk: number;
     baseHp: number;
@@ -386,6 +388,45 @@ export interface PowerDetail {
     coreAtk: number;
     coreHp: number;
     corePower: number;
+    /** 成就属性加成折算战力（第 5 行）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量：base+ring+core+bone+achievement == power */
+    achievement?: number;
+}
+
+/** 成就属性奖励（Achievement.rewards）。matk/pdef/mdef/critRate/critDmg 后端暂未生效，前端只展示 hp/atk */
+export interface AchievementReward {
+    hp: number;
+    atk: number;
+    matk: number;
+    pdef: number;
+    mdef: number;
+    critRate: number;
+    critDmg: number;
+}
+
+/** 成就单条定义（GameState.achievements 元素，后端 15 条全量下发含未解锁进度）。unlockedAt 为 yyyy-MM-dd 或 null */
+export interface Achievement {
+    id: string;
+    name: string;
+    description: string;
+    /** CULTIVATION | SOUL_RING | BATTLE | TOWER | PRESTIGE */
+    category: string;
+    target: number;
+    progress: number;
+    unlocked: boolean;
+    unlockedAt?: string | null;
+    rewards: AchievementReward;
+}
+
+/**
+ * 成就运行时形状守卫：旧后端 achievements 返回 string[]（每项是 string），与新形状不符。
+ * 规则：非数组 → 空数组；数组元素不是对象或缺 id 字段 → 过滤掉
+ * （string[] 每项都会被过滤 → 结果为空数组，调用方据此走 EmptyPanel 降级）；合法新形状原样透传。
+ */
+export function normalizeAchievements(value: unknown): Achievement[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is Achievement =>
+        typeof item === 'object' && item !== null && 'id' in item,
+    );
 }
 
 export interface Profile {

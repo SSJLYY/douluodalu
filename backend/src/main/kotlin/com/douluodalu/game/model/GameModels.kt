@@ -342,35 +342,3 @@ object TowerData {
     fun normalReward(floor: Int): Long = (100.0 * 1.08.pow(floor.toDouble())).toLong()
     fun bossBoneReward(floor: Int): Int = when { floor >= 90 -> 22; floor >= 70 -> 17; floor >= 40 -> 12; floor >= 20 -> 7; else -> 2 }
 }
-
-// ============ 成就系统 ============
-data class AchievementRewards(
-    val hp: Long = 0, val atk: Int = 0, val matk: Int = 0,
-    val pdef: Int = 0, val mdef: Int = 0, val critRate: Int = 0, val critDmg: Int = 0
-)
-
-data class AchievementDef(
-    val id: String, val name: String, val description: String,
-    val category: String, val requiredValue: Long, val rewards: AchievementRewards
-)
-
-object AchievementDefs {
-    val all = listOf(
-        AchievementDef("cult_10", "初出茅庐", "达到10级", "CULTIVATION", 10, AchievementRewards(hp = 100, atk = 5)),
-        AchievementDef("cult_30", "魂尊之路", "达到30级", "CULTIVATION", 30, AchievementRewards(hp = 300, atk = 15, pdef = 5, mdef = 5)),
-        AchievementDef("cult_50", "魂宗威名", "达到50级", "CULTIVATION", 50, AchievementRewards(hp = 600, atk = 30, pdef = 10, mdef = 10, critRate = 2)),
-        AchievementDef("cult_80", "封号斗罗", "达到80级", "CULTIVATION", 80, AchievementRewards(hp = 1500, atk = 60, pdef = 20, mdef = 20, critRate = 5)),
-        AchievementDef("cult_100", "极限斗罗", "达到100级", "CULTIVATION", 100, AchievementRewards(hp = 3000, atk = 120, pdef = 40, mdef = 40, critRate = 8, critDmg = 15)),
-        AchievementDef("ring_1", "初获魂环", "获得第一个魂环", "SOUL_RING", 1, AchievementRewards(matk = 10, critRate = 1)),
-        AchievementDef("ring_3", "三环齐聚", "获得3个魂环", "SOUL_RING", 3, AchievementRewards(matk = 35, critRate = 3, critDmg = 10)),
-        AchievementDef("ring_5", "五环辉煌", "获得5个魂环", "SOUL_RING", 5, AchievementRewards(matk = 70, critRate = 5, critDmg = 20, hp = 300)),
-        AchievementDef("ring_9", "九环圆满", "获得9个魂环", "SOUL_RING", 9, AchievementRewards(hp = 500, matk = 200, critRate = 10, critDmg = 40)),
-        AchievementDef("battle_10", "十战勇士", "赢得10场战斗", "BATTLE", 10, AchievementRewards(hp = 100, atk = 10)),
-        AchievementDef("battle_50", "百战老兵", "赢得50场战斗", "BATTLE", 50, AchievementRewards(hp = 400, atk = 30, pdef = 5)),
-        AchievementDef("tower_10", "塔十层", "通关杀戮之都第10层", "TOWER", 10, AchievementRewards(hp = 200, atk = 15, matk = 10)),
-        AchievementDef("tower_30", "塔三十层", "通关杀戮之都第30层", "TOWER", 30, AchievementRewards(hp = 600, atk = 50, matk = 40, pdef = 10, mdef = 10, critRate = 3)),
-        AchievementDef("tower_50", "塔五十层", "通关杀戮之都第50层", "TOWER", 50, AchievementRewards(hp = 1500, atk = 120, matk = 100, pdef = 25, mdef = 25, critRate = 5, critDmg = 15)),
-        AchievementDef("prestige_1", "初次转生", "完成第一次神位传承", "PRESTIGE", 1, AchievementRewards(hp = 500, pdef = 20, mdef = 20)),
-        AchievementDef("prestige_3", "三生三世", "完成3次神位传承", "PRESTIGE", 3, AchievementRewards(hp = 2000, pdef = 60, mdef = 60, critDmg = 20))
-    )
-}
