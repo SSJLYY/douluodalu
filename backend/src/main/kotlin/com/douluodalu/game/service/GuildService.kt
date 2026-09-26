@@ -1,5 +1,7 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.dto.GuildBossRankEntry
+import com.douluodalu.game.dto.GuildBossRankResponse
 import com.douluodalu.game.dto.GuildBossResponse
 import com.douluodalu.game.dto.GuildMemberResponse
 import com.douluodalu.game.dto.LeaveGuildResponse
@@ -11,6 +13,7 @@ import com.douluodalu.game.model.GuildBossBalance
 import com.douluodalu.game.repository.GuildMemberRepository
 import com.douluodalu.game.repository.GuildRepository
 import com.douluodalu.game.repository.UserRepository
+import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.LocalDateTime
@@ -21,8 +24,17 @@ class GuildService(
     private val guildRepository: GuildRepository,
     private val guildMemberRepository: GuildMemberRepository,
     private val userRepository: UserRepository,
-    private val gameService: GameService
+    private val gameService: GameService,
+    /** 业务计数器（Micrometer，Spring Boot 自动配置 bean）；测试注入 SimpleMeterRegistry */
+    private val meterRegistry: MeterRegistry
 ) {
+    companion object {
+        // ===== 业务计数器名（ops Grafana 面板按名建面板，逐字契约，勿改） =====
+        const val METRIC_GUILD_BOSS_TOTAL = "douluo.guild.boss.total"
+
+        /** 周榜 entries 上限（契约：按 weeklyDamage 降序只含 >0 成员，最多 10 条） */
+        const val GUILD_BOSS_RANK_SIZE = 10
+    }
     fun getGuildList(): List<Guild> {
         return guildRepository.findAll()
     }
@@ -329,14 +341,19 @@ class GuildService(
         applyGuildLevelUps(guild)
 
         // 贡献累计：按伤害折算（每 CONTRIBUTION_PER_DAMAGE 点伤害 1 点贡献），
-        // 与金币奖励同为"按伤害"口径，胜负都有份，鼓励参与度
+        // 与金币奖励同为"按伤害"口径，胜负都有份，鼓励参与度；
+        // 周榜口径：本周伤害独立于总贡献逐次累加，每周一由 GuildWeeklyResetService 结算清零
         guildMemberRepository.findByUserId(userId)?.let {
             it.contribution += damage / GuildBossBalance.CONTRIBUTION_PER_DAMAGE
+            it.weeklyBossDamage += damage
             guildMemberRepository.save(it)
         }
 
         guildRepository.save(guild)
         userRepository.save(user)
+
+        // 业务计数器：挑战结算（胜败都计；Micrometer 不抛业务异常，不影响主流程）
+        counter(METRIC_GUILD_BOSS_TOTAL, "outcome", if (won) "win" else "lose")
 
         return GuildBossResponse(
             won = won,
@@ -348,5 +365,43 @@ class GuildService(
             message = (if (won) "宗门 Boss 挑战成功" else "造成了有效伤害，获得参与奖励") +
                     if (item == null) "；背包已满，掉落装备丢失" else ""
         )
+    }
+
+    /**
+     * 宗门 Boss 周榜（GET /api/guild/boss/rank）：按 weeklyBossDamage 降序，只含 >0 的成员，
+     * 最多 GUILD_BOSS_RANK_SIZE 条；myRank = 自己在全量降序名次（并列按 userId 升序稳定排序，
+     * 1-based；无伤害记录为 0——0 与「上榜但被 10 条截断」语义分离）。
+     * 昵称走 findAllById 批查防 N+1（getGuildMembers 先例）；不在宗门属业务拒绝：
+     * 抛 IllegalArgumentException（消息含「宗门」），由 GlobalExceptionHandler 统一转 400。
+     */
+    fun getGuildBossRank(userId: Long): GuildBossRankResponse {
+        val user = userRepository.findById(userId).orElse(null)
+            ?: throw IllegalArgumentException("请先加入宗门后查看周榜")
+        val guildId = user.player?.guildId
+            ?: throw IllegalArgumentException("请先加入宗门后查看周榜")
+        guildRepository.findById(guildId).orElse(null)
+            ?: throw IllegalArgumentException("请先加入宗门后查看周榜")
+
+        val ranked = guildMemberRepository.findByGuildId(guildId)
+            .filter { it.weeklyBossDamage > 0 }
+            .sortedWith(compareByDescending<GuildMember> { it.weeklyBossDamage }.thenBy { it.userId })
+        val top = ranked.take(GUILD_BOSS_RANK_SIZE)
+        val nicknames = userRepository.findAllById(top.map { it.userId })
+            .associate { it.id to it.nickname }
+        return GuildBossRankResponse(
+            entries = top.map {
+                GuildBossRankEntry(
+                    userId = it.userId,
+                    nickname = nicknames[it.userId] ?: "未知用户",
+                    weeklyDamage = it.weeklyBossDamage
+                )
+            },
+            myRank = ranked.indexOfFirst { it.userId == userId }.takeIf { it >= 0 }?.plus(1) ?: 0
+        )
+    }
+
+    /** 业务计数器薄封装（GameService.counter 同款）：Micrometer 计数为内存操作，不影响主流程 */
+    private fun counter(name: String, vararg tags: String) {
+        meterRegistry.counter(name, *tags).increment()
     }
 }

@@ -76,11 +76,19 @@ game:
 audit:
   # 保留天数：清理任务每日凌晨删除 created_at 早于 N 天前的记录；<=0 表示永久保留
   retention-days: ${AUDIT_RETENTION_DAYS:30}
-  # 清理任务开关（含 @EnableScheduling）。默认开；application-test.yml 显式关闭，
-  # 保证测试 profile 下调度器不启动、不引入抖动
+  # 清理任务开关（条件在 AuditLogCleanupService 类上）。默认开；application-test.yml 显式关闭，
+  # 保证测试 profile 下该任务 Bean 不注册、不引入抖动
   cleanup-enabled: ${AUDIT_CLEANUP_ENABLED:true}
   # 每日 03:00 执行（避开 00:00 整点高峰）
   cleanup-cron: "0 0 3 * * ?"
+
+# ==================== 宗门 Boss 周榜（第二十二轮） ====================
+guild:
+  # 周重置任务开关（条件在 GuildWeeklyResetService 类上）：每周一凌晨按本周 Boss 伤害
+  # 给每宗门前 3 名发奖并全量清零。默认开；application-test.yml 显式关闭防测试抖动
+  weekly-reset-enabled: ${GUILD_WEEKLY_RESET_ENABLED:true}
+  # 每周一 03:03 执行（错开审计清理任务的 03:00 整点）
+  weekly-reset-cron: "0 0 3 ? * MON"
 
 # ==================== 日志配置 ====================
 logging:

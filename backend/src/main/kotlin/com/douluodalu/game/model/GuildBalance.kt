@@ -18,6 +18,22 @@ object GuildBossBalance {
 
     /** 挑战 Boss 的贡献口径：每 CONTRIBUTION_PER_DAMAGE 点伤害记 1 点贡献（与金币奖励同为"按伤害"） */
     const val CONTRIBUTION_PER_DAMAGE = 1000L
+
+    // ======== 宗门Boss周榜（第二十二轮）========
+    // 每周一 03:03（GuildWeeklyResetService）按本周伤害（guild_member.weekly_boss_damage）降序
+    // 给每宗门前 3 名发奖后全量清零。数值依据：对齐宗门 Boss 单胜 bossCoin 量级
+    // （WIN_BOSS_COIN_BASE=6 + guildLevel → 1 级宗门单胜 7 币，20 级上限 26 币）：
+    //  - 冠军 50 币 ≈ 活跃玩家一周挑战（20~40 次）单胜产币（~140-280 币/周）的顶部溢价，
+    //    与签到第 7 天大奖 10 币、爬塔任务 2 币/日同量级，不打穿 bossCoin 定价（商店最低档 50 币）；
+    //  - 金币 5000 ≈ 主动日收入（~7000 金/日，见《数值仿真报告-90天.md》）的 0.7 天，
+    //    按周一次性发放不冲击日经济；2/3 名按 60%/40% 递减保持榜单梯度。
+    data class WeeklyBossRankReward(val bossCoin: Long, val gold: Long)
+
+    val WEEKLY_BOSS_RANK_REWARDS = listOf(
+        WeeklyBossRankReward(bossCoin = 50, gold = 5000), // 第 1 名
+        WeeklyBossRankReward(bossCoin = 30, gold = 3000), // 第 2 名
+        WeeklyBossRankReward(bossCoin = 20, gold = 2000)  // 第 3 名
+    )
 }
 
 /**

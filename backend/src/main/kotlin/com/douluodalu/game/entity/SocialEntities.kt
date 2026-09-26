@@ -62,7 +62,11 @@ class GuildMember(
     var contribution: Long = 0,
 
     @Column(name = "joined_at")
-    var joinedAt: LocalDateTime = LocalDateTime.now()
+    var joinedAt: LocalDateTime = LocalDateTime.now(),
+
+    /** 本周宗门 Boss 伤害（challengeBoss 逐次累加；每周一由 GuildWeeklyResetService 结算前 3 名后清零） */
+    @Column(name = "weekly_boss_damage", nullable = false)
+    var weeklyBossDamage: Long = 0
 )
 
 data class TalentId(

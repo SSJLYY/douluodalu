@@ -1,5 +1,6 @@
 package com.douluodalu.game.controller
 
+import com.douluodalu.game.dto.GuildBossRankResponse
 import com.douluodalu.game.dto.GuildListResponse
 import com.douluodalu.game.dto.GuildMyResponse
 import com.douluodalu.game.entity.Guild
@@ -157,6 +158,16 @@ class GuildController(
         } else {
             ResponseEntity.badRequest().body(mapOf("error" to "请先加入宗门"))
         }
+    }
+
+    /**
+     * 宗门 Boss 周榜（按本周伤害降序，只含 >0 成员，至多 10 条；myRank=自己名次，无伤害记录 0）。
+     * 未入宗门由服务层抛业务异常（消息含「宗门」），GlobalExceptionHandler 统一转 400。
+     */
+    @GetMapping("/boss/rank")
+    fun getGuildBossRank(auth: Authentication): ResponseEntity<GuildBossRankResponse> {
+        val userId = auth.principal as Long
+        return ResponseEntity.ok(guildService.getGuildBossRank(userId))
     }
 
     @GetMapping("/shop")

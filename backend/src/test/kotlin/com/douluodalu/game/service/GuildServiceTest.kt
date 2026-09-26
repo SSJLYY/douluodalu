@@ -14,8 +14,11 @@ import org.mockito.ArgumentCaptor
 import org.mockito.InjectMocks
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
+import org.mockito.Spy
 import org.mockito.kotlin.*
 import com.douluodalu.game.model.GuildBossBalance
+import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import java.time.LocalDateTime
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -36,6 +39,10 @@ class GuildServiceTest {
 
     @Mock
     private lateinit var gameService: GameService
+
+    /** 真实 Micrometer 注册表（Spy 包装保留真实计数行为；计数器断言用） */
+    @Spy
+    private val meterRegistry: MeterRegistry = SimpleMeterRegistry()
 
     @InjectMocks
     private lateinit var guildService: GuildService
@@ -747,5 +754,147 @@ class GuildServiceTest {
         val members = guildService.getGuildMembers(1L)
 
         assertEquals(listOf("甲", "未知用户"), members!!.map { it.nickname })
+    }
+
+    // ==================== 第二十二轮 宗门Boss周榜 ====================
+
+    /** 周榜用：造带 guildId 的用户并打桩 findById（userWith 固定 userId=1，不满足多成员场景） */
+    private fun stubGuildUser(id: Long, guildId: Long?, nickname: String = "n$id"): UserEntity {
+        val profile = PlayerProfileEntity(userId = id, level = 20)
+        profile.guildId = guildId
+        val user = UserEntity(id = id, username = "u$id", nickname = nickname, passwordHash = "h")
+        user.player = profile
+        doReturn(Optional.of(user)).whenever(userRepository).findById(id)
+        return user
+    }
+
+    @Test
+    fun `challengeBoss should accumulate weekly boss damage on the member row`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        val member = GuildMember(guildId = 9L, userId = 1L, role = "MEMBER")
+        doReturn(member).whenever(guildMemberRepository).findByUserId(1L)
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        assertNotNull(resp)
+        // 周榜口径：本周伤害逐次累加（与总贡献两条独立累计线），单次挑战正好 +damage
+        assertEquals(resp!!.damage, member.weeklyBossDamage)
+        assertEquals(resp.damage / GuildBossBalance.CONTRIBUTION_PER_DAMAGE, member.contribution)
+        verify(guildMemberRepository).save(member)
+    }
+
+    @Test
+    fun `challengeBoss should increment douluo_guild_boss_total counter with outcome tag`() {
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        // 胜：level 50 伤害下限 50*120=6000 >> 0.35*(1800+650)=857，恒胜
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        guildService.challengeBoss(1L)
+
+        assertEquals(1.0, meterRegistry.get(GuildService.METRIC_GUILD_BOSS_TOTAL)
+            .tag("outcome", "win").counter().count(),
+            "douluo.guild.boss.total{outcome=win} 应 +1（ops 指标契约名逐字）")
+
+        // 败：level 1 伤害上限 120+100(battleSoulPower)+159 < 857，恒败
+        userWith(gold = 0, level = 1, guildId = 9L)
+        guildService.challengeBoss(1L)
+
+        assertEquals(1.0, meterRegistry.get(GuildService.METRIC_GUILD_BOSS_TOTAL)
+            .tag("outcome", "lose").counter().count(),
+            "douluo.guild.boss.total{outcome=lose} 应 +1（同一计数器按 tag 分列）")
+
+        // 未入宗门的拒绝路径不计入计数器（仍只有 win/lose 两列）
+        userWith(gold = 0, level = 50, guildId = null)
+        assertNull(guildService.challengeBoss(1L))
+        assertEquals(2, meterRegistry.meters
+            .count { it.id.name == GuildService.METRIC_GUILD_BOSS_TOTAL })
+    }
+
+    @Test
+    fun `getGuildBossRank should sort descending include only positive damage and batch nicknames`() {
+        stubGuildUser(1L, 9L, "甲")
+        stubGuildUser(2L, 9L, "乙")
+        stubGuildUser(3L, 9L, "丙")
+        leaderGuild()
+        doReturn(listOf(
+            GuildMember(guildId = 9L, userId = 1L, weeklyBossDamage = 100L),
+            GuildMember(guildId = 9L, userId = 2L, weeklyBossDamage = 300L),
+            GuildMember(guildId = 9L, userId = 3L, weeklyBossDamage = 0L),
+            GuildMember(guildId = 9L, userId = 4L, weeklyBossDamage = 200L)
+        )).whenever(guildMemberRepository).findByGuildId(9L)
+        // 4 号用户行缺失（数据漂移）：列表接口降级为占位昵称，不整页 500
+        doReturn(listOf(
+            UserEntity(id = 1L, username = "a", nickname = "甲", passwordHash = "h"),
+            UserEntity(id = 2L, username = "b", nickname = "乙", passwordHash = "h"),
+            UserEntity(id = 3L, username = "c", nickname = "丙", passwordHash = "h")
+        )).whenever(userRepository).findAllById(any())
+
+        val rank = guildService.getGuildBossRank(1L)
+
+        // 降序、只含 >0 成员（3 号 0 伤害不入榜）
+        assertEquals(listOf(2L, 4L, 1L), rank.entries.map { it.userId })
+        assertEquals(listOf(300L, 200L, 100L), rank.entries.map { it.weeklyDamage })
+        assertEquals(listOf("乙", "未知用户", "甲"), rank.entries.map { it.nickname })
+        assertFalse(rank.entries.any { it.userId == 3L })
+        // myRank = 操作者全量降序名次（1-based）
+        assertEquals(3, rank.myRank)
+        // 昵称批查防 N+1：恰好 1 次 findAllById；findById 全链只有操作者这 1 次
+        verify(userRepository, times(1)).findAllById(any())
+        verify(userRepository, times(1)).findById(any())
+    }
+
+    @Test
+    fun `getGuildBossRank should return myRank 0 for a caller with no weekly damage`() {
+        stubGuildUser(1L, 9L)
+        stubGuildUser(2L, 9L)
+        leaderGuild()
+        doReturn(listOf(
+            GuildMember(guildId = 9L, userId = 1L, weeklyBossDamage = 0L),
+            GuildMember(guildId = 9L, userId = 2L, weeklyBossDamage = 50L)
+        )).whenever(guildMemberRepository).findByGuildId(9L)
+        doReturn(listOf(UserEntity(id = 2L, username = "b", nickname = "乙", passwordHash = "h")))
+            .whenever(userRepository).findAllById(any())
+
+        val rank = guildService.getGuildBossRank(1L)
+
+        // 自己 0 伤害不入榜（entries 只有他人），myRank=0
+        assertEquals(listOf(2L), rank.entries.map { it.userId })
+        assertEquals(0, rank.myRank)
+    }
+
+    @Test
+    fun `getGuildBossRank should cap entries at 10 while myRank reflects the full ranking`() {
+        stubGuildUser(1L, 9L)
+        leaderGuild(members = 12)
+        // 12 名成员伤害 = userId×10（1 号 10 分最低）→ 降序前 10 名为 userId 12..3
+        doReturn((1L..12L).map { GuildMember(guildId = 9L, userId = it, weeklyBossDamage = it * 10) })
+            .whenever(guildMemberRepository).findByGuildId(9L)
+        doReturn((1L..10L).map { UserEntity(id = it, username = "u$it", nickname = "n$it", passwordHash = "h") })
+            .whenever(userRepository).findAllById(any())
+
+        val rank = guildService.getGuildBossRank(1L)
+
+        assertEquals(10, rank.entries.size, "entries 最多 10 条（契约上限）")
+        assertEquals((12L downTo 3L).toList(), rank.entries.map { it.userId })
+        // 昵称只查上榜的 10 人（1 号不在内，不浪费批查）
+        verify(userRepository).findAllById((12L downTo 3L).toList())
+        // myRank 按全量降序算：1 号伤害垫底 → 第 12 名（与「无伤害记录 0」语义分离）
+        assertEquals(12, rank.myRank)
+    }
+
+    @Test
+    fun `getGuildBossRank should throw business exception for player without guild`() {
+        stubGuildUser(1L, null)
+
+        val ex = assertThrows(IllegalArgumentException::class.java) { guildService.getGuildBossRank(1L) }
+
+        // 消息含「宗门」：GlobalExceptionHandler 转 400 的既有语义
+        assertTrue(ex.message!!.contains("宗门"))
+        // 业务拒绝：不应触达 guild/member 查询
+        verify(guildRepository, never()).findById(any())
+        verify(guildMemberRepository, never()).findByGuildId(any())
     }
 }

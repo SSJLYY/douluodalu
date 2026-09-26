@@ -81,13 +81,22 @@ object GameBalance {
     const val WIN_GOLD_PER_MAP = 20L
     const val WIN_GOLD_PER_STAGE = 8L
     const val STAGES_PER_MAP = 15
-    const val MAX_MAP_ID = 7
+    // 第二十二轮地图扩展 8→11 张（索引 0~10，MAP_NAMES 同步追加 神王殿/至高神庭/创世之巅）：
+    // 怪物属性/经验/金币/掉落/Boss 币全部随 mapId 线性自适应，无需改公式（第十七轮校准成果保留）
+    const val MAX_MAP_ID = 10
 
     // ======== 掉落 ========
     const val BASE_DROP_CHANCE = 0.15
     const val DROP_CHANCE_PER_MAP = 0.02
     const val DROP_CHANCE_PER_STAGE = 0.005
     const val BOSS_EXTRA_DROP_CHANCE = 0.4
+    // 战斗掉落魂环的年份档位上限（第二十二轮地图扩展 8→10 张的配套，镜像 TOWER_RING_DROP_YEAR_CAP 先例）：
+    // 战斗掉落年份 = (mapId/2).coerceIn(0, CAP)。上限原为 4，在 mapId≥8（神王殿/至高神庭/创世之巅）
+    // 时产出 tier-4（百万年）环——负荷 60 万~999 万，在 90 天仿真容量规模（~40 万）下 100% 装不下，
+    // 推图终局死掉落率飙到 66.8%，打破负荷回路「30 天后死掉落率 <5%」收敛锁。封顶 3 档后
+    // 8-10 图与 6-7 图同产出 tier-3（负荷 6 万~99.9 万，可装），tier-4 按下方塔环区块的既定设计
+    // 保留给后续轮回内容。地图 0-7（原 8 张图）取值逐位零漂移，第十七轮校准成果不受影响。
+    const val BATTLE_RING_DROP_YEAR_CAP = 3
 
     // ======== 魂环负荷（任务#21/#22）========
     // 吸收容量 = 根骨 × RING_CAPACITY_ROOT_MULT（RingLoadCalculator.absorptionCapacity）。

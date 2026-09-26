@@ -281,6 +281,11 @@ class ApiClient {
         });
     }
 
+    /** 宗门 Boss 周榜（GET 照现有无 body 方法惯例）；调用方对失败静默降级，不阻塞挑战主功能 */
+    async guildBossRank() {
+        return this.request<GuildBossRank>('/api/guild/boss/rank');
+    }
+
     async getGuildShopItems() {
         return this.request<ShopItem[]>('/api/guild/shop');
     }
@@ -809,6 +814,22 @@ export interface GuildBossResult {
     bossCoinGained: number;
     item: BackpackItem;
     message: string;
+}
+
+/** GET /api/guild/boss/rank 单行：weeklyDamage 为该成员本周累计 Boss 伤害（仅 >0 入榜） */
+export interface GuildBossRankEntry {
+    userId: number;
+    nickname: string;
+    weeklyDamage: number;
+}
+
+/**
+ * GET /api/guild/boss/rank 响应（JWT，需在宗门内，不在宗门由 request 统一抛错）：
+ * entries 按 weeklyDamage 降序、最多 10 条；myRank 为本人本周排名（本周无伤害按 ≤0 视为未上榜）。
+ */
+export interface GuildBossRank {
+    entries: GuildBossRankEntry[];
+    myRank: number;
 }
 
 export const api = new ApiClient();

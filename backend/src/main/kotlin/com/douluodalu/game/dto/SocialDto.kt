@@ -44,6 +44,14 @@ data class GuildBossResponse(
 )
 
 /**
+ * 宗门 Boss 周榜行（GET /api/guild/boss/rank）。entries 按 weeklyDamage 降序、只含
+ * weeklyDamage>0 的成员、最多 10 条；myRank 为请求者的全量降序名次（1-based，无伤害记录为 0）。
+ */
+data class GuildBossRankEntry(val userId: Long, val nickname: String, val weeklyDamage: Long)
+
+data class GuildBossRankResponse(val entries: List<GuildBossRankEntry>, val myRank: Int = 0)
+
+/**
  * 退出宗门响应（POST /api/guild/leave）。message 为兼容字段（旧契约固定文案）：
  * 普通退出 disbanded=false、transferredTo=null；宗主退出时服务端自动处理——
  * 有其他成员则转让给加入最早者（transferredTo=继任者昵称），仅剩自己则解散（disbanded=true）。

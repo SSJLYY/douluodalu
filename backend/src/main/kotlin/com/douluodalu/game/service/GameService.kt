@@ -90,7 +90,9 @@ class GameService(
         )
         val MAP_NAMES = listOf(
             "圣魂村", "诺丁城外", "星斗外围", "落日森林",
-            "极北之地", "海神岛", "杀戮之都外域", "神界废墟"
+            "极北之地", "海神岛", "杀戮之都外域", "神界废墟",
+            // 第二十二轮地图扩展（第十九轮地图提案续神界线，索引 8~10）
+            "神王殿", "至高神庭", "创世之巅"
         )
 
         /** 回合制战斗结算结果（纯函数产出，LongRunSimulationTest 直接复用保证镜像不漂移） */
@@ -734,7 +736,8 @@ class GameService(
                         1 -> "BONE"
                         else -> "CORE"
                     }
-                    val yearOrdinal = (mapId / 2).coerceIn(0, 4)
+                    // 战斗掉落环年份档位随地图推进（8-10 图封顶 tier-3，依据见 BATTLE_RING_DROP_YEAR_CAP 注释）
+                    val yearOrdinal = (mapId / 2).coerceIn(0, GameBalance.BATTLE_RING_DROP_YEAR_CAP)
                     val qualityOrdinal = Random.nextInt(0, 5)
                     val item = BackpackItemEntity(
                         userId = userId,

@@ -30,10 +30,14 @@ cache:
   rank:
     enabled: false
 
-# 关闭审计清理调度（SchedulingConfig / AuditLogCleanupService 整 Bean 不注册），
+# 关闭审计清理调度（AuditLogCleanupService 整 Bean 不注册），
 # 防止定时任务在测试运行期间触发造成抖动
 audit:
   cleanup-enabled: false
+
+# 关闭宗门 Boss 周榜重置调度（GuildWeeklyResetService 整 Bean 不注册），同 audit 口径防抖动
+guild:
+  weekly-reset-enabled: false
 
 logging:
   level:

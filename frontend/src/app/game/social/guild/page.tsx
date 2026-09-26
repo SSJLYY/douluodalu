@@ -1,10 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import api, { GuildBossResult, GuildMemberInfo, GuildSummary, ShopItem } from '@/lib/api';
+import api, { GuildBossRank, GuildBossResult, GuildMemberInfo, GuildSummary, ShopItem } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
 import { useAuth } from '@/contexts/AuthContext';
 import { BootState, ErrorPanel, EmptyPanel } from '@/components/StateViews';
+import BossRankPanel from '@/components/BossRankPanel';
 
 /** ISO-8601 → 本地化「月-日 时:分」；解析失败原样截断，不让坏数据炸渲染 */
 function formatJoinedAt(iso: string): string {
@@ -33,6 +34,8 @@ export default function GuildPage() {
     // 不应把整个「我的宗门」卡打成错误态，降级为卡内错误+重试即可
     const [members, setMembers] = useState<GuildMemberInfo[]>([]);
     const [membersError, setMembersError] = useState('');
+    // 宗门 Boss 周榜：null = 未加载/加载失败（整块静默不渲染，纯展示功能不阻塞挑战主流程）
+    const [bossRank, setBossRank] = useState<GuildBossRank | null>(null);
 
     const loadMembers = useCallback(async (joined: boolean) => {
         if (!joined) {
@@ -81,12 +84,35 @@ export default function GuildPage() {
         }
     }, []);
 
+    // 周榜拉取失败静默（置 null 不渲染），不打红字/不重试打扰——Boss 挑战主功能不受影响
+    const loadBossRank = useCallback(async () => {
+        try {
+            setBossRank(await api.guildBossRank());
+        } catch {
+            setBossRank(null);
+        }
+    }, []);
+
     useEffect(() => {
         queueMicrotask(() => {
             loadGuilds();
             loadGuildShop();
         });
     }, [loadGuilds, loadGuildShop]);
+
+    // 周榜拉取时机①：进入宗门页且确认在宗门内（myGuild 就绪）后拉一次；退出/解散（id 变 null）清空不渲染。
+    // 依赖 id 而非对象引用：loadGuilds 重建 myGuild 对象（捐献/踢人等）不会重复拉榜；
+    // setState 全部走微任务回调（照本页 loadGuilds 惯例），避免 effect 体内同步 setState
+    const myGuildId = myGuild?.id ?? null;
+    useEffect(() => {
+        queueMicrotask(() => {
+            if (myGuildId === null) {
+                setBossRank(null);
+                return;
+            }
+            void loadBossRank();
+        });
+    }, [myGuildId, loadBossRank]);
 
     const handleCreateGuild = () => runAction(
         () => api.createGuild(newGuildName),
@@ -160,6 +186,8 @@ export default function GuildPage() {
         (result) => {
             setBossResult(result);
             setMessage(`${result.message}，获得 ${result.goldGained} 金币、${result.bossCoinGained} Boss币和 1 件装备`);
+            // 周榜拉取时机②：挑战成功后立即刷新，本次伤害即时入榜（失败静默，不影响结果展示）
+            void loadBossRank();
         },
         '挑战失败',
     ).then(loadGuilds);
@@ -397,6 +425,10 @@ export default function GuildPage() {
                             <div className="mt-3 text-sm text-gray-100">
                                 伤害 {bossResult.damage} / Boss生命 {bossResult.bossHp}
                             </div>
+                        )}
+                        {/* 本周伤害榜：仅Boss卡（=已在宗门内）渲染；数据未就绪/拉取失败静默整块隐藏 */}
+                        {bossRank && (
+                            <BossRankPanel rank={bossRank} myUserId={user?.userId ?? null} />
                         )}
                     </div>
 

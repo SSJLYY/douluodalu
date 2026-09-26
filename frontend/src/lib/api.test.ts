@@ -122,6 +122,22 @@ describe('ApiClient.request', () => {
         expect(init.method).toBe('POST');
         expect(JSON.parse(init.body as string)).toEqual({ questId: 'battle_wins' });
     });
+
+    it('guildBossRank 走 GET /api/guild/boss/rank（无 body，带 JWT），透传 GuildBossRank', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+            entries: [{ userId: 1, nickname: '唐三', weeklyDamage: 1200000 }],
+            myRank: 1,
+        }));
+
+        await expect(api.guildBossRank()).resolves.toMatchObject({ myRank: 1, entries: [{ nickname: '唐三' }] });
+
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe(`${API_BASE}/api/guild/boss/rank`);
+        // GET 照现有无 body 方法惯例：不传 options（method 缺省），不携带请求体
+        expect(init.method).toBeUndefined();
+        expect(init.body).toBeUndefined();
+        expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer tok');
+    });
 });
 
 /** 新形状合法单条：GameState.achievements 升级后的元素 */

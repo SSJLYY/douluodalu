@@ -590,4 +590,63 @@ class GameServiceTest {
             "2 转修炼产出应为基础区间 [20,25)×1.2=[24,30)（实测 ${response.soulPowerGained}）")
         assertEquals(100L + response.soulPowerGained, response.totalSoulPower)
     }
+
+    // ==================== 第二十二轮 地图扩展 8→11 ====================
+
+    @Test
+    fun `map expansion should expose 11 maps with MAX_MAP_ID 10`() {
+        assertEquals(11, GameService.MAP_NAMES.size)
+        assertEquals(10, GameBalance.MAX_MAP_ID)
+        assertEquals(listOf("神王殿", "至高神庭", "创世之巅"), GameService.MAP_NAMES.drop(8))
+    }
+
+    @Test
+    fun `monsterName should use new map names for maps 8 to 10`() {
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+
+        // 胜负无关：响应的 monsterName 由 MAP_NAMES.getOrElse(mapId) 组装，逐图钉名称
+        val names = (8..10).map { mapId ->
+            val p = profile()
+            p.currentMapId = mapId
+            p.currentStage = 1
+            p.currentHp = 350L
+            whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+            gameService.battle(1L).monsterName
+        }
+
+        assertEquals(listOf("神王殿·1层怪物", "至高神庭·1层怪物", "创世之巅·1层怪物"), names)
+    }
+
+    @Test
+    fun `battle victory at final map 10 stage 15 should stay put even with autoAdvanceMap`() {
+        // 确定性获胜设定（最坏 RNG 路径核算）：level 30 基础 atk 350/matk 175/maxHp 1600/pdef 60
+        // + 满级魂骨（5×2.2×11=121 倍 → atk+4840/hp+18150）+ 成就 ring_9+tower_100
+        // （matk+600/pdef+100/mdef+100/hp+8500）。玩家 atk 5690/matk 775/双防 160/maxHp 28250；
+        // 10-15 怪 hp 8960/atk 742/双防 259。最坏 30 回合全魔法+零浮动+不暴击 → 每回合
+        // 775×0.4357=337 伤，27 回合内必杀；怪每回合至多 (742+147)×0.5556=493 伤，
+        // 27 回合至多 13311 << 28250，任何 RNG 路径都必胜
+        val p = PlayerProfileEntity(userId = 1L, level = 30)
+        p.currentMapId = 10
+        p.currentStage = 15
+        p.currentHp = 28_250L
+        p.autoAdvanceMap = true
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(listOf(EquippedBone(userId = 1L, slotIndex = 0, boneId = 1L, yearOrdinal = 4, qualityOrdinal = 4, enhanceLevel = 100)))
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(achievementRepo.findByUserId(1L)).thenReturn(listOf(
+            AchievementEntity(userId = 1L, achievementId = "ring_9"),
+            AchievementEntity(userId = 1L, achievementId = "tower_100")
+        ))
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+
+        val response = gameService.battle(1L)
+
+        assertTrue(response.won, "满配 level 30 打 10-15 怪任何 RNG 路径都应必胜")
+        // 已是最后一图（mapId == MAX_MAP_ID）：autoAdvanceMap 也不再 +1，驻留 10-15
+        assertEquals(10, p.currentMapId)
+        assertEquals(15, p.currentStage)
+    }
 }

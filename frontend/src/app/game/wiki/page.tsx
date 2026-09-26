@@ -167,6 +167,10 @@ const WIKI_CATEGORIES = [
             { name: '海神岛', id: 5, description: '适合51-60级' },
             { name: '杀戮之都外域', id: 6, description: '适合61-70级' },
             { name: '神界废墟', id: 7, description: '适合71-80级' },
+            // 高阶三图与后端地图扩展同步（id = currentMapId，索引 8/9/10）
+            { name: '神王殿', id: 8, description: '适合 Lv.220+，神王领域' },
+            { name: '至高神庭', id: 9, description: '适合 Lv.260+，至高神座' },
+            { name: '创世之巅', id: 10, description: '终局之地，Lv.300+ 创世试炼' },
         ]
     },
 ];

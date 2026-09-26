@@ -727,7 +727,8 @@ class LongRunSimulationTest {
             if (rng.nextDouble() < dropChance) {
                 if (bag.size < bagCap) {
                     val type = rng.nextInt(3)
-                    val item = SimItem(type, (oldMap / 2).coerceIn(0, 4), rng.nextInt(5), 100 + rndInt(900))
+                    // 镜像 GameService 战斗掉落环年份（8-10 图封顶 tier-3，同源 BATTLE_RING_DROP_YEAR_CAP）
+                    val item = SimItem(type, (oldMap / 2).coerceIn(0, GameBalance.BATTLE_RING_DROP_YEAR_CAP), rng.nextInt(5), 100 + rndInt(900))
                     bag.add(item)
                     s.dropsGained++
                     if (item.type == 0) {

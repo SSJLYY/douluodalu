@@ -8,13 +8,13 @@ import { PRESTIGE_MIN_LEVEL, prestigeHint } from '@/lib/prestige';
 import { awakenToast, REAWAKEN_COST_GOLD, soulPoolHint, soulRarityMeta } from '@/lib/soul';
 import { RESCHOOL_COST_GOLD, SCHOOL_META, schoolBadgeMeta, schoolUnlockHint, schoolUnlocked } from '@/lib/school';
 import { useGameData } from '@/lib/hooks';
+import { MAP_NAMES } from '@/lib/maps';
 import { BootState } from '@/components/StateViews';
 import BattleReplay from '@/components/BattleReplay';
 import CheckinCard from '@/components/CheckinCard';
 import DailyQuestsCard from '@/components/DailyQuestsCard';
 import PowerDetailPanel from '@/components/PowerDetailPanel';
 
-const MAP_NAMES = ['圣魂村', '诺丁城外', '星斗外围', '落日森林', '极北之地', '海神岛', '杀戮之都外域', '神界废墟'];
 const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣', '魂斗罗', '封号斗罗', '极限斗罗', '半神', '神祇', '神王', '至高神王', '创世神'];
 
 // 模块级标记：跨组件StrictMode双挂载/客户端导航只领取一次离线收益（刷新页面会重新领取，符合放置游戏惯例）
