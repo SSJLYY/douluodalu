@@ -286,6 +286,16 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 5. **集成验证**：mvn test 基线 178→**197 全绿**（MartialSoulPoolTest 8 + MartialSoulIntegrationTest 10）；真库冒烟：首醒免费写入/重醒扣金/金币不足拦截/3转池 12 连醒无 MYTHIC（门槛生效）/soulRarity 反查/七行恒等（soul 行 141，power 115→256）；浏览器 E2E：徽章/重醒弹窗全流程（取消+确认）/第七行/375px 零溢出/console 0 error。集成期两个"疑点"均为冒烟脚本自身笔误（读错 JSON 层级、测试预算少给 1 万金），后端零缺陷。
 6. **遗留**：流派系统（SUPPORT/CONTROL/ASSASSIN 解锁门槛+流派系数，shared isSchoolUnlocked/doChooseSchool 参考就绪）为觉醒第二轮增量；武魂技能（缠绕/无视防御）需技能系统支撑（文档 §16.1）；battleSoulPower 随武魂品质浮动后宗门 Boss 伤害随之变化（预期行为）。
 
+## 🎓 第十九轮：流派系统（觉醒第三增量）（2026-09-26）
+
+1. **流派数据（后端）**：6 流派从 shared ModelsExt.kt 逐字移植——均衡/物理/法系 3 基础开局可选，辅助（Lv.50+1转）/控制（Lv.70+2转）/暗杀（Lv.90+3转）3 特殊门槛解锁；SchoolMods 全系数表（如暗杀 atk×1.40/双防×0.60/暴击+12%/爆伤+15%，物理 atk×1.30/魔攻×0.45）。系数口径注释写死：作用于「基础(已乘转生)+装备/成就/武魂加成(已乘转生)」之和（对齐 shared「基础+武魂之后乘」），暴击走加数；chosenSchool=null 恒等零漂移。
+2. **选择流程**：`POST /api/action/school`（照 breakthrough 惯例 200+success=false 拦截；校验顺序 未知→已选→门槛→扣金）；首选免费、重选 `RESCHOOL_COST_GOLD=5000`（对齐重醒惯例）；转生不清流派；**选流派不重 roll 武魂**（shared 会 roll——实现分歧注释留档）；零新增掷点（197 基线零漂移可保）。
+3. **系数接入（四处同源）**：playerCombatStats（atk/matk/pdef/mdef 乘 mod、暴击加数）+ maxHp 乘在加总后（`schoolScaledMaxHp`，武魂 hp 吃到系数，对齐 shared 口径）+ battle/tower/getGameState 的 power 字段全部接入（偏离契约处：battle/tower power 也接入，保证四处口径一致并纳入塔胜率）；**战力明细七行→八行**（school 行差值法，恒等由构造保证：七行之和≡不含流派、八行之和≡含流派）。
+4. **仿真镜像**：SimPlayer/EquipSimPlayer 第 1 天选 BALANCED 建模（温和系数），全部走生产纯函数无手抄；收敛锁原样通过（9/9 槽、死环率 0%、利用率 72.6%）；deltas 温和正向：90 天等级 22→29、推图 6-1→7-2。
+5. **前端**：状态卡流派徽章（已选=可点重选入口）+ 选择弹窗（六卡列表：icon/定位/系数摘要/门槛状态，未达标禁用带当前进度、当前项标「当前」）；战力明细第 8 行 🎓流派（四~八行动态回退）；lib/school.ts 纯函数（schoolUnlocked/schoolRequirementText 与后端同口径）；wiki 流派系统条目（9 分类）。测试 59→**72**（含修复上次超时智能体残留的半成品：chooseSchool 方法缺类型定义）。
+6. **集成验证**：mvn test 基线 197→**213 全绿**（SchoolIntegrationTest 14 + BattleMathTest 2）；真库冒烟：门槛拦截（精确当前进度提示）/PHYSICAL 免费选（atk×1.30、matk 13=30×0.45 逐位）/同派拒绝/无金拒绝/改选扣金 5000/SUPPORT 门槛解锁（matk 271=302×0.90 截断）/八行恒等（school 行 40）；浏览器 E2E：徽章/弹窗六卡门槛状态/当前标记/375px 零溢出/console 0 error。
+7. **遗留**：武魂 school 归属字段与流派池过滤（shared randomAwakenForSchool 当前恒等全池，实装无增益）；武魂技能（文档 §16.1，需技能架构）；battleSoulPower 与流派系数未挂钩（宗门 Boss 伤害不受流派影响，口径留档）。
+
 ---
 
 ## 🔮 后续建议
