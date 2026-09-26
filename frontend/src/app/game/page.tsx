@@ -274,6 +274,17 @@ export default function GamePage() {
                                     </>
                                 )}
                             </div>
+                            {/* 武魂专属技能名：徽章行下方小字展示（页内可见优先于 title）。
+                                后端升级前 soulSkillName 缺失/未觉醒 null → 不渲染；truncate + max-w-full 防 375px 溢出 */}
+                            {p.soulSkillName && (
+                                <span
+                                    data-testid="soul-skill-name"
+                                    title={`武魂专属技能：${p.soulSkillName}（冷却制自动释放）`}
+                                    className="max-w-full truncate text-[11px] text-muted"
+                                >
+                                    技能：{p.soulSkillName}
+                                </span>
+                            )}
                             {p.martialSoulName ? (
                                 <button
                                     data-testid="reawaken-btn"

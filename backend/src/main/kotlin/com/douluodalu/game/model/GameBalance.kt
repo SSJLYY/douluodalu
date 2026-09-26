@@ -264,11 +264,36 @@ object GameBalance {
     /** id → 定义（解锁判定 / 属性加成求和 / 状态合成三处同源，防止数值漂移） */
     val ACHIEVEMENT_BY_ID = AchievementDefs.all.associateBy { it.id }
 
+    // ======== 武魂技能（第二十轮） ========
+    // 数值锚点：shared 引擎 Models.kt SkillType/Skill **逐字移植**（shared 为唯一权威，若调参需
+    // 两侧同步）。SkillDef 取 shared Skill 的 name/type/power/cooldown 四字段（description 为
+    // 展示文案，后端无消费场景不移植）。触发模型为冷却制、零新增掷点：技能在第 r 回合（1-based）
+    // 释放 ⟺ (r-1) % cooldown == 0（cooldown 3~5 → 首回合即放，之后每 N 回合一次）；技能回合的
+    // 玩家三掷照常发生（RNG 流逐位不变），技能只改写该回合玩家攻击的伤害结算或改为治疗
+    // （结算语义见 GameService.resolveBattle 注释）。BERSERK（狂暴打击）shared 无武魂挂载、
+    // 本轮不实现结算——resolveBattle 回落普通攻击（注释留档，接入时同步 shared 狂暴语义）。
+    enum class SkillType(val displayName: String) {
+        SINGLE_DAMAGE("单体攻击"), MULTI_HIT("多段攻击"), HEAL("治疗回复"),
+        IGNORE_DEFENSE("无视防御"), BERSERK("狂暴打击")
+    }
+
+    data class SkillDef(val name: String, val type: SkillType, val power: Int, val cooldown: Int)
+
+    /**
+     * IGNORE_DEFENSE 破甲系数：defFactor 用 def×0.5 计算（软化而非完全无视）。
+     * 标定依据：shared「破甲击」系（天使圣光/修罗斩）文案为「无视防御」，若按字面完全无视
+     * （defFactor 恒 1.0），技能相对普攻的增量会随怪物防御无限放大——def→∞ 时普攻被 0.1 下限
+     * 夹死而技能不衰减，高防图收益失控；def×0.5 下破甲收益与防御成长同阶（对任何 def 恒等于
+     * 「减半对方防御」），可被仿真收敛锁约束，故按 shared 破甲击系先例软化并在此留档。
+     */
+    const val SKILL_DEF_IGNORE_FACTOR = 0.5
+
     // ======== 武魂池（觉醒） ========
     // 数值锚点：设计文档 §2.1（12 武魂 × 七属性表）、§2.2（觉醒概率权重）、§2.3（品质池随转数扩展），
     // 定义从 shared 引擎 Models.kt MartialSoulPool **逐字移植**（shared 为唯一权威，若调参需两侧同步；
-    // 技能/流派/自动金币加成字段本轮不消费，故不移植）。rarity 复用本模块既有 Rarity 枚举
-    // （枚举名与 shared 逐字一致：COMMON/UNCOMMON/RARE/EPIC/LEGENDARY/MYTHIC）。
+    // 流派/自动金币加成字段后端无消费场景，仍不移植；技能字段已由第二十轮逐字移植，见上方技能区块）。
+    // rarity 复用本模块既有 Rarity 枚举（枚举名与 shared 逐字一致：
+    // COMMON/UNCOMMON/RARE/EPIC/LEGENDARY/MYTHIC）。
     data class MartialSoulDef(
         val name: String,
         val rarity: Rarity,
@@ -278,24 +303,26 @@ object GameBalance {
         val critRate: Int,
         val critDmg: Int,
         val pdef: Int,
-        val mdef: Int
+        val mdef: Int,
+        /** 武魂技能（shared MartialSoul.skill 逐字移植；12 条全部非空） */
+        val skill: SkillDef
     )
 
-    // §2.1 十二武魂（字段序：name, rarity, baseHp, baseAtk, baseMatk, critRate, critDmg, pdef, mdef；
-    // 与 shared MartialSoul 前九参逐条对照核验）
+    // §2.1 十二武魂（字段序：name, rarity, baseHp, baseAtk, baseMatk, critRate, critDmg, pdef, mdef, skill；
+    // 与 shared MartialSoul 逐条对照核验——九属性逐字一致，技能 (type, power, cooldown) 取 shared Skill 实参）
     val MARTIAL_SOULS = listOf(
-        MartialSoulDef("蓝银草", Rarity.COMMON, 50, 20, 10, 5, 150, 5, 5),
-        MartialSoulDef("幽冥灵猫", Rarity.COMMON, 40, 25, 5, 10, 150, 3, 3),
-        MartialSoulDef("柔骨兔", Rarity.UNCOMMON, 80, 30, 15, 8, 160, 8, 8),
-        MartialSoulDef("蓝银皇", Rarity.UNCOMMON, 100, 40, 30, 8, 160, 10, 12),
-        MartialSoulDef("七宝琉璃塔", Rarity.RARE, 120, 50, 60, 12, 180, 15, 20),
-        MartialSoulDef("邪火凤凰", Rarity.RARE, 110, 55, 70, 15, 200, 12, 10),
-        MartialSoulDef("白虎", Rarity.RARE, 200, 60, 20, 10, 170, 25, 15),
-        MartialSoulDef("昊天锤", Rarity.EPIC, 250, 80, 30, 12, 200, 30, 20),
-        MartialSoulDef("九宝琉璃塔", Rarity.EPIC, 180, 75, 90, 15, 200, 20, 25),
-        MartialSoulDef("六翼天使", Rarity.LEGENDARY, 350, 120, 100, 18, 220, 35, 30),
-        MartialSoulDef("海神三叉戟", Rarity.LEGENDARY, 300, 130, 120, 15, 250, 30, 35),
-        MartialSoulDef("修罗魔剑", Rarity.MYTHIC, 500, 200, 150, 25, 300, 40, 35)
+        MartialSoulDef("蓝银草", Rarity.COMMON, 50, 20, 10, 5, 150, 5, 5, SkillDef("缠绕", SkillType.SINGLE_DAMAGE, 140, 3)),
+        MartialSoulDef("幽冥灵猫", Rarity.COMMON, 40, 25, 5, 10, 150, 3, 3, SkillDef("幽冥突刺", SkillType.MULTI_HIT, 100, 4)),
+        MartialSoulDef("柔骨兔", Rarity.UNCOMMON, 80, 30, 15, 8, 160, 8, 8, SkillDef("腰弓", SkillType.SINGLE_DAMAGE, 180, 4)),
+        MartialSoulDef("蓝银皇", Rarity.UNCOMMON, 100, 40, 30, 8, 160, 10, 12, SkillDef("蓝银囚笼", SkillType.SINGLE_DAMAGE, 160, 3)),
+        MartialSoulDef("七宝琉璃塔", Rarity.RARE, 120, 50, 60, 12, 180, 15, 20, SkillDef("七宝转出", SkillType.HEAL, 30, 5)),
+        MartialSoulDef("邪火凤凰", Rarity.RARE, 110, 55, 70, 15, 200, 12, 10, SkillDef("凤凰啸天击", SkillType.SINGLE_DAMAGE, 220, 4)),
+        MartialSoulDef("白虎", Rarity.RARE, 200, 60, 20, 10, 170, 25, 15, SkillDef("白虎烈光波", SkillType.MULTI_HIT, 120, 4)),
+        MartialSoulDef("昊天锤", Rarity.EPIC, 250, 80, 30, 12, 200, 30, 20, SkillDef("乱披风锤法", SkillType.MULTI_HIT, 150, 5)),
+        MartialSoulDef("九宝琉璃塔", Rarity.EPIC, 180, 75, 90, 15, 200, 20, 25, SkillDef("九宝护体", SkillType.HEAL, 50, 5)),
+        MartialSoulDef("六翼天使", Rarity.LEGENDARY, 350, 120, 100, 18, 220, 35, 30, SkillDef("天使圣光", SkillType.IGNORE_DEFENSE, 180, 4)),
+        MartialSoulDef("海神三叉戟", Rarity.LEGENDARY, 300, 130, 120, 15, 250, 30, 35, SkillDef("海神之怒", SkillType.SINGLE_DAMAGE, 250, 5)),
+        MartialSoulDef("修罗魔剑", Rarity.MYTHIC, 500, 200, 150, 25, 300, 40, 35, SkillDef("修罗斩", SkillType.IGNORE_DEFENSE, 300, 5))
     )
 
     private val MARTIAL_SOUL_BY_NAME = MARTIAL_SOULS.associateBy { it.name }

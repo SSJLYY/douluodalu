@@ -269,6 +269,41 @@ class MartialSoulIntegrationTest {
         assertEquals(resp.power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige)
     }
 
+    // ======== 第二十轮武魂技能 ========
+
+    @Test
+    fun `battle log carries soul skill name for awakened player`() {
+        // 蓝银草·缠绕（SINGLE 140/3）：第 1 回合首放（log 首行带技能名），冷却 3 → 第 2 回合不放
+        val p = profile()
+        p.martialSoulName = "蓝银草"
+        p.currentHp = 350L
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+
+        val resp = gameService.battle(1L)
+
+        assertTrue(resp.won, "level=5 满血（蓝银草加成）打 1-1 怪应确定性获胜")
+        assertEquals("缠绕", resp.battleLog.first().skillName, "第 1 回合应首放武魂技能")
+        assertTrue(resp.battleLog.drop(1).all { it.skillName == null }, "cooldown=3 时第 2 回合不应释放")
+    }
+
+    @Test
+    fun `profile dto exposes soulSkillName from soul lookup and null when unawakened`() {
+        val awakened = profile()
+        awakened.martialSoulName = "白虎"
+        stubGameState(awakened)
+        whenever(achievementService.unlockedBonus(1L)).thenReturn(EquipmentBonus(0, 0))
+        assertEquals("白虎烈光波", gameService.getGameState(1L).profile.soulSkillName)
+
+        val plain = profile()
+        stubGameState(plain)
+        whenever(achievementService.unlockedBonus(1L)).thenReturn(EquipmentBonus(0, 0))
+        assertNull(gameService.getGameState(1L).profile.soulSkillName, "未觉醒 soulSkillName 为 null")
+    }
+
     /** getGameState 的仓库/服务桩（空装备空成就，GameServiceTest 同款接线；p 为注册进桩的存档实例） */
     private fun stubGameState(p: PlayerProfileEntity) {
         whenever(profileRepo.findByUserId(1L)).thenReturn(p)

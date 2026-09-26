@@ -39,6 +39,8 @@ import kotlin.random.Random
  *   - awaken()               觉醒镜像（第十八轮：GameService.awaken + GameBalance.rollMartialSoul/soulBonusOf，
  *                            首醒免费/重醒 REAWAKEN_COST_GOLD；第 1 天首醒、每转重醒一次；
  *                            roll 注入镜像自身 rng、武魂加成计入战斗属性与塔战力），改动需同步
+ *   - soulSkill()            武魂技能镜像（第二十轮：GameService.soulSkillOf 反查随 CombatStats 进
+ *                            resolveBattle——技能经生产纯函数自动生效，镜像零额外公式），改动需同步
  *   - chooseSchool()         流派镜像（第十九轮：GameService.chooseSchool + GameBalance.SCHOOLS）：
  *                            第 1 天免费选 BALANCED（温和系数建模，不重 roll 武魂、不消耗掷点），
  *                            系数经 GameService.schoolModsOf/playerCombatStats/schoolScaledMaxHp/
@@ -161,6 +163,9 @@ class LongRunSimulationTest {
         /** 武魂加成镜像（GameService.soulBonusOf 同源纯函数：反查武魂池 + applyPrestige） */
         fun soulBonusOf(): EquipmentBonus = GameService.soulBonusOf(martialSoul?.name, prestigeCount)
 
+        /** 武魂技能镜像（第二十轮，GameService.soulSkillOf 同源纯函数：随 CombatStats 进 resolveBattle） */
+        fun soulSkill(): GameBalance.SkillDef? = GameService.soulSkillOf(martialSoul?.name)
+
         /** 流派系数镜像（GameService.schoolModsOf 同源纯函数：chosenSchool 反查 mods） */
         fun schoolMods(): GameBalance.SchoolMods? = GameService.schoolModsOf(chosenSchool?.name)
 
@@ -259,11 +264,12 @@ class LongRunSimulationTest {
             // 成就七字段加成按已解锁集合并入（与生产 bonusFor 口径一致，含转生倍率）；
             // 战斗属性（含五属性、武魂与流派系数）直接调生产纯函数 playerCombatStats 组装，与 battle() 逐位同源
             val school = schoolMods()
-            val player = GameService.playerCombatStats(level, prestigeCount, equip, school)
+            // 第二十轮武魂技能镜像：soulSkillOf 同源反查随包进 resolveBattle（生产 battle 同式）
+            val player = GameService.playerCombatStats(level, prestigeCount, equip, school, soulSkill())
             // 第十九轮流派镜像：maxHp 乘在「基础+加成包」加总后（GameService.schoolScaledMaxHp 同源）
             val maxHp = GameService.schoolScaledMaxHp(scaledBaseMaxHp() + equip.hpBonus, school)
             val outcome = GameService.resolveBattle(
-                player, hp, monster, GameBalance.MAX_BATTLE_ROUNDS, rng
+                player, hp, monster, GameBalance.MAX_BATTLE_ROUNDS, rng, maxHp
             )
             if (!outcome.won) {                                                // 30 回合未杀 → 败
                 s.battleLosses++
@@ -1203,7 +1209,7 @@ class LongRunSimulationTest {
         appendLine("| 连续无法突破最长天数 | ${r30.rows.maxOf { it.stuckStreak }} | ${r90.rows.maxOf { it.stuckStreak }} |")
         // 第十八轮武魂觉醒事件行（首醒第 1 天免费；重醒 = 转生后花 REAWAKEN_COST_GOLD 换更大品质池）
         fun soulLabel(o: SimOutcome): String =
-            o.finalSoul?.let { "${it.name}（${it.rarity.displayName}，战力值 ${GameBalance.martialSoulPower(it)}）" } ?: "未觉醒"
+            o.finalSoul?.let { "${it.name}（${it.rarity.displayName}，战力值 ${GameBalance.martialSoulPower(it)}，技能 ${it.skill.name}）" } ?: "未觉醒"
         appendLine("| 武魂觉醒事件（首醒/重醒累计） | ${r30.awakenTotal}/${r30.reawakenTotal} | ${r90.awakenTotal}/${r90.reawakenTotal} |")
         appendLine("| 期末武魂 | ${soulLabel(r30)} | ${soulLabel(r90)} |")
         // 第十九轮流派事件行（第 1 天免费选 BALANCED 温和系数建模；改选 RESCHOOL_COST_GOLD 金，画像不改选）

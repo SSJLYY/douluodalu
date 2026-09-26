@@ -51,7 +51,13 @@ class GameService(
         val mdef: Long = 0,
         /** 暴击率（百分点：1 = 1%）与暴击伤害（百分点：150 = 1.5 倍） */
         val critRate: Int = 0,
-        val critDmg: Int = 0
+        val critDmg: Int = 0,
+        /**
+         * 武魂技能（第二十轮，尾部默认 null 零漂移）：null = 无技能路径，与旧数学逐位一致。
+         * battle/towerBattle/getGameState/仿真四处经 soulSkillOf 同源反查传入；塔日志复用
+         * CombatStats 携带（buildTowerBattleLog 直接消费 player.skill，无需独立反查）。
+         */
+        val skill: GameBalance.SkillDef? = null
     )
 
     /**
@@ -110,12 +116,15 @@ class GameService(
          *  + 加成包(已含转生倍率)」相加【之后】逐属性乘流派系数（GameBalance 流派区块注释写死的
          *  系数口径，与 shared「基础+武魂之后乘流派」对齐——我们的武魂已折进加成包）；critRate/
          *  critDmg 走加数（百分点直加）。school=null → 乘 1.0/加 0 逐位恒等（零漂移）。
+         *  第二十轮武魂技能：skill 尾参（默认 null 零漂移）随包进 CombatStats——调用方以
+         *  soulSkillOf(martialSoulName) 同源反查传入（battle/towerBattle/getGameState/仿真四处）。
          */
         fun playerCombatStats(
             level: Int,
             prestigeCount: Int,
             equip: EquipmentBonus,
-            school: GameBalance.SchoolMods? = null
+            school: GameBalance.SchoolMods? = null,
+            skill: GameBalance.SkillDef? = null
         ): CombatStats {
             fun scale(base: Long): Long =
                 if (prestigeCount <= 0) base
@@ -132,7 +141,8 @@ class GameService(
                 pdef = schoolMul(scale(baseDef) + equip.pdefBonus, school?.pdef ?: 1.0),
                 mdef = schoolMul(scale(baseDef) + equip.mdefBonus, school?.mdef ?: 1.0),
                 critRate = GameBalance.PLAYER_CRIT_RATE_BASE + equip.critRateBonus.toInt() + (school?.critRateBonus ?: 0),
-                critDmg = GameBalance.PLAYER_CRIT_DMG_BASE + equip.critDmgBonus.toInt() + (school?.critDmgBonus ?: 0)
+                critDmg = GameBalance.PLAYER_CRIT_DMG_BASE + equip.critDmgBonus.toInt() + (school?.critDmgBonus ?: 0),
+                skill = skill
             )
         }
 
@@ -157,6 +167,15 @@ class GameService(
             chosenSchool?.let { GameBalance.schoolByName(it)?.mods }
 
         /**
+         * 武魂技能反查（第二十轮，纯函数四处同源：battle / towerBattle / getGameState / 仿真镜像）：
+         * 由 martialSoulName 反查武魂池的技能定义（soulBonusOf 同款反查兜底——未觉醒/历史脏数据
+         * 返回 null，战斗组装对脏数据宽容）。塔日志经 CombatStats.skill 携带（buildTowerBattleLog
+         * 消费 player.skill），与主路径天然同口径。
+         */
+        fun soulSkillOf(martialSoulName: String?): GameBalance.SkillDef? =
+            martialSoulName?.let { GameBalance.soulByName(it)?.skill }
+
+        /**
          * 流派 hp 乘区（maxHp 组装专用，battle/towerBattle/仿真镜像同源）：
          * maxHp = (scaledBaseMaxHp + equip.hpBonus) × school.hp——乘在【加总后】而非只乘基础侧，
          * 加成包里的装备/成就/武魂 hp 全部吃到系数（GameBalance 流派区块注释写死的口径，
@@ -173,7 +192,7 @@ class GameService(
             (1.0 - def.toDouble() / (def + GameBalance.DEF_K)).coerceIn(0.1, 1.0)
 
         /**
-         * 纯函数回合结算（第十七轮战斗模型扩展：防御/暴击/魔物理混合接入）：
+         * 纯函数回合结算（第十七轮战斗模型扩展：防御 defFactor / 暴击 / 魔物理混合接入）：
          *  - 玩家先手，30 回合（maxRounds）内击杀即胜；rng 显式注入便于固定种子断言；
          *  - 每回合掷点次序【写死，勿动】——玩家三掷：①攻击类型（nextInt(100) < ATTACK_MAGIC_SHARE
          *    → 魔法，用 matk vs 怪 mdef；否则物理，用 atk vs 怪 pdef）→ ②暴击（nextInt(100) <
@@ -184,13 +203,29 @@ class GameService(
          *  - 伤害算式：dmg = (攻击力 + 浮动) × defFactor(对方对应防御)，暴击再乘 critDmg/100，
          *    最后截断取整、下限 1（defFactor 命中 0.1 下限的极端防御也保底 1 点伤害）；
          *  - 内部掷点自洽契约：塔日志回放用独立种子重模拟，只要求本函数内部次序一致。
+         *
+         * 第二十轮武魂技能（触发模型 = 冷却制，零新增掷点；定义见 GameBalance 技能区块）：
+         *  - 触发判定：player.skill != null 且第 r 回合（1-based）满足 (r-1) % skill.cooldown == 0
+         *    （cooldown 3~5 → 首回合即放，之后每 N 回合一次）；技能回合的玩家三掷【照常发生】，
+         *    技能只改写该回合玩家攻击的伤害结算或改为治疗——RNG 流与无技能路径逐位一致；
+         *  - SINGLE_DAMAGE：dmg = (typeAtk+浮动) × power/100 × defFactor(def) × 暴击倍率
+         *    （typeAtk/def 按本回合①掷的物/魔分流，3 掷结果全部复用）；
+         *  - MULTI_HIT：hitCount = (power/50).coerceIn(2,5)，总倍率 = power×hitCount/100
+         *    （v1 单发等价结算，不做逐段动画），其余同 SINGLE；
+         *  - IGNORE_DEFENSE：defFactor 用 def×SKILL_DEF_IGNORE_FACTOR 计算（软化标定依据见
+         *    GameBalance 注释），其余同 SINGLE；
+         *  - HEAL：该回合玩家不攻击（playerDamage=0），改为回血 min(maxHp, hp + maxHp×power/100)
+         *    （playerMaxHp 与调用方 maxHp 完全同口径传入），怪物照常攻击；
+         *  - BERSERK：本轮不实现结算，回落普通攻击（GameBalance 注释留档）；
+         *  - 技能回合的 log 行 skillName = 技能名，普通回合 null；skill=null 时与旧实现逐位一致。
          */
         fun resolveBattle(
             player: CombatStats,
             playerHp: Long,
             monster: MonsterStats,
             maxRounds: Int,
-            rng: Random
+            rng: Random,
+            playerMaxHp: Long = playerHp
         ): BattleOutcome {
             var pHp = playerHp
             var mHp = monster.hp
@@ -201,28 +236,54 @@ class GameService(
                 val playerHpBefore = pHp
                 val monsterHpBefore = mHp
 
-                // —— 玩家回合（三掷：类型 → 暴击 → 浮动）——
+                // —— 玩家回合（三掷：类型 → 暴击 → 浮动；次序与掷点数【逐位不变】，技能回合照掷）——
                 val pMagic = rng.nextInt(100) < GameBalance.ATTACK_MAGIC_SHARE
                 val pCrit = rng.nextInt(100) < player.critRate
                 val pBase = if (pMagic) player.matk else player.atk
                 val pVariance = rng.nextLong((pBase / 5).coerceAtLeast(1))
-                var pDmgD = (pBase + pVariance) * defFactor((if (pMagic) monster.mdef else monster.pdef).toLong())
-                if (pCrit) pDmgD *= player.critDmg / 100.0
-                val pDmg = pDmgD.toLong().coerceAtLeast(1)
+                // 冷却制触发：r=1 首放，之后每 cooldown 回合一次；BERSERK 未实现结算 → 回落普通攻击
+                val activeSkill = player.skill?.takeIf {
+                    (rounds - 1) % it.cooldown == 0 && it.type != GameBalance.SkillType.BERSERK
+                }
+                val pDmg: Long
+                if (activeSkill != null && activeSkill.type == GameBalance.SkillType.HEAL) {
+                    // HEAL：玩家不攻击，回血 maxHp×power/100（上限封顶；Long 整除口径）
+                    pHp = min(playerMaxHp, pHp + playerMaxHp * activeSkill.power / 100)
+                    pDmg = 0
+                } else if (activeSkill != null) {
+                    // 伤害型技能：typeAtk/def 按本回合①掷分流，倍率按技能类型折算（见方法注释）
+                    val hits = if (activeSkill.type == GameBalance.SkillType.MULTI_HIT) {
+                        (activeSkill.power / 50).coerceIn(2, 5)
+                    } else 1
+                    val powerMult = activeSkill.power * hits / 100.0
+                    val rawDef = (if (pMagic) monster.mdef else monster.pdef).toLong()
+                    val effDef = if (activeSkill.type == GameBalance.SkillType.IGNORE_DEFENSE) {
+                        (rawDef * GameBalance.SKILL_DEF_IGNORE_FACTOR).toLong()
+                    } else rawDef
+                    var skillDmg = (pBase + pVariance) * powerMult * defFactor(effDef)
+                    if (pCrit) skillDmg *= player.critDmg / 100.0
+                    pDmg = skillDmg.toLong().coerceAtLeast(1)
+                } else {
+                    var pDmgD = (pBase + pVariance) * defFactor((if (pMagic) monster.mdef else monster.pdef).toLong())
+                    if (pCrit) pDmgD *= player.critDmg / 100.0
+                    pDmg = pDmgD.toLong().coerceAtLeast(1)
+                }
                 mHp -= pDmg
                 if (mHp <= 0) {
-                    log.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, 0, pHp, 0))
+                    log.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, 0, pHp, 0,
+                        skillName = activeSkill?.name))
                     break
                 }
 
-                // —— 怪物回合（两掷：类型 → 浮动；v1 怪物不暴击）——
+                // —— 怪物回合（两掷：类型 → 浮动；v1 怪物不暴击，技能不影响怪物行动）——
                 val mMagic = rng.nextInt(100) < GameBalance.ATTACK_MAGIC_SHARE
                 val mBase = if (mMagic) monster.matk.toLong() else monster.atk.toLong()
                 val mVariance = rng.nextLong((monster.atk / 5).coerceAtLeast(1).toLong())
                 val mDmg = ((mBase + mVariance) * defFactor(if (mMagic) player.mdef else player.pdef))
                     .toLong().coerceAtLeast(1)
                 pHp -= mDmg
-                log.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, mDmg, pHp, mHp))
+                log.add(BattleRoundLog(rounds, playerHpBefore, monsterHpBefore, pDmg, mDmg, pHp, mHp,
+                    skillName = activeSkill?.name))
             }
             return BattleOutcome(won = mHp <= 0, rounds = rounds, playerHpLeft = pHp, log = log)
         }
@@ -242,6 +303,8 @@ class GameService(
          *  - 玩家口径与 battle() 调 resolveBattle 时一致：完整 CombatStats（第十七轮扩展，
          *    含五属性——塔日志重模拟必须与主路径入参同口径）；生命用满血（塔挑战以满血状态
          *    进行，与战败后回满的既有语义一致）。
+         *  - 第二十轮武魂技能：技能随 CombatStats.skill 携带（调用方经 soulSkillOf 同源反查，
+         *    与主路径天然同口径）；playerMaxHp 透传 resolveBattle 供 HEAL 回血（与满血口径一致）。
          */
         fun buildTowerBattleLog(
             userId: Long,
@@ -267,7 +330,8 @@ class GameService(
                 playerHp = playerMaxHp,
                 monster = towerMonster(factor),
                 maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
-                rng = rng
+                rng = rng,
+                playerMaxHp = playerMaxHp
             )
             var attempts = 0
             while (outcome.won != won && attempts < 8) {
@@ -279,7 +343,8 @@ class GameService(
                     playerHp = playerMaxHp,
                     monster = towerMonster(factor),
                     maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
-                    rng = rng
+                    rng = rng,
+                    playerMaxHp = playerMaxHp
                 )
             }
             return outcome.log
@@ -316,7 +381,9 @@ class GameService(
         // 与战斗属性同一含流派口径（detail 第 8 行差值法依赖此一致性，否则恒等破）
         val school = schoolModsOf(profile.chosenSchool)
         // 第十七轮战斗模型扩展：玩家有效战斗属性（与 battle() 结算入参同源，含转生倍率与流派系数）
-        val combat = playerCombatStats(profile.level, profile.prestigeCount, combatBonus, school)
+        // 第二十轮武魂技能：soulSkillOf 同源反查随包（四处同源之三；skill 不进 CombatStatsDto，仅口径统一）
+        val combat = playerCombatStats(profile.level, profile.prestigeCount, combatBonus, school,
+            soulSkillOf(profile.martialSoulName))
         return GameStateResponse(
             profile = toProfileDto(profile),
             equippedRings = equippedRings,
@@ -588,14 +655,17 @@ class GameService(
 
         // 战斗计算：完整战斗属性 = 等级基础(×转生倍率) + 装备/成就/武魂加成(已含倍率，五属性全量)
         // ×流派系数；maxHp 乘在加总后（schoolScaledMaxHp 注释：加成包里的武魂 hp 也吃到系数）
+        // 第二十轮武魂技能：soulSkillOf 从 martialSoulName 反查技能随 CombatStats 进结算（四处同源之一）
         val maxHp = schoolScaledMaxHp(scaledBaseMaxHp(profile) + equip.hpBonus, school)
-        val player = playerCombatStats(profile.level, profile.prestigeCount, equip, school)
+        val player = playerCombatStats(profile.level, profile.prestigeCount, equip, school,
+            soulSkillOf(profile.martialSoulName))
         val outcome = resolveBattle(
             player = player,
             playerHp = profile.currentHp.coerceAtMost(maxHp),
             monster = monster,
             maxRounds = GameBalance.MAX_BATTLE_ROUNDS,
-            rng = Random
+            rng = Random,
+            playerMaxHp = maxHp
         )
         val won = outcome.won
         val playerHp = outcome.playerHpLeft
@@ -751,10 +821,12 @@ class GameService(
         // 第十七轮扩展：塔日志重模拟的玩家属性与 battle() 完全同口径（playerCombatStats，
         // 含五属性与转生倍率——独立种子只复现掷点，属性入参必须与主路径一致）
         // 第十九轮流派：塔日志玩家属性/生命与 battle() 同一含流派口径
+        // 第二十轮武魂技能：soulSkillOf 同源反查随 CombatStats 进塔日志重模拟（四处同源之二）
         val towerPlayerMaxHp = schoolScaledMaxHp(scaledBaseMaxHp(profile) + equip.hpBonus, school)
         val battleLog = buildTowerBattleLog(
             userId, foughtFloor, won,
-            playerCombatStats(profile.level, profile.prestigeCount, equip, school), towerPlayerMaxHp
+            playerCombatStats(profile.level, profile.prestigeCount, equip, school,
+                soulSkillOf(profile.martialSoulName)), towerPlayerMaxHp
         )
 
         return TowerResponse(
@@ -887,7 +959,9 @@ class GameService(
         autoAdvanceMap = p.autoAdvanceMap, autoBreakthrough = p.autoBreakthrough,
         tutorialStep = p.tutorialStep,
         // 第十八轮武魂集成：品质徽章由名字反查武魂池，不落库不加列（避免迁移）；未觉醒/脏数据为 null
-        soulRarity = p.martialSoulName?.let { GameBalance.soulByName(it)?.rarity?.name }
+        soulRarity = p.martialSoulName?.let { GameBalance.soulByName(it)?.rarity?.name },
+        // 第二十轮武魂技能：技能名由名字反查武魂池（与 soulRarity 同款不落库口径）；未觉醒/脏数据为 null
+        soulSkillName = p.martialSoulName?.let { GameBalance.soulByName(it)?.skill?.name }
     )
 
     private fun toBackpackItemDto(e: com.douluodalu.game.entity.BackpackItemEntity) = BackpackItemDto(

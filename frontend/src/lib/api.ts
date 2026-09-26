@@ -503,6 +503,8 @@ export interface Profile {
     tutorialStep: number;
     /** 当前武魂稀有度（COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC）。旧后端缺失按 null → 前端只显武魂名不显徽章 */
     soulRarity?: string | null;
+    /** 当前武魂专属技能名（如「天使圣光」）。旧后端缺失/未觉醒按 null → 主页武魂区不显技能行 */
+    soulSkillName?: string | null;
 }
 
 export interface EquippedRing {
@@ -562,6 +564,13 @@ export interface BattleRound {
     monsterDamage: number;
     playerHpAfter: number;
     monsterHpAfter: number;
+    /**
+     * 技能回合为武魂技能名（如「天使圣光」），普通回合 null/缺失。
+     * 技能攻击回合 playerDamage 即技能伤害（多段为等价合并值）；
+     * 治疗回合 playerDamage=0 且 playerHpAfter > playerHpBefore。
+     * 旧后端缺失（undefined）→ 回放无技能高亮，渲染与旧版一致。
+     */
+    skillName?: string | null;
 }
 
 export interface BattleResult {

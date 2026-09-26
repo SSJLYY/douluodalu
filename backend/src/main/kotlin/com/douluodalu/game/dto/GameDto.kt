@@ -131,7 +131,10 @@ data class ProfileDto(
     val tutorialStep: Int,
     /** 武魂品质徽章（第十八轮）：由 martialSoulName 反查武魂池得到，不落库（尾部新增，向后兼容）；
      *  取值 COMMON|UNCOMMON|RARE|EPIC|LEGENDARY|MYTHIC，未觉醒为 null */
-    val soulRarity: String? = null
+    val soulRarity: String? = null,
+    /** 武魂技能名（第二十轮）：由 martialSoulName 反查武魂池得到，不落库（尾部新增，向后兼容）；
+     *  未觉醒/无技能（历史脏数据）为 null */
+    val soulSkillName: String? = null
 )
 
 data class EquippedRingDto(
@@ -219,7 +222,10 @@ data class BattleRoundLog(
     val playerDamage: Long,
     val monsterDamage: Long,
     val playerHpAfter: Long,
-    val monsterHpAfter: Long
+    val monsterHpAfter: Long,
+    /** 武魂技能名（第二十轮，尾部新增带默认值向后兼容）：技能释放回合为技能名，普通回合 null。
+     *  HEAL 技能回合 playerDamage=0、playerHpAfter 为回血并挨打后的余量（before-damage 恒等式在该类回合不成立） */
+    val skillName: String? = null
 )
 
 data class BattleResponse(

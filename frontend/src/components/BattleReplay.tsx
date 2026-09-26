@@ -60,6 +60,10 @@ function ReplayInner({ log, monsterName }: { log: BattleRound[]; monsterName?: s
     // HP 归零的那回合：该侧标签行抖动（key 重挂载触发；HP 条本体稳定挂载，宽度过渡不被破坏）
     const playerDown = current.playerHpAfter <= 0;
     const monsterDown = current.monsterHpAfter <= 0;
+    // 技能回合：skillName 非空（旧后端缺失/普通回合 null → 无高亮，渲染与旧版一致）
+    const skillName = current.skillName ?? null;
+    // 治疗回合签名：本回合我方零输出且 HP 回升（治疗技能该回合不攻击；普攻数据不可能出现此组合）
+    const isHeal = current.playerDamage === 0 && current.playerHpAfter > current.playerHpBefore;
 
     const stepPrev = () => {
         setPlaying(false);
@@ -144,17 +148,39 @@ function ReplayInner({ log, monsterName }: { log: BattleRound[]; monsterName?: s
                 </div>
             </div>
 
-            {/* 当前回合伤害数字：key 重挂载触发 dl-value-flash；窄屏 flex-wrap 换行不溢出 */}
+            {/* 当前回合伤害数字：key 重挂载触发 dl-value-flash；窄屏 flex-wrap 换行不溢出。
+                技能回合（skillName 非空）行首追加 ✨ 技能名高亮（text-accent，随回合切换重挂载闪烁）；
+                治疗回合（playerDamage=0 且 HP 回升）以 💚 回复标记替代「我方输出 0」，避免零伤数字误导；
+                旧数据（skillName 缺失且非治疗）两分支均不触发，渲染与旧版逐像素一致 */}
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs sm:text-sm mb-3">
-                <span className="text-gray-400">
-                    我方输出{' '}
+                {skillName && (
                     <span
-                        key={`p-dmg-${index}`}
-                        className={`dl-value-flash font-bold tabular-nums ${current.playerDamage > 0 ? 'text-green-400' : 'text-gray-500'}`}
+                        key={`skill-${index}`}
+                        data-testid="battle-skill-highlight"
+                        className="dl-value-flash max-w-full text-accent font-semibold"
                     >
-                        {current.playerDamage.toLocaleString()}
+                        <span aria-hidden>✨</span> 技能「{skillName}」
                     </span>
-                </span>
+                )}
+                {isHeal ? (
+                    <span
+                        key={`p-heal-${index}`}
+                        data-testid="battle-heal-marker"
+                        className="dl-value-flash font-bold text-green-400"
+                    >
+                        <span aria-hidden>💚</span> 回复
+                    </span>
+                ) : (
+                    <span className="text-gray-400">
+                        我方输出{' '}
+                        <span
+                            key={`p-dmg-${index}`}
+                            className={`dl-value-flash font-bold tabular-nums ${current.playerDamage > 0 ? 'text-green-400' : 'text-gray-500'}`}
+                        >
+                            {current.playerDamage.toLocaleString()}
+                        </span>
+                    </span>
+                )}
                 <span className="text-gray-400">
                     敌方输出{' '}
                     <span
@@ -203,6 +229,8 @@ function ReplayInner({ log, monsterName }: { log: BattleRound[]; monsterName?: s
 /**
  * 战斗回合回放：消费 battleLog 逐回合回放双侧 HP 与伤害。
  * - HP 条宽度按「该侧全程最大 HP」归一化，宽度过渡走 .dl-hp-bar（reduced-motion 下 CSS 侧即时切换）；
+ * - 技能回合（skillName 非空）在伤害数字行首高亮技能名（text-accent）；治疗回合（零输出且 HP 回升）
+ *   以 💚 回复标记替代「我方输出 0」；旧数据无 skillName → 无高亮，渲染与旧版一致；
  * - 每次 battleLog 引用变化（新战斗结果）→ key 重挂载 → 重置到第 1 回合并自动播放；
  * - battleLog 缺失/为空返回 null，由调用方保留静态 <details> 兜底，信息不丢失。
  */
