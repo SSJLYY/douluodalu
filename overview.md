@@ -334,6 +334,22 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 5. **集成验证**：mvn test 基线 261→**283 全绿**；真库冒烟：惰性初始化满血 24500 精确、双成员共扣同一池（24500→18328→12126）、第 3 挑战击杀（击杀者 Boss币+30、message「全员协力击杀！」）、击杀后 400+状态归零、新任务钩子（捐献/突破进度各 +1/+2）；浏览器 E2E：击杀态 ☠ 横幅+按钮禁用、7 任务卡渲染、375px 零溢出、console 0 error。ops/README.md 指标契约表补第 9 行（douluo_guild_boss_kill_total，由主线补录）。
 6. **遗留**：周重生的 Boss 重生未实跑（cron 周一，逻辑单测覆盖）；raid 血池数值未做专项平衡仿真（宗门 Boss 不在 90 天镜像内，量级按「全员 10 次」设定）；击杀奖励仅击杀者（全员奖励走既有周榜 Top3）。
 
+## 🔒 第二十四轮：发布候选——安全自审 + 全量回归（2026-09-26）
+
+1. **安全自审（56 个端点认证矩阵全核对，防御性自审）**，修复 5 项：
+   - **高：限流可被 X-Forwarded-For 伪造绕过**（登录防爆破失效）——仅当 TCP 对端为可信代理（回环/RFC1918，覆盖 nginx 同机部署）才采信转发头且取**末段**（代理追加语义下的真实客户端）；不可信对端一律 remoteAddr
+   - **高：JWT 黑名单 TTL(1h) < token 有效期(24h)**——登出 token 可「复活」23 小时；黑名单生效 TTL = max(配置值, token 过期时间)
+   - 中：/api/auth/me 匿名 500 → 401；GuildController 四个 body 零校验（超长宗门名直达 DB 500）→ @Valid + 长度/范围对齐 V1 列宽；/api/health 匿名端点回显 DB 异常细节 → 固定 "DOWN"
+   - 矩阵结论：56 端点认证全覆盖（第二十三轮 boss/status、boss/rank 均落 authenticated，MockMvc 匿名 403 实测）；IDOR 零发现（userId 全部取自 principal）；SQL 注入零发现（11 处 @Query 全参数化）；CORS 正确；限流评估 300 RPM 全局 + 10 RPM auth 够用（battle 高频 60 RPM 量级）
+2. **全量回归清扫（浏览器，12 路由 × 双主题 × 375px）**：零 console error 零溢出；完整用户旅程（觉醒→流派→战斗→回放技能高亮→任务→成就→宗门→wiki）0 error。发现并修复 4 项前端问题：
+   - **高：hydration mismatch**——带 token 访问 `/` 时 SSR/客户端首帧不一致（isLoading 用 localStorage 惰性初始化，整树重建）→ authChecked 两段式鉴权门控（AuthContext + layout）
+   - 中：/game 布局在鉴权完成前误踢已登录用户（与上联动修复）
+   - 低：匿名 /game/* 在鉴权前发 state 请求 → 403 console 噪音（refresh 无 token 跳过）
+   - 低：三个确认弹窗 focus 触发滚动到底部（focus preventScroll 修复，标题与首选项可见）
+3. **集成验证**：mvn test 基线 283→**310 全绿**（安全测试 27 条：认证矩阵 MockMvc 匿名 403/限流伪造不可绕过/JWT 黑名单覆盖生命周期/校验边界值）；前端 97 条全绿 + build 成功；实机验证：/api/auth/me 匿名 401（原 500）、同源 30 次登录整齐 429（10 RPM 触发）、带 token 访问 `/` 零 error（修复前 2 条 hydration error）。
+4. **遗留**：/api/auth/me 在 auth 限流桶（SPA 高频刷新可能先触顶，建议读端点划归 global 桶）；多实例部署前置 Redis（黑名单/限流桶均为单机内存）；WebSocket allowedOriginPatterns("*") 随生产域名收敛；nginx 跨机部署需扩展 isTrustedProxy 范围。
+5. 回归清扫由子智能体执行（子代理环境 IAB 不可用，改用本地 Playwright 等价执行，40 张截图存证于临时目录）。
+
 ---
 
 ## 🔮 后续建议
