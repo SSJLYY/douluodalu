@@ -39,11 +39,13 @@ class RateLimitInterceptorTest {
     private fun request(
         remote: String,
         uri: String = "/api/game/state",
+        method: String = "GET",
         headers: Map<String, String> = emptyMap()
     ): HttpServletRequest {
         val req = mock(HttpServletRequest::class.java)
         `when`(req.remoteAddr).thenReturn(remote)
         `when`(req.requestURI).thenReturn(uri)
+        `when`(req.method).thenReturn(method)
         whenever(req.getHeader(any())).thenAnswer { inv -> headers[inv.getArgument(0)] }
         return req
     }
@@ -134,5 +136,41 @@ class RateLimitInterceptorTest {
         assertFalse(passed2)
         org.mockito.Mockito.verify(resp).setHeader("Retry-After", "60")
         assertTrue(body.toString().contains("TOO_MANY_REQUESTS"))
+    }
+
+    // ==================== 第二十六轮 限流分级：GET /api/auth/me 走 global 桶 ====================
+
+    @Test
+    fun `auth me reads ride the global bucket while login stays strictly limited`() {
+        // 生产同参：auth=10 RPM、global=300 RPM；同一 IP 背靠背 11 次请求（间隔回填可忽略）
+        val rl = RateLimitInterceptor(authPerMinute = 10, globalPerMinute = 300)
+
+        // GET /api/auth/me 若仍在 auth 桶，第 11 次必然 429；走 global 桶（300）则全部放行
+        val meStatuses = (1..11).map { consumeWith(rl, request("10.1.2.3", uri = "/api/auth/me")) }
+        assertEquals(11, meStatuses.count { it == 200 }, "11 次 me 读请求不得 429：$meStatuses")
+        assertTrue(meStatuses.all { it == 200 })
+
+        // 同一 IP 的 login（写端点）仍在 auth 桶：10 RPM 触顶，第 11 次 429——防爆破能力不变
+        val loginStatuses = (1..11).map { consumeWith(rl, request("10.1.2.3", uri = "/api/auth/login")) }
+        assertEquals(200, loginStatuses[0])
+        assertEquals(429, loginStatuses[10], "第 11 次 login 必须 429（auth 桶 10 RPM）")
+    }
+
+    @Test
+    fun `auth me shares the global bucket with other global endpoints`() {
+        // me 与 /api/game/state 共用同一 global 桶：其一耗尽，另一也 429（同 IP）
+        val g1 = consume(request("10.5.5.5", uri = "/api/game/state"))
+        val me = consume(request("10.5.5.5", uri = "/api/auth/me"))
+        // global 桶容量 1 已被 state 耗尽 → me 也被限（证明不是独立桶）；login 不受影响（独立 auth 桶）
+        val login = consume(request("10.5.5.5", uri = "/api/auth/login"))
+        assertEquals(200, g1)
+        assertEquals(429, me, "me 必须与 global 桶共享配额（否则为独立桶）")
+        assertEquals(200, login, "auth 桶独立于 global：global 耗尽不得影响 login")
+    }
+
+    /** 用指定拦截器消费一次请求（setUp 的 interceptor 是 1/1 桶，分级测试需要生产参数） */
+    private fun consumeWith(rl: RateLimitInterceptor, req: HttpServletRequest): Int {
+        val (resp, status) = response()
+        return if (rl.preHandle(req, resp, Any())) 200 else status()
     }
 }

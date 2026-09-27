@@ -1,5 +1,6 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.controller.UpdateSettingsRequest
 import com.douluodalu.game.dto.AchievementDto
 import com.douluodalu.game.dto.CheckInStatusDto
 import com.douluodalu.game.dto.DailyQuestsDto
@@ -677,5 +678,67 @@ class GameServiceTest {
         // 已是最后一图（mapId == MAX_MAP_ID）：autoAdvanceMap 也不再 +1，驻留 10-15
         assertEquals(10, p.currentMapId)
         assertEquals(15, p.currentStage)
+    }
+
+    // ==================== 第二十六轮 设置端点（三开关持久化） ====================
+
+    @Test
+    fun `updateSettings should update only provided switches and keep the rest`() {
+        // 部分更新语义（服务层直连，绕过 Controller 的 @NotNull 显式传值校验）：
+        // 只传 autoBattle，另两个为 null → 保持实体现值不动
+        val p = profile() // 默认 autoBattle=false / autoAdvanceMap=true / autoBreakthrough=true
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+
+        val dto = gameService.updateSettings(1L, UpdateSettingsRequest(autoBattle = true))
+
+        assertTrue(p.autoBattle)
+        assertTrue(dto.autoBattle)
+        assertTrue(p.autoAdvanceMap && dto.autoAdvanceMap, "未传入的 autoAdvanceMap 必须保持默认 true")
+        assertTrue(p.autoBreakthrough && dto.autoBreakthrough, "未传入的 autoBreakthrough 必须保持默认 true")
+        verify(profileRepo).save(p)
+    }
+
+    @Test
+    fun `updateSettings should update all three switches`() {
+        val p = profile()
+        p.autoBattle = true
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+
+        val dto = gameService.updateSettings(
+            1L, UpdateSettingsRequest(autoBattle = false, autoAdvanceMap = false, autoBreakthrough = false)
+        )
+
+        assertFalse(p.autoBattle)
+        assertFalse(p.autoAdvanceMap)
+        assertFalse(p.autoBreakthrough)
+        assertFalse(dto.autoBattle)
+        assertFalse(dto.autoAdvanceMap)
+        assertFalse(dto.autoBreakthrough)
+    }
+
+    @Test
+    fun `updateSettings result should be reflected by getGameState profile`() {
+        // 持久化回读：updateSettings 落库（mock save 原样回传同一实体）后，
+        // getGameState 的 profile 三布尔必须反映更新后的值
+        val p = profile()
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(talentRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.findByUserIdOrderByCreatedAtAsc(1L)).thenReturn(emptyList())
+        whenever(checkInService.getCheckInStatus(1L)).thenReturn(
+            CheckInStatusDto(signedToday = false, streak = 0, totalDays = 0, nextCycleDay = 1)
+        )
+        whenever(dailyQuestService.getTodayStatus(1L)).thenReturn(DailyQuestsDto(date = "2026-09-26", quests = emptyList()))
+        whenever(achievementService.unlockedBonus(1L)).thenReturn(EquipmentBonus(atkBonus = 0, hpBonus = 0))
+        whenever(achievementService.getStatus(1L)).thenReturn(emptyList())
+
+        gameService.updateSettings(1L, UpdateSettingsRequest(autoBattle = true, autoAdvanceMap = false, autoBreakthrough = false))
+        val state = gameService.getGameState(1L)
+
+        assertTrue(state.profile.autoBattle)
+        assertFalse(state.profile.autoAdvanceMap)
+        assertFalse(state.profile.autoBreakthrough)
     }
 }

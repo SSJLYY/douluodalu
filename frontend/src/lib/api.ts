@@ -8,6 +8,17 @@ export const UNAUTHORIZED_EVENT = 'douluodalu:unauthorized';
 /** 409 重试前派发的全局事件，useGameData 监听后立即重取 game/state */
 export const STATE_REFRESH_EVENT = 'douluodalu:state-refresh';
 
+/**
+ * 携带 HTTP status 的 API 错误：调用方按状态码分支（如自动战斗循环捕获 429 按 Retry-After 退避）。
+ * extends Error → 既有 `err instanceof Error` / `err.message` 的 catch 路径全部向后兼容。
+ */
+export class ApiError extends Error {
+    constructor(message: string, public status: number) {
+        super(message);
+        this.name = 'ApiError';
+    }
+}
+
 class ApiClient {
     private token: string | null = null;
 
@@ -68,8 +79,9 @@ class ApiClient {
         if (!res.ok) {
             // 后端错误体不完全统一：GlobalExceptionHandler 输出 {error,message}，
             // 部分 Controller 业务失败只输出 {error}，这里两者都兼容。
+            // ApiError 挂载 HTTP status：调用方可按状态码分支（429 退避等），message 消费方不受影响。
             const err = await res.json().catch(() => ({ message: '请求失败' })) as { message?: string; error?: string };
-            throw new Error(err.message || err.error || '请求失败');
+            throw new ApiError(err.message || err.error || '请求失败', res.status);
         }
 
         return res.json();
@@ -127,6 +139,18 @@ class ApiClient {
         return this.request<ClaimQuestResult>('/api/game/quests/claim', {
             method: 'POST',
             body: JSON.stringify({ questId }),
+        });
+    }
+
+    /**
+     * 挂机设置（全后端第一个 PUT）：三布尔必须全量显式回传——缺字段/null → 后端 400 VALIDATION_ERROR，
+     * 即「只想改一项也要把另外两项按当前值原样带上」；成功返回完整 Profile（三布尔已更新）。
+     */
+    async updateSettings(req: UpdateSettingsRequest) {
+        return this.request<Profile>('/api/game/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req),
         });
     }
 
@@ -528,6 +552,13 @@ export interface Profile {
     soulRarity?: string | null;
     /** 当前武魂专属技能名（如「天使圣光」）。旧后端缺失/未觉醒按 null → 主页武魂区不显技能行 */
     soulSkillName?: string | null;
+}
+
+/** PUT /api/game/settings 请求体：三布尔缺一不可（缺字段/null → 后端 400 VALIDATION_ERROR） */
+export interface UpdateSettingsRequest {
+    autoBattle: boolean;
+    autoAdvanceMap: boolean;
+    autoBreakthrough: boolean;
 }
 
 export interface EquippedRing {

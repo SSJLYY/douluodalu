@@ -1,5 +1,6 @@
 package com.douluodalu.game.service
 
+import com.douluodalu.game.controller.UpdateSettingsRequest
 import com.douluodalu.game.dto.*
 import com.douluodalu.game.entity.BackpackItemEntity
 import com.douluodalu.game.entity.EquippedRing
@@ -429,6 +430,30 @@ class GameService(
             // 每日任务面板（DailyQuestService 只读查询不建行，无循环依赖：它不反向依赖本类）
             dailyQuests = dailyQuestService.getTodayStatus(userId)
         )
+    }
+
+    /**
+     * 更新玩家设置三开关（autoBattle / autoAdvanceMap / autoBreakthrough，第二十六轮）。
+     *
+     * 部分更新语义：请求体三字段可空，null = 该项不更新（非空字段才覆盖）。
+     * Controller 层 @NotNull + @Valid 额外要求字段【显式传值】——Jackson 反序列化时
+     * 缺失字段即 null，校验随即失败 400。即：HTTP 侧「想保持不动也要原值回传」，
+     * 防止前端漏传被静默当成「不改」掩盖 bug；服务层保留 null 跳过分支支持真正的
+     * 部分更新（单测直连服务层覆盖该分支，也是未来放宽校验的安全网）。
+     *
+     * 持久化走 profileRepo.save（实体 @Version 乐观锁，并发读改写冲突由
+     * OptimisticLockingFailureException → 409 CONFLICT 兜底）；响应复用 toProfileDto
+     * （ProfileDto 唯一组装点），前端可直接局部替换 profile。
+     */
+    @Transactional
+    fun updateSettings(userId: Long, req: UpdateSettingsRequest): ProfileDto {
+        val profile = getProfile(userId)
+        req.autoBattle?.let { profile.autoBattle = it }
+        req.autoAdvanceMap?.let { profile.autoAdvanceMap = it }
+        req.autoBreakthrough?.let { profile.autoBreakthrough = it }
+        profile.updatedAt = LocalDateTime.now()
+        profileRepo.save(profile)
+        return toProfileDto(profile)
     }
 
     @Transactional

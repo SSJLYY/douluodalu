@@ -18,6 +18,8 @@ import java.time.Duration
  * 基于 Bucket4j 的速率限制拦截器。
  * - 通过 IP 限流（XFF 仅在可信代理背后采信，见 clientIp 注释——防伪造头绕过限流）。
  * - 不同路径前缀可用不同的桶配置（auth 路径更严格）。
+ * - 限流分级（第二十六轮）：auth 前缀路径中仅 GET /api/auth/me 例外走 global 桶
+ *   （读端点高频，见 preHandle 注释），其余 auth 写端点维持严格桶。
  */
 @Component
 @ConditionalOnProperty(prefix = "ratelimit", name = ["enabled"], havingValue = "true", matchIfMissing = true)
@@ -38,7 +40,12 @@ class RateLimitInterceptor(
     override fun preHandle(request: HttpServletRequest, response: HttpServletResponse, handler: Any): Boolean {
         val ip = clientIp(request)
         val path = request.requestURI
-        val isAuthPath = path.startsWith("/api/auth")
+        // 限流分级（第二十六轮）：/api/auth/** 走严格 auth 桶（10 RPM）防爆破/防撞库；
+        // 唯一例外是 GET /api/auth/me——它是读端点，SPA 启动与路由切换都会高频调用，
+        // 挂在 auth 桶极易在正常使用中先触顶（第二十四轮遗留），故降级走 global 桶
+        // （300 RPM，与其他读端点同池）；登录/注册等写端点保持 auth 桶严格限流不变。
+        val isAuthPath = path.startsWith("/api/auth") &&
+                !(request.method == "GET" && path == "/api/auth/me")
 
         val key = "${if (isAuthPath) "auth" else "global"}:$ip"
         val bucket = buckets.get(key) { createBucket(isAuthPath) }

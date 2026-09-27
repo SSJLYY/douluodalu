@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import api, { BattleResult, OfflineReward, normalizeAchievements } from '@/lib/api';
+import api, { BattleResult, OfflineReward, UpdateSettingsRequest, normalizeAchievements } from '@/lib/api';
 import { PRESTIGE_MIN_LEVEL, prestigeHint } from '@/lib/prestige';
 import { awakenToast, REAWAKEN_COST_GOLD, soulPoolHint, soulRarityMeta } from '@/lib/soul';
 import { RESCHOOL_COST_GOLD, SCHOOL_META, schoolBadgeMeta, schoolUnlockHint, schoolUnlocked } from '@/lib/school';
-import { useGameData } from '@/lib/hooks';
+import { breakthroughCostFor, useAutoBattle, useGameData } from '@/lib/hooks';
+import { useLiveAnnouncement } from '@/lib/live';
 import { MAP_NAMES } from '@/lib/maps';
 import { BootState } from '@/components/StateViews';
 import BattleReplay from '@/components/BattleReplay';
@@ -17,6 +18,16 @@ import PowerDetailPanel from '@/components/PowerDetailPanel';
 
 const REALM_NAMES = ['魂士', '魂师', '大魂师', '魂尊', '魂宗', '魂王', '魂帝', '魂圣', '魂斗罗', '封号斗罗', '极限斗罗', '半神', '神祇', '神王', '至高神王', '创世神'];
 
+/** 挂机设置三开关 key（= PUT /api/game/settings 请求体的三个布尔字段，由类型推导保持同步） */
+type SettingKey = keyof UpdateSettingsRequest;
+
+/** 主页挂机设置 chips 元数据（顺序即渲染顺序） */
+const SETTING_CHIPS: { key: SettingKey; testid: string; label: string; title: string }[] = [
+    { key: 'autoBattle', testid: 'settings-toggle-autobattle', label: '🤖 自动战斗', title: '开启后每 2 秒自动战斗一次（页面隐藏时自动暂停）' },
+    { key: 'autoAdvanceMap', testid: 'settings-toggle-autoadvancemap', label: '🗺️ 自动推图', title: '战斗胜利后自动推进地图进度（后端结算）' },
+    { key: 'autoBreakthrough', testid: 'settings-toggle-autobreakthrough', label: '⬆️ 自动突破', title: '战斗后魂力足够时自动突破（消耗 120·Lv^1.55 魂力）' },
+];
+
 // 模块级标记：跨组件StrictMode双挂载/客户端导航只领取一次离线收益（刷新页面会重新领取，符合放置游戏惯例）
 let offlineClaimAttempted = false;
 
@@ -24,7 +35,7 @@ export default function GamePage() {
     // 顶部标题/昵称/退出由 layout 顶栏承载（此处不再渲染内置 header，避免双顶栏）
     const { isLoading } = useAuth();
     const router = useRouter();
-    const { gameState, message, setMessage, actionLoading, loadError, runAction, refresh } = useGameData();
+    const { gameState, setGameState, message, setMessage, actionLoading, loadError, runAction, refresh } = useGameData();
     const [battleResult, setBattleResult] = useState<BattleResult | null>(null);
     const [offline, setOffline] = useState<OfflineReward | null>(null);
     // 转生确认弹窗：按钮只负责打开，真正请求在弹窗内「确认转生」触发
@@ -36,6 +47,8 @@ export default function GamePage() {
     // 流派选择弹窗（首选免费/重选 5000 金；门槛不足的流派项禁用，确认失败弹窗保持打开便于改选）
     const [schoolOpen, setSchoolOpen] = useState(false);
     const schoolCancelRef = useRef<HTMLButtonElement>(null);
+    // 挂机设置保存请求飞行中标记：chips 短暂禁用防连点乱序（乐观更新已让 UI 即时反馈）
+    const [settingsSaving, setSettingsSaving] = useState(false);
 
     // 进入主页领取一次离线收益：有实际产出才弹窗，0 收益静默关闭
     useEffect(() => {
@@ -68,6 +81,19 @@ export default function GamePage() {
             ? `🏆 成就解锁：${fresh[0].name}！属性已生效`
             : `🏆 成就解锁：${fresh[0].name} 等${fresh.length}项！属性已生效`);
     }, [gameState, setMessage]);
+
+    // 全服公告广播（/topic/announcement）：走现有 message 条展示（📢 前缀 + announcement-toast
+    // testid，照 achievement-toast 先例）。WS 不可用时不触发（live.ts 静默重连），页面功能不受影响。
+    useLiveAnnouncement((msg) => setMessage(`📢 ${msg}`));
+
+    // 自动战斗循环（profile.autoBattle 开启即跑）：不走 runAction——省每 tick 的 actionLoading
+    // 翻转与整页 refresh，状态数值交给已订阅的本人 /topic/battle 广播 → useGameData debouncedRefresh；
+    // onResult 只更新战斗结果卡（不刷 message，避免 2s 一条 toast 刷屏盖掉成就/公告提示）。
+    useAutoBattle(
+        gameState?.profile.autoBattle ?? false,
+        gameState?.profile.autoBreakthrough ?? false,
+        (result) => setBattleResult(result),
+    );
 
     const dismissOffline = () => {
         setOffline(null);
@@ -199,6 +225,31 @@ export default function GamePage() {
         '领取失败',
     );
 
+    // 挂机设置 toggle：后端契约三布尔必须全量显式回传（缺字段/null → 400 VALIDATION_ERROR），
+    // 目标项取反、另两项按当前 profile 原值带上；乐观更新本地 profile（飞行中 UI 即时反馈，
+    // WS/轮询刷新后续以服务端值为准纠偏），失败回滚 + message。
+    // 不走 runAction：不触发整页 actionLoading，也无需立即 refresh（响应本身就是最新 Profile）。
+    const handleToggleSetting = async (key: SettingKey) => {
+        if (!gameState || settingsSaving) return;
+        const before = gameState.profile;
+        const req: UpdateSettingsRequest = {
+            autoBattle: key === 'autoBattle' ? !before.autoBattle : before.autoBattle,
+            autoAdvanceMap: key === 'autoAdvanceMap' ? !before.autoAdvanceMap : before.autoAdvanceMap,
+            autoBreakthrough: key === 'autoBreakthrough' ? !before.autoBreakthrough : before.autoBreakthrough,
+        };
+        setSettingsSaving(true);
+        setGameState((prev) => (prev ? { ...prev, profile: { ...prev.profile, ...req } } : prev));
+        try {
+            const updated = await api.updateSettings(req);
+            setGameState((prev) => (prev ? { ...prev, profile: updated } : prev));
+        } catch (err) {
+            setGameState((prev) => (prev ? { ...prev, profile: { ...prev.profile, ...before } } : prev));
+            setMessage(err instanceof Error && err.message ? err.message : '保存设置失败');
+        } finally {
+            setSettingsSaving(false);
+        }
+    };
+
     if (isLoading || !gameState) {
         // 首载骨架 / 加载失败错误重试（统一三态，复用 StateViews）
         return (
@@ -221,7 +272,8 @@ export default function GamePage() {
     const mapName = MAP_NAMES[p.currentMapId] || '未知';
     const maxHp = 50 * p.level + 100;
     const hpPercent = Math.round((p.currentHp / maxHp) * 100);
-    const breakthroughCost = Math.floor(120 * Math.pow(p.level, 1.55));
+    // 突破消耗公式镜像收敛到 hooks.ts breakthroughCostFor（与自动突破阈值同源，改需与后端同步）
+    const breakthroughCost = breakthroughCostFor(p.level);
 
     return (
         <div className="min-h-screen bg-gradient-to-b from-gray-900 via-gray-800 to-gray-900">
@@ -381,7 +433,13 @@ export default function GamePage() {
                                     ? 'bg-red-500/20 border border-red-500/50 text-red-300'
                                     : 'bg-blue-500/20 border border-blue-500/50 text-blue-300'
                         }`}
-                            data-testid={message.startsWith('🏆 成就解锁') ? 'achievement-toast' : undefined}
+                            data-testid={
+                                message.startsWith('🏆 成就解锁')
+                                    ? 'achievement-toast'
+                                    : message.startsWith('📢')
+                                        ? 'announcement-toast'
+                                        : undefined
+                            }
                         >
                             {message}
                         </div>
@@ -454,6 +512,34 @@ export default function GamePage() {
                             🔄 转生
                         </button>
                     </div>
+
+                    {/* 挂机设置三开关：切换即 PUT /api/game/settings（三布尔全量回传）+ 乐观更新本地 profile。
+                        autoBattle 开启驱动 useAutoBattle 循环；375px flex-wrap 换行、chips min-h-11 触达高度，零溢出 */}
+                    <div className="flex flex-wrap items-center gap-2 mt-3" role="group" aria-label="挂机设置">
+                        {SETTING_CHIPS.map((chip) => {
+                            const active = p[chip.key];
+                            return (
+                                <button
+                                    key={chip.key}
+                                    type="button"
+                                    data-testid={chip.testid}
+                                    onClick={() => handleToggleSetting(chip.key)}
+                                    disabled={settingsSaving}
+                                    title={chip.title}
+                                    aria-pressed={active}
+                                    className={`min-h-11 px-3 rounded-full border text-xs font-semibold inline-flex items-center transition disabled:opacity-50 ${
+                                        active
+                                            ? 'border-green-500/60 bg-green-500/15 text-green-300 hover:bg-green-500/25'
+                                            : 'border-line bg-gray-800/60 text-gray-400 hover:text-gray-200 hover:border-gray-500'
+                                    }`}
+                                >
+                                    {chip.label}
+                                    {active && <span className="ml-1" aria-hidden>✓</span>}
+                                </button>
+                            );
+                        })}
+                    </div>
+
                     <div className="text-center text-xs text-gray-500 mt-2 space-y-0.5">
                         <div>突破需要 {breakthroughCost} 魂力 (当前: {p.soulPower})</div>
                         <div data-testid="prestige-hint">{prestigeHint(p.level, p.prestigeCount)}</div>

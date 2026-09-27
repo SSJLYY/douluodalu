@@ -34,6 +34,12 @@ class GuildService(
      * 与本类无反向依赖（无循环依赖）；recordProgress 内部吞异常，不击穿捐献主流程。
      */
     private val dailyQuestService: DailyQuestService,
+    /**
+     * 宗门 Boss 击杀全服公告挂点（第二十六轮，激活零调用的 /topic/announcement 通道）。
+     * WebSocketService 只依赖 SimpMessagingTemplate、不反向依赖任何业务服务（无循环依赖）；
+     * broadcastAnnouncement 内部吞异常并记日志，不击穿挑战主流程（GameService.broadcastBattleResult 同款口径）。
+     */
+    private val webSocketService: WebSocketService,
     /** 业务计数器（Micrometer，Spring Boot 自动配置 bean）；测试注入 SimpleMeterRegistry */
     private val meterRegistry: MeterRegistry
 ) {
@@ -397,7 +403,12 @@ class GuildService(
 
         // 业务计数器：挑战结算（胜败都计；Micrometer 不抛业务异常，不影响主流程）
         counter(METRIC_GUILD_BOSS_TOTAL, "outcome", if (won) "win" else "lose")
-        if (killed) counter(METRIC_GUILD_BOSS_KILL_TOTAL)
+        // 击杀全服公告（第二十六轮）：与击杀计数同分支——只有完成击杀才广播，
+        // 普通挑战（无论胜负）不广播；文案含宗门名，供 /topic/announcement 订阅者识别事件主体
+        if (killed) {
+            counter(METRIC_GUILD_BOSS_KILL_TOTAL)
+            webSocketService.broadcastAnnouncement("⚔️ 「${guild.name}」全员协力击杀了宗门 Boss！")
+        }
 
         return GuildBossResponse(
             won = won,

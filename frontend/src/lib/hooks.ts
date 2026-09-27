@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import api, { GameState, STATE_REFRESH_EVENT } from '@/lib/api';
+import api, { ApiError, BattleResult, GameState, STATE_REFRESH_EVENT } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLiveBattle } from '@/lib/live';
 
@@ -139,4 +139,80 @@ export function useGameData(pollMs: number | false = POLL_INTERVAL_MS) {
     }, [refresh]);
 
     return { gameState, setGameState, message, setMessage, actionLoading, loadError, refresh, runAction };
+}
+
+// ---- 自动战斗（任务：挂机设置） ----
+
+/** 自动战斗 tick 间隔（后端不参与循环，客户端每 2s 打一次 /api/action/battle） */
+export const AUTO_BATTLE_INTERVAL_MS = 2000;
+/** 429 退避暂停时长（后端全局 300 RPM/IP 限流命中后按 Retry-After: 60 暂停） */
+export const AUTO_BATTLE_RETRY_PAUSE_MS = 60000;
+
+/**
+ * 突破魂力消耗（镜像后端 GameService.getBreakthroughCost：120·L^1.55 截断取整）。
+ * 前端唯一镜像点：主页突破提示与自动突破阈值都从这里取，改需与后端双向同步。
+ */
+export function breakthroughCostFor(level: number): number {
+    return Math.floor(120 * Math.pow(level, 1.55));
+}
+
+/**
+ * 自动战斗循环：enabled 时每 AUTO_BATTLE_INTERVAL_MS 调一次 api.battle()。
+ * 设计要点：
+ * - 不走 runAction：省去每 tick 的整页 actionLoading 翻转与 state refresh——状态刷新交给
+ *   已订阅的本人 /topic/battle 广播 → useGameData 的 debouncedRefresh（1s 去重），数值自然跟上；
+ * - document.hidden 跳过 tick（与 useGameData 轮询同款先例）；上一场未返回跳过下一 tick（防堆积）；
+ * - 429（ApiError.status）退避：暂停 AUTO_BATTLE_RETRY_PAUSE_MS 后自动恢复，普通错误不打断循环；
+ * - autoBreakthrough 开启且战斗后魂力 ≥ breakthroughCostFor(level) → 顺手调一次 breakthrough
+ *   （失败 success=false 或抛错均静默，不影响下一 tick）；
+ * - 结果经 onResult 交给调用方（主页只更新战斗结果卡，不刷 message 免 toast 刷屏）；
+ *   卸载 / enabled 翻转清理定时器。
+ */
+export function useAutoBattle(
+    enabled: boolean,
+    autoBreakthrough: boolean,
+    onResult: (r: BattleResult) => void,
+) {
+    // 回调/开关走 ref：循环 effect 只依赖 enabled，回调换引用不重启定时器
+    const onResultRef = useRef(onResult);
+    useEffect(() => {
+        onResultRef.current = onResult;
+    });
+    const autoBreakthroughRef = useRef(autoBreakthrough);
+    useEffect(() => {
+        autoBreakthroughRef.current = autoBreakthrough;
+    });
+
+    // 上一场 battle 未返回标记（防 tick 堆积）与 429 退避截止时间（标志位跳过，不重设 interval）
+    const inFlightRef = useRef(false);
+    const pausedUntilRef = useRef(0);
+
+    useEffect(() => {
+        if (!enabled) return;
+        const timer = setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden) return;
+            if (inFlightRef.current) return;
+            if (Date.now() < pausedUntilRef.current) return;
+            inFlightRef.current = true;
+            void (async () => {
+                try {
+                    const result = await api.battle();
+                    onResultRef.current(result);
+                    // 顺手自动突破：以战斗结果里的最新魂力/等级判阈值，每 tick 至多补一次
+                    if (autoBreakthroughRef.current
+                        && result.playerSoulPower >= breakthroughCostFor(result.playerLevel)) {
+                        await api.breakthrough().catch(() => undefined);
+                    }
+                } catch (err) {
+                    // 限流退避：暂停后由后续 tick 自然恢复；其余错误（网络抖动等）静默，不打断循环
+                    if (err instanceof ApiError && err.status === 429) {
+                        pausedUntilRef.current = Date.now() + AUTO_BATTLE_RETRY_PAUSE_MS;
+                    }
+                } finally {
+                    inFlightRef.current = false;
+                }
+            })();
+        }, AUTO_BATTLE_INTERVAL_MS);
+        return () => clearInterval(timer);
+    }, [enabled]);
 }

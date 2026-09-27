@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import api, { normalizeAchievements, STATE_REFRESH_EVENT, UNAUTHORIZED_EVENT } from '@/lib/api';
-import type { Achievement } from '@/lib/api';
+import api, { ApiError, normalizeAchievements, STATE_REFRESH_EVENT, UNAUTHORIZED_EVENT } from '@/lib/api';
+import type { Achievement, UpdateSettingsRequest } from '@/lib/api';
 
 /** 与 vitest.config.mts 固定的 NEXT_PUBLIC_API_URL 一致（api.ts 的 API_BASE 在模块加载时固化） */
 const API_BASE = 'http://localhost:8080';
@@ -88,6 +88,41 @@ describe('ApiClient.request', () => {
 
         fetchMock.mockResolvedValueOnce(jsonResponse(400, {}));
         await expect(api.claimQuest('tower')).rejects.toThrow('请求失败');
+    });
+
+    it('非 2xx 抛 ApiError 且挂载 HTTP status（429 → err.status=429，向后兼容 Error catch）', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse(429, { message: '请求过于频繁，请稍后再试' }));
+
+        const err = await api.battle().then(
+            () => { throw new Error('应当抛错'); },
+            (e: unknown) => e,
+        );
+
+        expect(err).toBeInstanceOf(ApiError);
+        expect(err).toBeInstanceOf(Error);
+        expect((err as ApiError).status).toBe(429);
+        expect((err as ApiError).message).toBe('请求过于频繁，请稍后再试');
+    });
+
+    it('updateSettings 走 PUT /api/game/settings，body 全量显式携带三布尔，返回完整 Profile', async () => {
+        const profile = {
+            level: 5, gold: 100, soulPower: 2000, bossCoin: 3, martialSoulName: '蓝银草', chosenSchool: null,
+            currentMapId: 1, currentStage: 2, currentHp: 300, battleSoulPower: 100, totalBattleWins: 9,
+            totalBattleLosses: 1, towerFloor: 4, killingIntent: 0, prestigeCount: 0, talentPoints: 1,
+            codexKills: 8, autoBattle: true, autoAdvanceMap: false, autoBreakthrough: true, tutorialStep: 9,
+        };
+        fetchMock.mockResolvedValueOnce(jsonResponse(200, profile));
+
+        const req: UpdateSettingsRequest = { autoBattle: true, autoAdvanceMap: false, autoBreakthrough: true };
+        await expect(api.updateSettings(req)).resolves.toEqual(profile);
+
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe(`${API_BASE}/api/game/settings`);
+        expect(init.method).toBe('PUT');
+        // 后端契约：三字段缺一不可（缺字段/null → 400 VALIDATION_ERROR），body 必须全量显式
+        expect(JSON.parse(init.body as string)).toEqual(req);
+        expect(Object.keys(JSON.parse(init.body as string)).sort())
+            .toEqual(['autoAdvanceMap', 'autoBattle', 'autoBreakthrough']);
     });
 
     it('checkin 走 POST /api/game/checkin（无 body）', async () => {

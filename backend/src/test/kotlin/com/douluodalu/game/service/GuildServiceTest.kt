@@ -48,6 +48,9 @@ class GuildServiceTest {
     @Mock
     private lateinit var dailyQuestService: DailyQuestService
 
+    @Mock
+    private lateinit var webSocketService: WebSocketService
+
     /** 真实 Micrometer 注册表（Spy 包装保留真实计数行为；计数器断言用） */
     @Spy
     private val meterRegistry: MeterRegistry = SimpleMeterRegistry()
@@ -1011,7 +1014,43 @@ class GuildServiceTest {
         assertTrue(resp.message.contains("全员协力击杀"))
         // 第 9 个业务计数器：击杀 +1（无 tag）
         assertEquals(1.0, meterRegistry.get(GuildService.METRIC_GUILD_BOSS_KILL_TOTAL).counter().count())
+        // 击杀挂点：全服公告同步触发（文案含宗门名，详见下方第二十六轮专测）
+        verify(webSocketService).broadcastAnnouncement(argThat { contains("唐门") })
         verify(userRepository).save(user)
+    }
+
+    // ==================== 第二十六轮 击杀全服公告（激活 WS 公告通道） ====================
+
+    @Test
+    fun `challengeBoss kill should broadcast a server-wide announcement containing the guild name`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        doReturn(bossPool(currentHp = 500L)).whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        guildService.challengeBoss(1L)
+
+        // 击杀 → /topic/announcement 全服公告，文案必须含宗门名（「唐门」）供订阅者识别事件主体
+        verify(webSocketService).broadcastAnnouncement(argThat { contains("唐门") })
+    }
+
+    @Test
+    fun `challengeBoss non-kill challenge must not broadcast any announcement`() {
+        userWith(gold = 0, level = 50, guildId = 9L)
+        leaderGuild()
+        // 满血池：本次伤害 6100+ << 24500，正常扣血不击杀（胜利分支也不广播）
+        doReturn(bossPool(currentHp = GuildBossBalance.weeklyBossMaxHp(1)))
+            .whenever(guildBossRepository).findByGuildId(9L)
+        stubBossMember()
+        doReturn(null).whenever(gameService).rollBackpackDrop(any(), any())
+
+        val resp = guildService.challengeBoss(1L)
+
+        assertNotNull(resp)
+        assertFalse(resp!!.killed)
+        // 普通挑战（无论胜负）不走公告通道：公告是「全服事件」，单次扣血不值得打扰全服
+        verify(webSocketService, never()).broadcastAnnouncement(any())
     }
 
     @Test

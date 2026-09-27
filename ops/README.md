@@ -1,4 +1,4 @@
-# ops/ —— 监控与备份运维资产
+# ops/ —— 监控、备份与数据治理运维资产
 
 Docker 部署形态下的监控栈（Prometheus + Grafana）与数据库备份脚本。指标来源：后端 `/actuator/prometheus`（micrometer-registry-prometheus，非 prod 匿名可抓，prod 默认关闭，详见 `DEPLOY.md`）。
 
@@ -12,6 +12,7 @@ Docker 部署形态下的监控栈（Prometheus + Grafana）与数据库备份�
 | `grafana/provisioning/datasources/prometheus.yml` | 自动注册 Prometheus 数据源（指向 `http://prometheus:9090`） |
 | `grafana/provisioning/dashboards/douluo.yml` | 仪表盘文件提供者（扫描 `/var/lib/grafana/dashboards`） |
 | `backup/backup.sh` | MySQL 备份脚本：容器内 mysqldump + gzip + 时间戳文件名 + 保留 N 天（`BACKUP_RETAIN_DAYS`，默认 7），用法见脚本头注释 |
+| `cleanup/cleanup-dev-data.sh` | dev 数据治理脚本：按用户名正则清理 E2E/冒烟残留账号及其业务数据（默认 DRY-RUN，`--apply` 真删，`--keep-guild-ids` 保留回归宗门），用法与删除范围表见 `ops/cleanup/README.md` |
 
 ## 启用监控栈
 
