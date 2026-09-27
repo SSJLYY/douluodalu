@@ -110,6 +110,36 @@ object GameBalance {
     // 3~4 档保留为推图终局(6-7 号图)/后续轮回内容的专属追求。
     const val TOWER_RING_DROP_YEAR_CAP = 2
 
+    // ======== 魂骨强化（第二十七轮：主动强化端点） ========
+    // 文档 §4.2 写「强化等级 0~5、效果倍率 1.0+level×0.15」，与后端现状两处校准差异（差异留档，不改文档）：
+    //  - 上限 15（非文档 0~5）：掉落侧已白送 max(1, level/10)（GameService.rollBackpackDrop）——Lv.90+ 掉落的
+    //    魂骨自带 +9、测试与真实数据已有 enhanceLevel=11 的骨；若按文档 0~5 封顶，大量存量骨直接越限。按现状校准。
+    //  - 效果倍率维持既定 0.10/级（boneMult 乘区 (1+enhanceLevel×BONE_ENHANCE_PER_LEVEL) 已在
+    //    EquipmentPowerService 生效，属性/战力全自动）：EquipmentPowerServiceTest 单调性用例与 90 天仿真
+    //    均基于 0.10，改 0.15 会推翻仿真结论，故不动（文档的 0.15 不采纳，注释留档）。
+    //  - 范围：仅魂骨（equipped_bone + 背包 BONE 双路径）。魂环已有负荷/成熟度两轴、魂核 coreLevel 是
+    //    留给未来的死字段——ring/core 强化明确不做（文档 §4.2 也只定义魂骨强化）。
+    //
+    // 费用曲线（文档未定价，实现决策）：800 × (currentLevel+1)² × (yearOrdinal+1) × qualityMult[quality]
+    //  - 锚点：0→1 单次 800（十年普通）~8.8k（百万年完美）；4→5 单次 20k~220k——前期单次费用 ≤ 日均
+    //    主动收入（30k~35k）量级，不挤兑扩容/商店；
+    //  - 满配 0→15 累计：最低档（十年普通）99.2 万、中档（百年稀有）~238 万——90 天金币存量
+    //    840k~2.6M 的健康 sink（吸收费未实现前的主力金币消耗口）；
+    //  - 100% 成功率、无失败机制（全项目文档未定价项的「实现决策+注释锚点」惯例）：用费用陡增替代
+    //    概率失败，期望消耗确定，LongRunSimulationTest 的经济镜像可精确扣费（否则仿真高估存量）。
+    const val BONE_ENHANCE_MAX_LEVEL = 15
+
+    /**
+     * 魂骨强化费用（金币）：800 × (currentLevel+1)² × (yearOrdinal+1) × qualityMult[qualityOrdinal]。
+     * 年份/品质越界（历史脏数据）按既有 qualityMult 惯例 coerce 夹取；乘法次序为「整数部分先行、
+     * 最后乘品质倍率」，五个倍率（1.0/1.2/1.5/1.8/2.2）下 double 乘积均精确落在整数值上，
+     * 截断取整无偏差（GameServiceTest 费用锚点断言覆盖）。
+     */
+    fun boneEnhanceCost(yearOrdinal: Int, qualityOrdinal: Int, currentLevel: Int): Long {
+        val mult = EQUIP_QUALITY_MULT.getOrElse(qualityOrdinal.coerceIn(0, EQUIP_QUALITY_MULT.size - 1)) { 1.0 }
+        return (800L * (currentLevel + 1) * (currentLevel + 1) * (yearOrdinal.coerceIn(0, 4) + 1) * mult).toLong()
+    }
+
     // ======== 离线收益（P1 修复：语义由「每秒」改为「每小时」）========
     // 换算依据（《数值仿真报告-90天.md》实测）：中活跃玩家日均"主动玩法"收入约 7,000 金币/日
     // （第 9~90 天区间 5.6k~8.4k），设计意图「离线 12h ≈ 主动游玩 30~60 分钟产出」≈ 主动日收入的

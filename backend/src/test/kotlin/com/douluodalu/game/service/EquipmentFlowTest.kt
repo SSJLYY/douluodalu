@@ -1,8 +1,10 @@
 package com.douluodalu.game.service
 
 import com.douluodalu.game.entity.BackpackItemEntity
+import com.douluodalu.game.entity.EquippedBone
 import com.douluodalu.game.entity.EquippedRing
 import com.douluodalu.game.entity.PlayerProfileEntity
+import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.AchievementRepository
 import com.douluodalu.game.repository.BackpackItemRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
@@ -278,5 +280,133 @@ class EquipmentFlowTest {
         assertEquals(0L, profile.gold)
         assertEquals(25, profile.backpackCapacity)
         verify(profileRepo).save(profile)
+    }
+
+    // ======== 第二十七轮：魂骨强化（双路径二选一） ========
+
+    private fun boneItem(id: Long, year: Int = 2, quality: Int = 3, enhance: Int = 0) = BackpackItemEntity(
+        id = id, userId = 1L, itemType = "BONE", yearOrdinal = year, qualityOrdinal = quality,
+        boneTypeOrdinal = 0, enhanceLevel = enhance
+    )
+
+    private fun equippedBone(slot: Int, year: Int = 2, quality: Int = 3, enhance: Int = 0) = EquippedBone(
+        userId = 1L, slotIndex = slot, boneId = 1L, yearOrdinal = year, qualityOrdinal = quality,
+        boneTypeOrdinal = 0, enhanceLevel = enhance
+    )
+
+    private fun richProfile(): PlayerProfileEntity = PlayerProfileEntity(userId = 1L, level = 10).apply { gold = 1_000_000 }
+
+    @Test
+    fun `enhanceBone backpack path should charge formula cost and increment enhance level`() {
+        val p = richProfile()
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+        val item = boneItem(id = 61L, year = 2, quality = 3, enhance = 0)
+        doReturn(listOf(item)).whenever(backpackRepo).findByUserIdAndItemType(1L, "BONE")
+
+        val result = gameService.enhanceBone(1L, itemIndex = 0, slotIndex = null)
+
+        assertTrue(result.success)
+        // 费用 = 800 × 1² × (2+1) × qualityMult[3](1.8) = 4320
+        assertEquals(4320L, result.goldSpent)
+        assertEquals(1, result.enhanceLevel)
+        assertEquals(1_000_000L - 4320L, p.gold)
+        assertEquals("强化成功！魂骨强化等级 +1（当前 +1，花费 4320 金币）", result.message)
+        verify(backpackRepo).save(bagItemCaptor.capture())
+        assertEquals(1, bagItemCaptor.value.enhanceLevel)
+        verify(profileRepo).save(p)
+    }
+
+    @Test
+    fun `enhanceBone equipped path should charge and increment equipped bone level`() {
+        val p = richProfile()
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+        val equipped = equippedBone(slot = 2, year = 4, quality = 4, enhance = 9)
+        doReturn(equipped).whenever(equippedBoneRepo).findByUserIdAndSlotIndex(1L, 2)
+
+        val result = gameService.enhanceBone(1L, itemIndex = null, slotIndex = 2)
+
+        assertTrue(result.success)
+        // 费用 = 800 × 10² × (4+1) × qualityMult[4](2.2) = 880000（百万年完美 9→10 锚点）
+        assertEquals(880_000L, result.goldSpent)
+        assertEquals(10, result.enhanceLevel)
+        assertEquals(120_000L, p.gold)
+        verify(equippedBoneRepo).save(equipped)
+        verify(profileRepo).save(p)
+    }
+
+    @Test
+    fun `enhanceBone should reject insufficient gold with zero writes`() {
+        val p = richProfile().apply { gold = 4319 }
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+        val item = boneItem(id = 62L, year = 2, quality = 3, enhance = 0)
+        doReturn(listOf(item)).whenever(backpackRepo).findByUserIdAndItemType(1L, "BONE")
+
+        val result = gameService.enhanceBone(1L, itemIndex = 0, slotIndex = null)
+
+        assertFalse(result.success)
+        assertEquals("金币不足（需要 4320）", result.message)
+        assertEquals(0, result.enhanceLevel)
+        assertEquals(0L, result.goldSpent)
+        assertEquals(4319L, p.gold)
+        assertEquals(0, item.enhanceLevel)
+        verify(backpackRepo, never()).save(any())
+        verify(profileRepo, never()).save(any())
+    }
+
+    @Test
+    fun `enhanceBone should reject at max level with cap message`() {
+        val p = richProfile()
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+        val equipped = equippedBone(slot = 0, enhance = GameBalance.BONE_ENHANCE_MAX_LEVEL)
+        doReturn(equipped).whenever(equippedBoneRepo).findByUserIdAndSlotIndex(1L, 0)
+
+        val result = gameService.enhanceBone(1L, itemIndex = null, slotIndex = 0)
+
+        assertFalse(result.success)
+        assertEquals("已达强化上限（+${GameBalance.BONE_ENHANCE_MAX_LEVEL}）", result.message)
+        assertEquals(1_000_000L, p.gold)
+        verify(equippedBoneRepo, never()).save(any())
+        verify(profileRepo, never()).save(any())
+    }
+
+    @Test
+    fun `enhanceBone should reject out-of-range index and empty slot without writes`() {
+        val p = richProfile()
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+        doReturn(listOf(boneItem(id = 63L))).whenever(backpackRepo).findByUserIdAndItemType(1L, "BONE")
+        doReturn(null).whenever(equippedBoneRepo).findByUserIdAndSlotIndex(1L, 3)
+
+        val outOfRange = gameService.enhanceBone(1L, itemIndex = 5, slotIndex = null)
+        val slotOverflow = gameService.enhanceBone(1L, itemIndex = null, slotIndex = 6)
+        val slotNegative = gameService.enhanceBone(1L, itemIndex = null, slotIndex = -1)
+        val emptySlot = gameService.enhanceBone(1L, itemIndex = null, slotIndex = 3)
+
+        assertFalse(outOfRange.success)
+        assertEquals("魂骨索引越界", outOfRange.message)
+        assertFalse(slotOverflow.success)
+        assertFalse(slotNegative.success)
+        assertFalse(emptySlot.success)
+        assertEquals(1_000_000L, p.gold)
+        verify(backpackRepo, never()).save(any())
+        verify(equippedBoneRepo, never()).save(any())
+        verify(profileRepo, never()).save(any())
+    }
+
+    @Test
+    fun `enhanceBone should require exactly one path parameter`() {
+        val p = richProfile()
+        doReturn(p).whenever(profileRepo).findByUserId(1L)
+
+        val both = gameService.enhanceBone(1L, itemIndex = 0, slotIndex = 0)
+        val neither = gameService.enhanceBone(1L, itemIndex = null, slotIndex = null)
+
+        assertFalse(both.success)
+        assertFalse(neither.success)
+        assertEquals("参数无效：itemIndex 与 slotIndex 二选一", both.message)
+        assertEquals("参数无效：itemIndex 与 slotIndex 二选一", neither.message)
+        assertEquals(1_000_000L, p.gold)
+        verify(backpackRepo, never()).save(any())
+        verify(equippedBoneRepo, never()).save(any())
+        verify(profileRepo, never()).save(any())
     }
 }

@@ -22,7 +22,8 @@ import kotlin.random.Random
  * 任务#20：装备战力公式（P7）与塔胜率（P2）的纯函数断言。
  * 全部走 EquipmentPowerService / GameService 的 companion 纯函数，不依赖 Spring。
  * 成就系统集成：bonusFor 并入已解锁成就 hp/atk；转生集成：bonusFor 乘转生倍率、
- * detail 六行求和不变量（base+ring+core+bone+achievement+prestige）。
+ * detail 求和不变量逐轮扩展（六行 → 七行武魂 → 八行流派 → 九行魂骨强化，第二十七轮：
+ * 骨行按 enhanceLevel 归零口径、强化增量单列 enhance 行）。
  */
 class EquipmentPowerServiceTest {
 
@@ -186,13 +187,20 @@ class EquipmentPowerServiceTest {
         val b = EquipmentPowerService.bonus(level, rings, bones, cores)
         val d = EquipmentPowerService.detail(level, rings, bones, cores)
 
-        // 攻击/生命拆分求和 == bonus 总值（含取整余数；拆分行保持装备口径，不含成就加成）
-        assertEquals(b.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "攻击拆分求和必须等于 atkBonus")
-        assertEquals(b.hpBonus, d.ringHp + d.boneHp, "生命拆分求和必须等于 hpBonus")
-        // 五行战力求和 == powerOf 总值（成就加成缺省为 0，成就行 = 0）
+        // 攻击/生命拆分求和 == 归零口径 bonus 总值（第二十七轮：骨行按 enhanceLevel 归零拆分，
+        // 强化乘区增量单列第 9 行 enhance，防双重计入；拆分行保持装备口径，不含成就加成）
+        val bonesZero = bones.map { EquipmentPowerService.zeroEnhanceBone(it) }
+        val bZero = EquipmentPowerService.bonus(level, rings, bonesZero, cores)
+        assertEquals(bZero.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "攻击拆分求和必须等于归零口径 atkBonus")
+        assertEquals(bZero.hpBonus, d.ringHp + d.boneHp, "生命拆分求和必须等于归零口径 hpBonus")
+        assertTrue(b.atkBonus > bZero.atkBonus, "强化乘区应抬高全量口径（差值行的来源）")
+        // 九行战力求和 == powerOf 总值（含强化全量口径；成就加成缺省为 0，成就行 = 0）
         val power = EquipmentPowerService.powerOf(level, b)
         assertEquals(0L, d.achievement)
-        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement, "战力明细五行求和必须等于总战力")
+        assertEquals(power,
+            d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige + d.soul + d.school + d.enhance,
+            "战力明细九行求和必须等于总战力")
+        assertTrue(d.enhance > 0, "含强化骨时差值行必须为正")
         // 来源语义：魂核只加攻击、玩家模型无基础生命
         assertEquals(0L, d.coreHp)
         assertEquals(0L, d.baseHp)
@@ -221,15 +229,23 @@ class EquipmentPowerServiceTest {
             }
             val b = EquipmentPowerService.bonus(level, rings, bones, cores)
             val d = EquipmentPowerService.detail(level, rings, bones, cores, EquipmentBonus(0, 0), prestigeCount)
-            assertEquals(b.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "atk 拆分失衡: level=$level $rings $bones $cores")
-            assertEquals(b.hpBonus, d.ringHp + d.boneHp, "hp 拆分失衡: level=$level $rings $bones $cores")
-            // 六行求和 == 含转生倍率的总战力（0 转时倍率 1.0，退化为原五行恒等）
+            // 攻/血拆分 == 归零口径（骨行按 enhanceLevel=0 拆分，强化增量单列 enhance 行）
+            val bonesZero = bones.map { EquipmentPowerService.zeroEnhanceBone(it) }
+            val bZero = EquipmentPowerService.bonus(level, rings, bonesZero, cores)
+            assertEquals(bZero.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "atk 拆分失衡: level=$level $rings $bones $cores")
+            assertEquals(bZero.hpBonus, d.ringHp + d.boneHp, "hp 拆分失衡: level=$level $rings $bones $cores")
+            // 九行求和 == 含转生倍率的总战力（0 转时倍率 1.0，退化为原五行恒等）
             assertEquals(
                 EquipmentPowerService.powerOf(level, EquipmentPowerService.applyPrestige(b, prestigeCount)),
-                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige + d.soul + d.school + d.enhance,
                 "战力拆分失衡: level=$level prestige=$prestigeCount $rings $bones $cores"
             )
             if (prestigeCount == 0) assertEquals(0L, d.prestige, "0 转时倍率增量行必须为 0")
+            if (bones.all { it.enhanceLevel == 0 }) {
+                assertEquals(0L, d.enhance, "无强化骨时差值行必须为 0（八行退化）")
+            } else {
+                assertTrue(d.enhance > 0, "含强化骨时差值行必须为正: $bones")
+            }
         }
     }
 
@@ -248,28 +264,35 @@ class EquipmentPowerServiceTest {
         val eff = EquipmentPowerService.applyPrestige(combined, prestigeCount)
         val power = EquipmentPowerService.powerOf(level, eff)
 
-        // 六行求和不变量：base + ring + core + bone + achievement + prestige == 含倍率总战力
-        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
-            "含成就与转生倍率的六行战力求和必须等于总战力")
-        // prestige 行 = 倍率增量（含倍率战力 − 1.0 倍战力），单列不污染五行拆分
-        val powerWithoutPrestige = EquipmentPowerService.powerOf(level, combined)
+        // 九行求和不变量：base + ring + core + bone + achievement + prestige + soul(0) + school(0) + enhance
+        // == 含倍率总战力（骨行为归零口径，强化增量单列 enhance 行）
+        assertEquals(power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige +
+                d.soul + d.school + d.enhance,
+            "含成就与转生倍率的九行战力求和必须等于总战力")
+        assertTrue(d.enhance > 0L, "enhance=5 的骨必须产生正差值行")
+        // prestige 行 = 倍率增量（含倍率战力 − 1.0 倍战力，按【归零口径】基准），单列不污染五行拆分
+        val bonesZero = bones.map { EquipmentPowerService.zeroEnhanceBone(it) }
+        val combinedZero = EquipmentPowerService.bonus(level, rings, bonesZero, cores, ach)
+        val powerWithoutPrestige = EquipmentPowerService.powerOf(level, combinedZero)
         assertEquals(powerWithoutPrestige, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
-            "前五行之和应保持 1.0 倍口径战力")
-        assertEquals(power - powerWithoutPrestige, d.prestige)
+            "前五行之和应保持归零口径 1.0 倍战力")
+        assertEquals(EquipmentPowerService.powerOf(level, EquipmentPowerService.applyPrestige(combinedZero, prestigeCount)) - powerWithoutPrestige, d.prestige)
         assertTrue(d.prestige > 0L, "3 转倍率必须产生正增量")
         // 成独行 = 成就 atk + 成就 hp 折算（hp 可被 POWER_HP_DIVISOR 整除 → 精确）
         assertEquals(ach.atkBonus + (ach.hpBonus / GameBalance.POWER_HP_DIVISOR).toLong(), d.achievement)
-        // 装备拆分行保持装备口径（不含成就加成、不含倍率）
-        val equipOnly = EquipmentPowerService.bonus(level, rings, bones, cores)
-        assertEquals(equipOnly.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk)
-        assertEquals(equipOnly.hpBonus, d.ringHp + d.boneHp)
-        assertEquals(combined.atkBonus, equipOnly.atkBonus + ach.atkBonus)
-        assertEquals(combined.hpBonus, equipOnly.hpBonus + ach.hpBonus)
+        // 装备拆分行保持归零口径（不含成就加成、不含倍率、不含强化）
+        val equipOnlyZero = EquipmentPowerService.bonus(level, rings, bonesZero, cores)
+        assertEquals(equipOnlyZero.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk)
+        assertEquals(equipOnlyZero.hpBonus, d.ringHp + d.boneHp)
+        // bonus() 的成就并入是线性的：全量口径 = 装备（含强化）+ 成就
+        val equipOnlyFull = EquipmentPowerService.bonus(level, rings, bones, cores)
+        assertEquals(combined.atkBonus, equipOnlyFull.atkBonus + ach.atkBonus)
+        assertEquals(combined.hpBonus, equipOnlyFull.hpBonus + ach.hpBonus)
     }
 
     @Test
     fun `power detail at zero prestiges keeps legacy five-row invariant`() {
-        // 回归保证：prestigeCount=0（默认）时 prestige 行恒 0，五行恒等与旧版逐位一致
+        // 回归保证：prestigeCount=0（默认）时 prestige 行恒 0；五行（归零口径）+ enhance 与旧版恒等衔接
         val level = 47
         val rings = listOf(ring(year = 1, quality = 2, percentage = 137), ring(year = 3, quality = 1, percentage = 903))
         val bones = listOf(bone(year = 2, quality = 3, enhance = 5))
@@ -279,9 +302,15 @@ class EquipmentPowerServiceTest {
         val combined = EquipmentPowerService.bonus(level, rings, bones, cores, ach)
         val d = EquipmentPowerService.detail(level, rings, bones, cores, ach)
         assertEquals(0L, d.prestige)
-        assertEquals(EquipmentPowerService.powerOf(level, combined),
+        val bonesZero = bones.map { EquipmentPowerService.zeroEnhanceBone(it) }
+        val combinedZero = EquipmentPowerService.bonus(level, rings, bonesZero, cores, ach)
+        assertEquals(EquipmentPowerService.powerOf(level, combinedZero),
             d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement,
-            "0 转时五行求和必须等于总战力（旧行为不变）")
+            "0 转时五行求和必须等于归零口径总战力")
+        assertEquals(EquipmentPowerService.powerOf(level, combined),
+            d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.enhance,
+            "五行 + enhance 行必须等于含强化总战力（旧行为经差值行衔接）")
+        assertTrue(d.enhance > 0L)
     }
 
     // ======== 第十七轮战斗模型扩展：五属性加成与 powerOf 新权重 ========
@@ -342,8 +371,9 @@ class EquipmentPowerServiceTest {
             val d = EquipmentPowerService.detail(level, rings, bones, cores, ach, prestigeCount)
             assertEquals(
                 EquipmentPowerService.powerOf(level, EquipmentPowerService.applyPrestige(b, prestigeCount)),
-                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
-                "含五属性成就加成的六行战力求和必须等于总战力: level=$level prestige=$prestigeCount ach=$ach"
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige +
+                        d.soul + d.school + d.enhance,
+                "含五属性成就加成的九行战力求和必须等于总战力: level=$level prestige=$prestigeCount ach=$ach"
             )
             if (prestigeCount == 0) assertEquals(0L, d.prestige, "0 转时倍率增量行必须为 0")
         }
@@ -351,8 +381,9 @@ class EquipmentPowerServiceTest {
 
     @Test
     fun `power detail seven-row invariant holds with martial soul across randomized equipment`() {
-        // 第十八轮武魂集成回归：soul 行（= 含武魂战力 − 六行之和）并入后，七行求和恒等在
-        // 200 组随机（保留升级：随机装备/成就/转数/武魂/未觉醒混合）下与含武魂总战力严格一致
+        // 第十八轮武魂集成回归：soul 行并入后的恒等（第二十七轮起恒等式尾部续接 school/enhance 行，
+        // 本用例两者缺省恒 0 仍覆盖退化路径），200 组随机（随机装备/成就/转数/武魂/未觉醒混合）下
+        // 与含武魂总战力严格一致
         val rng = Random(20260927)
         repeat(200) {
             val level = rng.nextInt(1, 121)
@@ -386,14 +417,74 @@ class EquipmentPowerServiceTest {
             )
             assertEquals(
                 EquipmentPowerService.powerOf(level, withSoul),
-                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige + d.soul,
-                "七行战力求和必须等于含武魂总战力: level=$level prestige=$prestigeCount soul=${soul?.name}"
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige + d.soul +
+                        d.school + d.enhance,
+                "九行战力求和必须等于含武魂总战力: level=$level prestige=$prestigeCount soul=${soul?.name}"
             )
             if (soul == null) {
                 assertEquals(0L, d.soul, "未觉醒时 soul 行必须为 0")
             } else {
                 assertTrue(d.soul > 0L, "觉醒玩家的 soul 行必须为正: soul=${soul.name}")
             }
+        }
+    }
+
+    // ======== 第二十七轮：魂骨强化差值行（第 9 行） ========
+
+    @Test
+    fun `power detail nine-row invariant holds with school and enhanced bones across randomized equipment`() {
+        // 第二十七轮回归：enhance 行（= 含强化全量战力 − 全骨归零口径战力）并入后，九行求和恒等在
+        // 200 组随机（装备/成就/转数/武魂/流派/强化混合）下与含强化总战力严格一致；
+        // 骨行为归零口径拆分、无强化骨时 enhance 行恒 0（退化为原八行恒等）
+        val rng = Random(20260927)
+        repeat(200) {
+            val level = rng.nextInt(1, 121)
+            val prestigeCount = rng.nextInt(0, 6)
+            val rings = List(rng.nextInt(0, 7)) {
+                ring(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), percentage = rng.nextInt(0, 1000))
+            }
+            val bones = List(rng.nextInt(0, 6)) {
+                bone(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), enhance = rng.nextInt(0, 16))
+            }
+            val cores = List(rng.nextInt(0, 3)) {
+                core(rarity = rng.nextInt(0, 5), value = rng.nextInt(1, 300))
+            }
+            val ach = EquipmentBonus(
+                atkBonus = rng.nextLong(0, 500), hpBonus = rng.nextLong(0, 5000),
+                matkBonus = rng.nextLong(0, 300), pdefBonus = rng.nextLong(0, 100),
+                mdefBonus = rng.nextLong(0, 100), critRateBonus = rng.nextLong(0, 20),
+                critDmgBonus = rng.nextLong(0, 60)
+            )
+            val soul =
+                if (rng.nextInt(0, 4) == 0) null
+                else GameBalance.MARTIAL_SOULS[rng.nextInt(GameBalance.MARTIAL_SOULS.size)]
+            // 1/3 概率未选流派（school=null → school 行恒 0，退化路径覆盖）
+            val school =
+                if (rng.nextInt(0, 3) == 0) null
+                else GameBalance.SCHOOLS[rng.nextInt(GameBalance.SCHOOLS.size)].mods
+            val d = EquipmentPowerService.detail(level, rings, bones, cores, ach, prestigeCount, soul, school)
+            val bFull = EquipmentPowerService.bonus(level, rings, bones, cores, ach)
+            // 与 GameService.getGameState 的 power 组装同式（prestige → soul → school 全管线）
+            val eff = EquipmentPowerService.applyPrestige(bFull, prestigeCount)
+            val withSoul = if (soul == null) eff else EquipmentPowerService.plus(
+                eff, EquipmentPowerService.applyPrestige(EquipmentPowerService.soulBonus(soul), prestigeCount)
+            )
+            val power = EquipmentPowerService.powerOf(level, EquipmentPowerService.applySchool(withSoul, school))
+            assertEquals(power,
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige +
+                        d.soul + d.school + d.enhance,
+                "九行战力求和必须等于含强化总战力: level=$level prestige=$prestigeCount soul=${soul?.name} school=${school?.atk}")
+            // 骨行 == 归零口径拆分（强化增量不混入骨行；拆分基准不含成就加成，与 detail 内部同式）
+            val bonesZero = bones.map { EquipmentPowerService.zeroEnhanceBone(it) }
+            val bZero = EquipmentPowerService.bonus(level, rings, bonesZero, cores)
+            assertEquals(bZero.atkBonus, d.ringAtk + d.boneAtk + d.coreAtk, "骨行应为归零口径: $bones")
+            assertEquals(bZero.hpBonus, d.ringHp + d.boneHp, "骨行应为归零口径: $bones")
+            if (bones.all { it.enhanceLevel == 0 }) {
+                assertEquals(0L, d.enhance, "无强化骨时差值行必须为 0（八行退化）")
+            } else {
+                assertTrue(d.enhance > 0L, "含强化骨时差值行必须为正: $bones")
+            }
+            if (school == null) assertEquals(0L, d.school, "未选流派时 school 行必须为 0")
         }
     }
 

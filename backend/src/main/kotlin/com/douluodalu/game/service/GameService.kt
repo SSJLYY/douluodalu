@@ -77,6 +77,19 @@ class GameService(
         val mdef: Int
     )
 
+    /**
+     * 魂骨强化结果（GameService.enhanceBone，第二十七轮）。success=true → Controller 200
+     * {"message": message}；false → 400 {"error": message}（照 EquipmentController 既有
+     * Boolean→200/400 惯例升级为消息对）。enhanceLevel/goldSpent 为成功后的实际值（失败恒 0），
+     * 供 Controller 组装消息与测试断言。
+     */
+    data class EnhanceResult(
+        val success: Boolean,
+        val enhanceLevel: Int = 0,
+        val goldSpent: Long = 0,
+        val message: String = ""
+    )
+
     companion object {
         // ===== 业务计数器名（ops Grafana 面板按名建面板，逐字契约，勿改） =====
         const val METRIC_BATTLE_TOTAL = "douluo.battle.total"
@@ -413,7 +426,7 @@ class GameService(
             ringLoad = RingLoadCalculator.totalRingLoad(rings),
             capacity = absorptionCapacityFor(profile, rawBonus),
             // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库；
-            // 八行含成就行、转生倍率增量行、武魂行与流派行，八行求和 == power）
+            // 九行含成就行、转生倍率增量行、武魂行、流派行与魂骨强化差值行（第二十七轮），九行求和 == power）
             powerDetail = EquipmentPowerService.detail(
                 profile.level, rings, bones, cores, achBonus, profile.prestigeCount,
                 profile.martialSoulName?.let { GameBalance.soulByName(it) },
@@ -1182,6 +1195,73 @@ class GameService(
         )
         equippedBoneRepo.delete(equipped)
         return true
+    }
+
+    // ======== 魂骨强化（第二十七轮：主动强化端点） ========
+    /**
+     * 强化魂骨（双路径二选一）：itemIndex = 背包 BONE 列表索引（与 sell/equip 同口径：按创建时间
+     * 排序）、slotIndex = 已装备骨槽位 0-5。恰好一个非空（都空/都非空 → 失败）。
+     * 校验顺序：路径参数二选一 → 索引存在 → 上限（≥ BONE_ENHANCE_MAX_LEVEL 拒绝）→ 金币 →
+     * 扣金 → enhanceLevel+1 → save（@Transactional；失败出口零写库）。
+     * 费用走 GameBalance.boneEnhanceCost（公式与经济锚点见该函数注释）；100% 成功无失败机制；
+     * 属性/战力经 EquipmentPowerService.boneMult 的强化乘区全自动生效（本方法只改 enhanceLevel）。
+     * ring/core 明确不做强化（GameBalance 魂骨强化区块注释留档）；背包路径允许强化 locked 件——
+     * 强化不消耗/不移动物品，锁只保护「不被卖出」（sellBackpackItem）语义。
+     */
+    @Transactional
+    fun enhanceBone(userId: Long, itemIndex: Int?, slotIndex: Int?): EnhanceResult {
+        if ((itemIndex == null) == (slotIndex == null)) {
+            return EnhanceResult(success = false, message = "参数无效：itemIndex 与 slotIndex 二选一")
+        }
+        val profile = getProfile(userId)
+        // 双路径解析：恰好一个分支命中。snapshot = (yearOrdinal, qualityOrdinal, currentLevel)，
+        // persist = 强化 +1 后的持久化动作（两实体无公共接口，用闭包收敛到同一校验/扣费尾部）
+        val snapshot: Triple<Int, Int, Int>
+        val persist: (Int) -> Unit
+        if (itemIndex != null) {
+            val bones = backpackRepo.findByUserIdAndItemType(userId, "BONE").sortedBy { it.createdAt }
+            if (itemIndex < 0 || itemIndex >= bones.size) {
+                return EnhanceResult(success = false, message = "魂骨索引越界")
+            }
+            val item = bones[itemIndex]
+            snapshot = Triple(item.yearOrdinal, item.qualityOrdinal, item.enhanceLevel)
+            persist = { newLevel ->
+                item.enhanceLevel = newLevel
+                backpackRepo.save(item)
+            }
+        } else {
+            val slot = slotIndex!!
+            if (slot < 0 || slot > 5) {
+                return EnhanceResult(success = false, message = "魂骨槽位越界（0-5）")
+            }
+            val equipped = equippedBoneRepo.findByUserIdAndSlotIndex(userId, slot)
+                ?: return EnhanceResult(success = false, message = "该槽位没有装备魂骨")
+            snapshot = Triple(equipped.yearOrdinal, equipped.qualityOrdinal, equipped.enhanceLevel)
+            persist = { newLevel ->
+                equipped.enhanceLevel = newLevel
+                equippedBoneRepo.save(equipped)
+            }
+        }
+        val (yearOrdinal, qualityOrdinal, currentLevel) = snapshot
+        if (currentLevel >= GameBalance.BONE_ENHANCE_MAX_LEVEL) {
+            return EnhanceResult(
+                success = false,
+                message = "已达强化上限（+${GameBalance.BONE_ENHANCE_MAX_LEVEL}）"
+            )
+        }
+        val cost = GameBalance.boneEnhanceCost(yearOrdinal, qualityOrdinal, currentLevel)
+        if (profile.gold < cost) {
+            return EnhanceResult(success = false, message = "金币不足（需要 $cost）")
+        }
+        profile.gold -= cost
+        val newLevel = currentLevel + 1
+        persist(newLevel)
+        profile.updatedAt = LocalDateTime.now()
+        profileRepo.save(profile)
+        return EnhanceResult(
+            success = true, enhanceLevel = newLevel, goldSpent = cost,
+            message = "强化成功！魂骨强化等级 +1（当前 +$newLevel，花费 $cost 金币）"
+        )
     }
 
     @Transactional

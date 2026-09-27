@@ -54,6 +54,9 @@ data class CombatStatsDto(
  *    六行之和；未觉醒恒为 0，退化为原六行恒等）
  *  - 上式七行 + school == power（第十九轮流派：流派系数战力贡献单列第 8 行，school 行 =
  *    含流派战力 − 七行之和（差值法，prestige/soul 行同款）；未选流派恒为 0，退化为原七行恒等）
+ *  - 上式八行 + enhance == power（第二十七轮魂骨强化：强化乘区战力增量单列第 9 行，enhance 行 =
+ *    含强化全量战力 − 全骨 enhanceLevel 归零口径战力（差值法收尾）；骨行 boneAtk/boneHp/bonePower
+ *    按归零口径重算，避免与强化行双重计入。无强化骨时该行恒为 0、骨行与旧口径逐位一致，退化为原八行恒等）
  */
 data class PowerDetailDto(
     /** 基础攻击 = PLAYER_ATK_BASE + level × PLAYER_ATK_PER_LEVEL */
@@ -78,7 +81,10 @@ data class PowerDetailDto(
     /** 武魂战力行（第十八轮武魂觉醒：= 含武魂战力 − 六行之和；未觉醒恒为 0。尾部新增，向后兼容） */
     val soul: Long = 0,
     /** 流派战力行（第十九轮流派：= 含流派战力 − 七行之和；未选流派恒为 0。尾部新增，向后兼容） */
-    val school: Long = 0
+    val school: Long = 0,
+    /** 魂骨强化战力行（第二十七轮：= 含强化全量战力 − 全骨归零口径战力；骨行为归零口径。
+     *  无强化骨恒为 0。尾部新增，向后兼容） */
+    val enhance: Long = 0
 )
 
 // ======== 成就 ========

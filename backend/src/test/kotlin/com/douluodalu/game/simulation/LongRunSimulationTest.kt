@@ -45,6 +45,10 @@ import kotlin.random.Random
  *                            第 1 天免费选 BALANCED（温和系数建模，不重 roll 武魂、不消耗掷点），
  *                            系数经 GameService.schoolModsOf/playerCombatStats/schoolScaledMaxHp/
  *                            EquipmentPowerService.applySchool 计入战斗属性、maxHp 与塔胜率战力，改动需同步
+ *   - enhancePass()          魂骨强化镜像（第二十七轮：GameService.enhanceBone slotIndex 路径 +
+ *                            GameBalance.boneEnhanceCost/BONE_ENHANCE_MAX_LEVEL，费用走生产公式、100% 成功；
+ *                            玩家策略见 ENHANCE_GOLD_FLOOR/ENHANCE_RESERVE 注释——预算约束防挤兑
+ *                            扩容/商店，扣费镜像否则仿真高估金币存量），改动需同步
  * 平衡常量直接引用 GameBalance（单一事实来源），但公式结构如有改动需同步本文件。
  *
  * 断言刻意只放软性的健康检查（跑通、数量级不离谱）；主要产出是根目录
@@ -64,6 +68,12 @@ class LongRunSimulationTest {
         private val QUEST_GOLD_PER_DAY = GameBalance.DAILY_QUESTS.sumOf { it.rewardGold }
         private val QUEST_BOSS_COIN_PER_DAY = GameBalance.DAILY_QUESTS.sumOf { it.rewardBossCoin }
         private val QUEST_SOUL_POWER_PER_DAY = GameBalance.DAILY_QUESTS.sumOf { it.rewardSoulPower }
+
+        // ======== 魂骨强化镜像的玩家策略预算（第二十七轮，仿真侧杠杆；生产常量不动） ========
+        // 金币存量低于 ENHANCE_GOLD_FLOOR 不强化；单次强化费用 ≤ gold − ENHANCE_GOLD_FLOOR
+        // （强化后存量仍守住 3 万防线——比「保留 3000 扩容券预算」更保守，扩容/商店完全不受挤兑，
+        // 从而把「强化抢金币 → 扩容延迟 → 背包满丢掉落」隔离在策略外，作为观察口径留档）。
+        private val ENHANCE_GOLD_FLOOR = 30_000L
     }
 
     // ======== 镜像状态 ========
@@ -83,6 +93,8 @@ class LongRunSimulationTest {
         var awakens = 0; var reawakens = 0
         // 第十九轮流派镜像事件计数（当日；报告「流派事件」行汇总）
         var schoolChoices = 0
+        // 第二十七轮魂骨强化镜像事件计数（当日；报告「强化镜像」小节汇总）
+        var enhances = 0; var enhanceGold = 0L
     }
 
     /** 每日固定收入镜像（SimPlayer/EquipSimPlayer 共用，保证两组画像经济口径一致） */
@@ -518,6 +530,8 @@ class LongRunSimulationTest {
         val enforceLoad: Boolean,
         val capacityMult: Long = GameBalance.RING_CAPACITY_ROOT_MULT,
         val towerRingYearCap: Int = GameBalance.TOWER_RING_DROP_YEAR_CAP,
+        /** 第二十七轮强化镜像开关（对照组 = false；默认开启，关闭时金币存量口径回到旧版） */
+        val enhanceEnabled: Boolean = true,
     ) {        val rng = Random(seed)
 
         var level = 1
@@ -832,6 +846,42 @@ class LongRunSimulationTest {
             while (bagCap < capLimit && gold >= 3000) { gold -= 3000; bagCap += 5; n++ }
             return n
         }
+
+        // ---- 魂骨强化镜像（GameService.enhanceBone 双路径 + GameBalance.boneEnhanceCost）----
+        // 玩家策略（第二十七轮，仿真侧杠杆）：【每日一次】（首次登录）若金币 ≥ ENHANCE_GOLD_FLOOR，
+        // 在【未满 +15 且费用 ≤ gold−防线（强化后存量不破防线）】的骨中强化 itemScore 最高的一件：
+        //  ① 已装备骨优先（slotIndex 路径镜像）；② 若已装备骨全部 ≥ +15（塔掉落白送 max(1,towerLevel/10)
+        //     最高 +30，越过主动强化上限——设计发现，见报告小节），退回背包骨（itemIndex 路径镜像，
+        //     「预备强化」策略，终局 sink 的主要来源）。
+        // 费用走生产公式（随年份/品质/当前等级平方陡增）、100% 成功。每日一次+存量防线是刻意克制的
+        // 节奏（逐登录强化实测吃掉 ~87% 日收入、把存量钉死在防线，违背「补充 sink」定位）。
+        // 零掷点：强化不消耗 RNG，但抬升骨战力 → 战斗/塔胜负路径与关闭强化的对照自然分叉（统计对照）。
+        // 扣费镜像是经济闭环的关键：不扣费则仿真高估金币存量（吸收费未实现前的主力 sink）。
+        fun enhancePass(s: DayStats) {
+            if (!enhanceEnabled || gold < ENHANCE_GOLD_FLOOR) return
+            val budget = gold - ENHANCE_GOLD_FLOOR
+            if (budget <= 0) return
+            var best: Pair<SimItem, (Int) -> Unit>? = null
+            var bestScore = Long.MIN_VALUE
+            fun consider(item: SimItem, apply: (Int) -> Unit) {
+                if (item.enhance >= GameBalance.BONE_ENHANCE_MAX_LEVEL) return
+                val cost = GameBalance.boneEnhanceCost(item.year, item.quality, item.enhance)
+                if (cost > budget) return
+                val score = itemScore(level, item)
+                if (score > bestScore) { bestScore = score; best = item to apply }
+            }
+            bones.forEachIndexed { i, b -> b?.let { consider(it) { nl -> bones[i] = b.copy(enhance = nl) } } }
+            if (best == null) {
+                bag.forEachIndexed { i, b -> if (b.type == 1) consider(b) { nl -> bag[i] = b.copy(enhance = nl) } }
+            }
+            val chosen = best ?: return
+            val (item, apply) = chosen
+            val cost = GameBalance.boneEnhanceCost(item.year, item.quality, item.enhance)
+            gold -= cost
+            s.enhances += 1
+            s.enhanceGold += cost
+            apply(item.enhance + 1)
+        }
     }
 
     /** 负荷回路专项的每日采样 */
@@ -843,6 +893,9 @@ class LongRunSimulationTest {
         val upgradesToday: Int, val ringDropsToday: Int, val deadRingDropsToday: Int,
         val bagRingsByYear: IntArray,
         val prestigeCount: Int = 0,
+        /** 第二十七轮强化镜像当日采样（次数/消耗金币） */
+        val enhancesToday: Int = 0,
+        val enhanceGoldToday: Long = 0,
     ) {
         val utilPct: Double get() = if (capacity <= 0) 0.0 else load * 100.0 / capacity
     }
@@ -857,11 +910,17 @@ class LongRunSimulationTest {
         val totalUpgrades: Long,
         val totalRingDrops: Long,
         val totalDeadRingDrops: Long,
+        /** 第二十七轮强化镜像汇总：累计次数 / 消耗金币 / 全期金币总收入（占比分母） */
+        val totalEnhances: Long = 0,
+        val totalEnhanceGold: Long = 0,
+        val totalGoldIncome: Long = 0,
     ) {
         val final: LoadLoopDay get() = rows.last()
         val maxUtilEver: Double get() = rows.maxOf { it.utilPct }
         /** 掉落的魂环里「掉落当时就装不下」的比例（死库存进量） */
         val deadRingDropShare: Double get() = if (totalRingDrops == 0L) 0.0 else totalDeadRingDrops * 100.0 / totalRingDrops
+        /** 强化消耗占全期金币总收入的百分比（经济 sink 占比） */
+        val enhanceShareOfIncome: Double get() = if (totalGoldIncome == 0L) 0.0 else totalEnhanceGold * 100.0 / totalGoldIncome
         fun rowsEvery(n: Int): List<LoadLoopDay> = rows.filter { it.day % n == 0 || it.day == rows.size }
     }
 
@@ -874,13 +933,17 @@ class LongRunSimulationTest {
         capacityMult: Long = GameBalance.RING_CAPACITY_ROOT_MULT,
         towerRingYearCap: Int = GameBalance.TOWER_RING_DROP_YEAR_CAP,
         prestigeEnabled: Boolean = true,
+        enhanceEnabled: Boolean = true,
     ): LoadLoopRun {
-        val p = EquipSimPlayer(seed, enforceLoad, capacityMult, towerRingYearCap)
+        val p = EquipSimPlayer(seed, enforceLoad, capacityMult, towerRingYearCap, enhanceEnabled)
         val rows = ArrayList<LoadLoopDay>(days)
         var totalRejects = 0L
         var totalUpgrades = 0L
         var totalRingDrops = 0L
         var totalDeadRingDrops = 0L
+        var totalEnhances = 0L
+        var totalEnhanceGold = 0L
+        var totalGoldIncome = 0L
         val loginHours = listOf(8.0, 14.0, 22.0)
         val battlesPerSession = listOf(6, 8, 6)
         val towersPerSession = listOf(5, 5, 8)
@@ -903,6 +966,9 @@ class LongRunSimulationTest {
                 repeat(battlesPerSession[i]) { p.battle(s) }
                 repeat(towersPerSession[i]) { p.tower(s) }
                 p.equipPass()
+                // 第二十七轮强化镜像：每日首次登录强化一件（穿装后、卖垃圾/买扩容前；克制节奏+
+                // 存量防线把 sink 压在补充量级——逐登录强化实测吃掉 ~87% 日收入，见报告小节）
+                if (i == 0) p.enhancePass(s)
                 s.sellGold += p.sellJunk()
                 p.buyExpansions()
             }
@@ -910,6 +976,10 @@ class LongRunSimulationTest {
             totalUpgrades += p.upgradesToday
             totalRingDrops += p.ringDropsToday
             totalDeadRingDrops += p.deadRingDropsToday
+            totalEnhances += s.enhances
+            totalEnhanceGold += s.enhanceGold
+            totalGoldIncome += s.offlineGold + s.battleGold + s.towerGold + s.sellGold +
+                    s.checkInGold + s.questGold
             val bagRings = p.bagRings()
             rows.add(LoadLoopDay(
                 day = d, level = p.level, mapId = p.mapId, stage = p.stage, towerFloor = p.towerFloor,
@@ -921,6 +991,7 @@ class LongRunSimulationTest {
                 deadRingDropsToday = p.deadRingDropsToday,
                 bagRingsByYear = (0..4).map { y -> bagRings.count { it.year == y } }.toIntArray(),
                 prestigeCount = p.prestigeCount,
+                enhancesToday = s.enhances, enhanceGoldToday = s.enhanceGold,
             ))
             p.rejectsToday = 0
             p.upgradesToday = 0
@@ -929,7 +1000,7 @@ class LongRunSimulationTest {
         }
         return LoadLoopRun(rows, p.firstRejectDay, p.firstRejectMap, p.firstRejectLevel,
             p.firstRejectLoad, p.firstRejectYear, p.firstEquipDayByYear, p.dropLostTotal, totalRejects,
-            totalUpgrades, totalRingDrops, totalDeadRingDrops)
+            totalUpgrades, totalRingDrops, totalDeadRingDrops, totalEnhances, totalEnhanceGold, totalGoldIncome)
     }
 
     // ======== 报告生成 ========
@@ -941,6 +1012,8 @@ class LongRunSimulationTest {
         val deadShareEarly: Double, val deadShareLate: Double,
         val firstRejectDay: Int, val upgradesPerDay: Double, val totalRejects: Long,
         val prestigeCount: Int = 0, val firstPrestigeDay: Int = 0,
+        /** 第二十七轮强化镜像汇总（10 种子收敛锁观察列） */
+        val enhances: Long = 0, val enhanceGold: Long = 0, val enhanceShare: Double = 0.0,
     )
 
     /** 后 60 天（31~90）掉落的魂环中「掉落当时就装不下」的比例 */
@@ -958,7 +1031,7 @@ class LongRunSimulationTest {
 
     private fun buildLoadLoopSection(
         load: LoadLoopRun, free: LoadLoopRun, zero: SimOutcome,
-        seeds: List<SeedSummary>,
+        seeds: List<SeedSummary>, noEnhance: LoadLoopRun,
     ): String = buildString {
         val fl = load.final
         val u10 = load.rows.take(10).averageOf { it.utilPct }
@@ -1061,19 +1134,56 @@ class LongRunSimulationTest {
         appendLine()
         appendLine("### 多种子鲁棒性抽查（10 种子 × 90 天，实装组·调参后）")
         appendLine()
-        appendLine("| 种子 | 90天等级 | 转数(首次转生日) | 推图 | 后期利用率 | 死环率(前30/后60天) | 换装/日 | 拒装/日 | 槽位 | 环积压(≥2档) | 首次拒装 |")
-        appendLine("|---|---|---|---|---|---|---|---|---|---|---|")
+        appendLine("| 种子 | 90天等级 | 转数(首次转生日) | 推图 | 后期利用率 | 死环率(前30/后60天) | 换装/日 | 拒装/日 | 槽位 | 环积压(≥2档) | 首次拒装 | 强化(次/金/占收入) |")
+        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")
         for (s in seeds) {
             appendLine("| ${s.seed} | ${s.level} | ${s.prestigeCount} (第 ${s.firstPrestigeDay} 天) | ${s.mapId + 1} | ${String.format("%.1f", s.utilLate)}% " +
                     "| ${String.format("%.1f", s.deadShareEarly)}% / ${String.format("%.1f", s.deadShareLate)}% " +
                     "| ${String.format("%.2f", s.upgradesPerDay)} | ${String.format("%.1f", s.totalRejects / 90.0)} " +
-                    "| ${s.slots}/9 | ${s.bagRings} (${s.bagHighTier}) | 第 ${s.firstRejectDay} 天 |")
+                    "| ${s.slots}/9 | ${s.bagRings} (${s.bagHighTier}) | 第 ${s.firstRejectDay} 天 " +
+                    "| ${s.enhances}/${eng(s.enhanceGold)}/${String.format("%.1f", s.enhanceShare)}% |")
         }
         appendLine()
         appendLine("- 10 种子汇总（转生开启）：满槽 ${seeds.count { it.slots == 9 }}/10、" +
                 "后期利用率 ${String.format("%.1f", seeds.minOf { it.utilLate })}%~${String.format("%.1f", seeds.maxOf { it.utilLate })}%" +
                 "、后 60 天死环率最高 ${String.format("%.1f", seeds.maxOf { it.deadShareLate })}%" +
                 "、累计转生 ${seeds.sumOf { it.prestigeCount }} 次（全部种子首次转生日 ${seeds.minOf { it.firstPrestigeDay }}~${seeds.maxOf { it.firstPrestigeDay }} 天）。")
+        appendLine()
+        appendLine("### 魂骨强化镜像（第二十七轮）")
+        appendLine()
+        appendLine("- 玩家策略（仿真侧杠杆，生产常量不动）：每日首次登录，若金币 ≥${eng(ENHANCE_GOLD_FLOOR)}，")
+        appendLine("  在【未满 +${GameBalance.BONE_ENHANCE_MAX_LEVEL} 且费用 ≤ 金币−防线】的骨中强化 itemScore 最高的一件——已装备骨优先")
+        appendLine("  （slotIndex 路径），全被顶满时退回背包骨（itemIndex 路径「预备强化」）。费用走生产公式")
+        appendLine("  `GameBalance.boneEnhanceCost`（800×(级+1)²×(年+1)×品质倍率，随等级平方陡增）、100% 成功；")
+        appendLine("  强化后存量仍 ≥${eng(ENHANCE_GOLD_FLOOR)}（扩容/商店完全不受挤兑，「强化抢金币 → 扩容延迟 →")
+        appendLine("  背包满丢掉落」被策略防线隔离——对照组观察口径见下表）。每日一次+防线是刻意克制的节奏")
+        appendLine("  （逐登录强化的先导实测吃掉 ~87% 日收入、把存量钉死在防线，违背「补充 sink」定位）。零掷点：")
+        appendLine("  强化不消耗 RNG，但抬升骨战力 → 战斗/塔胜负路径与对照分叉，对照为统计对照而非逐位同 RNG。")
+        appendLine("- **设计发现（塔白送曲线 × 主动强化上限的互动）**：生产塔掉落魂骨白送 enhance=max(1,towerLevel/10)")
+        appendLine("  （rollBackpackDrop 被传入 towerLevel=floor×3，满层 300 → **+30**），越过主动强化上限 +15 →")
+        appendLine("  终局已装备骨全部不可再强化（这正是「背包骨预备强化」成为终局 sink 主力的原因）。战斗掉落骨")
+        appendLine("  （+0，battle 内联掉落不经 rollBackpackDrop）与前期塔骨（+≤15）是主动强化的可作用对象。")
+        appendLine("  生产掉落曲线是否要对齐上限（如 min(15, towerLevel/10)）属主线决策，本次未动生产代码。")
+        appendLine("- 扣费镜像是经济闭环的关键（吸收费未实现前的主力金币 sink）：不扣费则仿真高估金币存量。")
+        appendLine("- 主种子 90 天（强化开启）：累计强化 ${load.totalEnhances} 次、消耗 ${eng(load.totalEnhanceGold)} 金" +
+                "（占全期金币总收入 ${String.format("%.1f", load.enhanceShareOfIncome)}%；期末金币存量 ${eng(load.final.gold)}）。")
+        appendLine("- 主种子对照组（同种子关闭强化）：期末金币 ${eng(noEnhance.final.gold)}、" +
+                "后期利用率 ${String.format("%.1f", noEnhance.rows.filter { it.day > 60 }.averageOf { it.utilPct })}%、" +
+                "满包丢掉落 ${noEnhance.dropLostTotal} 件（强化开启为 ${load.dropLostTotal} 件）。")
+        appendLine()
+        appendLine("| 指标 | 关闭强化（对照） | 开启强化 |")
+        appendLine("|---|---|---|")
+        val uLateOff = noEnhance.rows.filter { it.day > 60 }.averageOf { it.utilPct }
+        val uLateOn = load.rows.filter { it.day > 60 }.averageOf { it.utilPct }
+        appendLine("| 90 天末金币存量 | ${eng(noEnhance.final.gold)} | ${eng(load.final.gold)} |")
+        appendLine("| 90 天末等级/推图 | Lv.${noEnhance.final.level} ${noEnhance.final.mapId + 1}-${noEnhance.final.stage} | Lv.${load.final.level} ${load.final.mapId + 1}-${load.final.stage} |")
+        appendLine("| 后期(61~90天)利用率 | ${String.format("%.1f", uLateOff)}% | ${String.format("%.1f", uLateOn)}% |")
+        appendLine("| 满包丢掉落 | ${noEnhance.dropLostTotal} 件 | ${load.dropLostTotal} 件 |")
+        appendLine("| 累计强化次数/消耗 | 0 / 0 | ${load.totalEnhances} / ${eng(load.totalEnhanceGold)} |")
+        appendLine()
+        appendLine("- 10 种子强化汇总：累计 ${seeds.sumOf { it.enhances }} 次 / ${eng(seeds.sumOf { it.enhanceGold })} 金，" +
+                "占收入比 ${String.format("%.1f", seeds.minOf { it.enhanceShare })}%~${String.format("%.1f", seeds.maxOf { it.enhanceShare })}%——" +
+                "与 90 天金币存量 840k~2.6M 的健康 sink 锚点同量级，前期单次费用 ≤ 日收入量级。")
     }
 
     /**
@@ -1350,6 +1460,8 @@ class LongRunSimulationTest {
         val load90 = runLoadLoop(90, 20260914L, enforceLoad = true)
         val load90Base = runLoadLoop(90, 20260914L, enforceLoad = true, prestigeEnabled = false)
         val free90 = runLoadLoop(90, 20260914L, enforceLoad = false)
+        // 第二十七轮强化镜像对照组：同种子关闭强化（统计对照，观察强化抢金币对扩容/背包挤压的影响）
+        val load90NoEnhance = runLoadLoop(90, 20260914L, enforceLoad = true, enhanceEnabled = false)
         val seeds = (0 until 10).map { i ->
             val seed = 20260914L + i * 1009L
             val run = runLoadLoop(90, seed, enforceLoad = true)
@@ -1363,6 +1475,8 @@ class LongRunSimulationTest {
                 totalRejects = run.totalRejects,
                 prestigeCount = run.final.prestigeCount,
                 firstPrestigeDay = run.rows.firstOrNull { it.prestigeCount > 0 }?.day ?: 0,
+                enhances = run.totalEnhances, enhanceGold = run.totalEnhanceGold,
+                enhanceShare = run.enhanceShareOfIncome,
             )
         }
         val elapsed = System.currentTimeMillis() - start
@@ -1379,6 +1493,15 @@ class LongRunSimulationTest {
         assertTrue(load90.final.slots >= 1, "90 天至少应能穿上 1 个魂环（实测槽位 ${load90.final.slots}）")
         assertTrue(load90.rows.all { it.utilPct.isFinite() && it.utilPct >= 0.0 })
         assertTrue(seeds.all { it.slots >= 1 }, "所有种子都应至少能穿上 1 个魂环")
+        // 第二十七轮强化镜像收敛锁（10 种子 × 90 天，强化策略生效后复核）：
+        //  ① sink 必须真实触发（扣费镜像被 exercised，防未来改动静默废掉镜像→高估存量）；
+        //  ② 全种子后期利用率仍落健康带（强化抬升骨战力 → 容量↑ → 利用率↓的方向不得击穿下限 40%）
+        assertTrue(load90.totalEnhances > 0 && load90.totalEnhanceGold > 0,
+            "主种子应实际发生强化（实测 ${load90.totalEnhances} 次/${load90.totalEnhanceGold} 金）")
+        assertTrue(seeds.all { it.enhances > 0 }, "所有种子的强化镜像都应触发（sink 生效）")
+        assertTrue(seeds.all { it.utilLate in 40.0..92.0 },
+            "10 种子后期利用率应在健康带 40~92%（实测 ${seeds.map { String.format("%.1f", it.utilLate) }}，" +
+                    "越界=强化镜像扰动负荷回路）")
         // 任务#22 调参后的收敛锁（固定种子实测 9/9 槽、死环率~0、利用率带内）：
         // 若未来改动使回路退化（恒卡或形同虚设），此三断言会先炸
         assertEquals(9, load90.final.slots, "主种子 90 天应满 9 槽（实测 ${load90.final.slots}）")
@@ -1393,7 +1516,7 @@ class LongRunSimulationTest {
         val root = if (userDir.name.equals("backend", ignoreCase = true)) userDir.parentFile else userDir
         val reportFile = File(root, "数值仿真报告-90天.md")
         reportFile.writeText(
-            buildReport(r30, r90, elapsed) + "\n" + buildLoadLoopSection(load90, free90, r90, seeds) +
+            buildReport(r30, r90, elapsed) + "\n" + buildLoadLoopSection(load90, free90, r90, seeds, load90NoEnhance) +
                     "\n" + buildPrestigeSection(r90, r90Base, load90, load90Base)
         )
         assertTrue(reportFile.exists())

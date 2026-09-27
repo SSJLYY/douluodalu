@@ -9,9 +9,10 @@ import type { CombatStats, PowerDetail } from '@/lib/api';
  * 后端 PowerDetailDto 保证 basePower+ringPower+bonePower+corePower == 总战力（拆分求和恒等），
  * 每行显示攻击/生命贡献与占总战力百分比；颜色全部走主题调色板变量，亮暗两色主题均可读。
  * 后端补 achievement 字段后追加第 5 行「🏆 成就」、补 prestige 字段后追加第 6 行「🔄 转生」、
- * 补 soul 字段后追加第 7 行「💠 武魂」、补 school 字段后追加第 8 行「🎓 流派」
- * （四行/五行/六行/七行/八行求和 == 总战力）；
- * 旧后端缺字段 → undefined 按 0 处理、行隐藏，脚注在「四行/五行/六行/七行/八行」间动态回退。
+ * 补 soul 字段后追加第 7 行「💠 武魂」、补 school 字段后追加第 8 行「🎓 流派」、
+ * 补 enhance 字段后追加第 9 行「🔨 强化」
+ * （四行~九行求和 == 总战力）；
+ * 旧后端缺字段 → undefined 按 0 处理、行隐藏，脚注在「四行/五行/六行/七行/八行/九行」间动态回退。
  * 脚注下方追加一行战斗属性摘要（魔攻/物防/魔防/暴击）：combatStats 缺失（旧后端）→ 整行隐藏；
  * 暴击率 0 也显示「暴击 0%」（新手可见成长空间）。物攻已含在「基础」行的 baseAtk 内，不单独下发。
  */
@@ -42,6 +43,7 @@ export default function PowerDetailPanel({
     const prestigePower = detail.prestige ?? 0;
     const soulPower = detail.soul ?? 0;
     const schoolPower = detail.school ?? 0;
+    const enhancePower = detail.enhance ?? 0;
     const rows: PowerRow[] = [
         { key: 'base', icon: '🛡️', label: '基础（等级+攻击）', atk: detail.baseAtk, hp: detail.baseHp, share: detail.basePower, bar: 'bg-gray-500', ariaLabel: '基础（等级+攻击）战力贡献' },
         { key: 'ring', icon: '💜', label: '魂环', atk: detail.ringAtk, hp: detail.ringHp, share: detail.ringPower, bar: 'bg-blue-500', ariaLabel: '魂环战力贡献' },
@@ -63,9 +65,13 @@ export default function PowerDetailPanel({
             key: 'school', icon: '🎓', label: '流派', atk: null, hp: null,
             share: schoolPower, bar: 'bg-indigo-500', ariaLabel: '流派加成',
         }] : []),
+        ...(enhancePower > 0 ? [{
+            key: 'enhance', icon: '🔨', label: '强化', atk: null, hp: null,
+            share: enhancePower, bar: 'bg-lime-500', ariaLabel: '强化加成',
+        }] : []),
     ];
-    // 脚注行数文案随缺失字段动态回退：4 固定行 + 成就/转生/武魂/流派可选行 → 四/五/六/七/八行
-    const rowCountLabel = ['四', '五', '六', '七', '八'][rows.length - 4] ?? String(rows.length);
+    // 脚注行数文案随缺失字段动态回退：4 固定行 + 成就/转生/武魂/流派/强化可选行 → 四~九行
+    const rowCountLabel = ['四', '五', '六', '七', '八', '九'][rows.length - 4] ?? String(rows.length);
     return (
         <div className="dl-fade-up bg-surface/80 rounded-xl border border-line" data-testid="power-detail-panel">
             <button
@@ -112,7 +118,7 @@ export default function PowerDetailPanel({
                         );
                     })}
                     <p className="text-[11px] text-gray-500 leading-relaxed">
-                        战力 = 基础 + 装备攻击加成 + 装备生命÷10{achPower > 0 ? ' + 成就加成' : ''}{prestigePower > 0 ? ' + 转生加成' : ''}{soulPower > 0 ? ' + 武魂加成' : ''}{schoolPower > 0 ? ' + 流派加成' : ''}；{rowCountLabel}行求和恒等于总战力（后端同源拆分）。
+                        战力 = 基础 + 装备攻击加成 + 装备生命÷10{achPower > 0 ? ' + 成就加成' : ''}{prestigePower > 0 ? ' + 转生加成' : ''}{soulPower > 0 ? ' + 武魂加成' : ''}{schoolPower > 0 ? ' + 流派加成' : ''}{enhancePower > 0 ? ' + 强化加成' : ''}；{rowCountLabel}行求和恒等于总战力（后端同源拆分）。
                     </p>
                     {combatStats && (
                         <div

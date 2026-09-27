@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import api, { BackpackItem } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
+import { boneEnhanceCost, boneEnhanceMaxed } from '@/lib/equipment';
 import { BootState, EmptyPanel } from '@/components/StateViews';
 
 const YEAR_NAMES = ['百年', '千年', '万年', '十万年', '百万年'];
@@ -15,7 +16,7 @@ const CORE_SLOTS = [
 ];
 
 export default function EquipmentPage() {
-    const { gameState, message, setMessage, refresh, loadError } = useGameData();
+    const { gameState, message, setMessage, refresh, loadError, runAction } = useGameData();
     const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
 
     if (!gameState) {
@@ -112,6 +113,30 @@ export default function EquipmentPage() {
         } catch (err: unknown) {
             showMessage(err instanceof Error ? err.message : '出售失败');
         }
+    }
+
+    /**
+     * 强化背包魂骨：itemIndex 走 BONE 子列表下标（与 equipBone 的 boneIndex 同口径）。
+     * 金币不足仍发请求（按钮不禁用）→ 后端 400 文案（如「金币不足（需要 X）」）经 runAction 落到 message 条；
+     * 成功/失败都由 runAction 自动 refresh 拉新 enhanceLevel 与金币数。
+     */
+    async function handleEnhanceItem(item: BackpackItem) {
+        const itemIndex = indexOfBackpackType('BONE', item.id);
+        if (itemIndex < 0) return;
+        await runAction(
+            () => api.enhanceBone({ itemIndex }),
+            (r) => setMessage(r.message),
+            '强化失败',
+        );
+    }
+
+    /** 强化已装备魂骨：slotIndex 0-5（与 unequipBone 同口径），同样交 runAction 成功回调 + 自动 refresh */
+    async function handleEnhanceSlot(slotIndex: number) {
+        await runAction(
+            () => api.enhanceBone({ slotIndex }),
+            (r) => setMessage(r.message),
+            '强化失败',
+        );
     }
 
     async function handleExpand() {
@@ -230,23 +255,55 @@ export default function EquipmentPage() {
                         {Array.from({ length: 6 }).map((_, i) => {
                             const bone = gameState.equippedBones.find(b => b.slotIndex === i);
                             const slotKey = `bone-${i}`;
+                            const boneMaxed = bone != null && boneEnhanceMaxed(bone.enhanceLevel);
                             return (
-                                <button
-                                    type="button"
+                                // 已装备槽内嵌强化小按钮：<button> 里不能再套 <button>（HTML 禁止交互元素嵌套，
+                                // SSR 解析会把外层标签提前闭合 → hydration 报错），故骨槽降级为 div[role=button]
+                                // 承载「点槽=卸下」语义（含 Enter/Space 键盘等价），强化按钮是真正的 <button>。
+                                // 键盘防双触发：外层只在事件源是自身时响应（内层按键 target ≠ currentTarget 直接跳过），
+                                // 内层点击 stopPropagation 防止冒泡触发卸下。
+                                <div
                                     key={i}
+                                    role="button"
+                                    tabIndex={0}
                                     aria-label={`魂骨槽位 ${BONE_TYPE_NAMES[i]}${bone ? '，点击卸下' : '，空，点击选中'}`}
                                     className={`block w-full p-2 rounded text-center text-sm cursor-pointer min-h-11 ${
                                         bone ? 'bg-blue-900 border border-blue-600' : 'bg-gray-700 dl-slot-empty'
                                     } ${selectedSlot === slotKey ? 'ring-2 ring-yellow-400' : ''}`}
                                     onClick={() => handleSlotClick(slotKey, Boolean(bone))}
+                                    onKeyDown={(e) => {
+                                        if (e.target !== e.currentTarget) return;
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault();
+                                            handleSlotClick(slotKey, Boolean(bone));
+                                        }
+                                    }}
                                 >
                                     <div className="text-xs text-gray-400">{BONE_TYPE_NAMES[i]}</div>
                                     {bone ? (
-                                        <div className="text-blue-300 break-all leading-snug">{getBoneInfo(bone)}</div>
+                                        <>
+                                            <div className="text-blue-300 break-all leading-snug">{getBoneInfo(bone)}</div>
+                                            {/* 槽内强化：EquippedBoneDto 未下发 qualityOrdinal（背包 BONE 有）→
+                                                槽内不预览费用（避免报错数），实际花费以后端成功/400 文案为准 */}
+                                            <button
+                                                type="button"
+                                                data-testid={`enhance-btn-slot-${i}`}
+                                                aria-label={`强化${BONE_TYPE_NAMES[i]}魂骨，当前 +${bone.enhanceLevel}${boneMaxed ? '，已达上限' : ''}`}
+                                                title={boneMaxed ? '已达强化上限（+15）' : `强化到 +${bone.enhanceLevel + 1}`}
+                                                disabled={boneMaxed}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (!boneMaxed) void handleEnhanceSlot(i);
+                                                }}
+                                                className="mt-1 w-full px-1.5 py-0.5 text-[11px] bg-yellow-900/60 hover:bg-yellow-800 disabled:hover:bg-yellow-900/60 disabled:opacity-40 border border-yellow-700 rounded"
+                                            >
+                                                {boneMaxed ? '已满级' : '🔨 强化'}
+                                            </button>
+                                        </>
                                     ) : (
                                         <div className="text-gray-500">空</div>
                                     )}
-                                </button>
+                                </div>
                             );
                         })}
                     </div>
@@ -300,6 +357,14 @@ export default function EquipmentPage() {
                             // hover(title)/选中时可见的负荷预览：装上后 X/Y（装得下/装不下）
                             const preview = isRing ? ringLoadPreview(item) : null;
                             const cannotFit = preview != null && !preview.fits;
+                            // 魂骨强化（仅 BONE 卡显示第三钮）：费用实时按 lib/equipment.ts 同源公式预览，
+                            // 已满级禁用；金币不足不禁用（后端 400 文案经 runAction 落 message 条）
+                            const isBone = item.itemType === 'BONE';
+                            const boneItemIndex = isBone ? indexOfBackpackType('BONE', item.id) : -1;
+                            const boneMaxed = isBone && boneEnhanceMaxed(item.enhanceLevel);
+                            const boneCost = isBone
+                                ? boneEnhanceCost(item.yearOrdinal, item.qualityOrdinal, item.enhanceLevel)
+                                : 0;
                             return (
                                 <div
                                     key={item.id}
@@ -327,7 +392,8 @@ export default function EquipmentPage() {
                                             <span className="ml-1">{cannotFit ? '装不下' : '装得下'}</span>
                                         </div>
                                     )}
-                                    <div className="mt-1 flex gap-1">
+                                    {/* flex-wrap：375px 下三钮放不下时「强化（X金币）」换行占整行，不溢出 */}
+                                    <div className="mt-1 flex flex-wrap gap-1">
                                         <button
                                             onClick={(e) => { e.stopPropagation(); void handleEquip(item); }}
                                             aria-disabled={cannotFit || item.locked}
@@ -346,6 +412,19 @@ export default function EquipmentPage() {
                                         >
                                             出售
                                         </button>
+                                        {isBone && (
+                                            <button
+                                                type="button"
+                                                data-testid={`enhance-btn-item-${boneItemIndex}`}
+                                                disabled={boneMaxed}
+                                                aria-label={`强化魂骨，当前 +${item.enhanceLevel}，${boneMaxed ? '已达上限' : `花费 ${boneCost.toLocaleString()} 金币`}`}
+                                                title={boneMaxed ? '已达强化上限（+15）' : `强化到 +${item.enhanceLevel + 1}，花费 ${boneCost.toLocaleString()} 金币`}
+                                                onClick={(e) => { e.stopPropagation(); if (!boneMaxed) void handleEnhanceItem(item); }}
+                                                className="flex-1 px-2 py-1.5 max-sm:min-h-11 text-xs bg-yellow-900/60 hover:bg-yellow-800 disabled:hover:bg-yellow-900/60 disabled:opacity-40 border border-yellow-700 rounded"
+                                            >
+                                                {boneMaxed ? '已满级' : `强化（${boneCost.toLocaleString()}金币）`}
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             );

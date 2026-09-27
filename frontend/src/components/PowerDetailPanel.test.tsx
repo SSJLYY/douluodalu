@@ -209,6 +209,76 @@ describe('PowerDetailPanel 流派第 8 行', () => {
     });
 });
 
+describe('PowerDetailPanel 强化第 9 行', () => {
+    /** 八行总和（100+40+15+5+25+10+7+9），强化行再额外累加 */
+    const EIGHT_ROW_POWER = BASE_POWER + 25 + 10 + 7 + 9;
+
+    it('enhance>0 追加第 9 行「强化」（aria-label=强化加成，bar=bg-lime-500），脚注升级为九行 + 强化加成', () => {
+        const container = openPanel(EIGHT_ROW_POWER + 3, {
+            ...BASE_DETAIL,
+            achievement: 25,
+            prestige: 10,
+            soul: 7,
+            school: 9,
+            enhance: 3,
+        });
+
+        expect(screen.getByRole('progressbar', { name: '强化加成' }).getAttribute('aria-valuenow')).toBe('3');
+        // 九行齐全：base/ring/bone/core/achievement/prestige/soul/school/enhance
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(9);
+        // 契约：强化行 bar 用 bg-lime-500
+        expect(container.querySelector('[data-power-row="enhance"] .bg-lime-500')).toBeTruthy();
+
+        const footnote = screen.getByText(/行求和恒等于总战力/).textContent ?? '';
+        expect(footnote).toContain('九行');
+        expect(footnote).toContain('强化加成');
+    });
+
+    it('enhance=0 → 强化行隐藏，脚注回退八行且不含强化加成', () => {
+        openPanel(EIGHT_ROW_POWER, {
+            ...BASE_DETAIL,
+            achievement: 25,
+            prestige: 10,
+            soul: 7,
+            school: 9,
+            enhance: 0,
+        });
+
+        expect(screen.queryByRole('progressbar', { name: '强化加成' })).toBeNull();
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(8);
+        const footnote = screen.getByText(/行求和恒等于总战力/).textContent ?? '';
+        expect(footnote).toContain('八行');
+        expect(footnote).not.toContain('强化加成');
+    });
+
+    it('旧后端 enhance 缺失（undefined）→ 强化行隐藏，其余可选行不受影响（四固定行+强化=五行）', () => {
+        openPanel(BASE_POWER + 3, { ...BASE_DETAIL, enhance: 3 });
+
+        expect(screen.getByRole('progressbar', { name: '强化加成' }).getAttribute('aria-valuenow')).toBe('3');
+        expect(screen.queryByRole('progressbar', { name: '成就加成' })).toBeNull();
+        expect(screen.queryByRole('progressbar', { name: '流派加成' })).toBeNull();
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(5);
+        expect(screen.getByText(/行求和恒等于总战力/).textContent).toContain('五行');
+    });
+
+    it('九行 share 求和恒等于总战力（DOM aria-valuenow 逐行累加断言）', () => {
+        const power = EIGHT_ROW_POWER + 3;
+        const container = openPanel(power, {
+            ...BASE_DETAIL,
+            achievement: 25,
+            prestige: 10,
+            soul: 7,
+            school: 9,
+            enhance: 3,
+        });
+
+        const sum = Array.from(container.querySelectorAll('[data-power-row]'))
+            .map((row) => row.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow') ?? '0')
+            .reduce((acc, v) => acc + Number(v), 0);
+        expect(sum).toBe(power);
+    });
+});
+
 /** 战斗属性摘要（GameState.combatStats，后端增量字段） */
 const COMBAT_STATS: CombatStats = {
     matk: 12000,

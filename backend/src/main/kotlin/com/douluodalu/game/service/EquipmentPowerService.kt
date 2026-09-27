@@ -32,6 +32,10 @@ import org.springframework.stereotype.Service
  * 经 soulBonus 换算 + applyPrestige 乘倍率后由调用方并入战斗/战力口径），七行求和恒等。
  * 流派集成（第十九轮）：流派系数经 applySchool 折进战力加成包（school=null 恒等零漂移），
  * detail 增加第 8 行 school（差值法，prestige/soul 行同款），八行求和恒等。
+ * 魂骨强化集成（第二十七轮）：detail 增加第 9 行 enhance（差值法收尾：含强化全量战力 − 全骨
+ * enhanceLevel 归零口径战力），骨行按归零口径重算（强化增量单列，防双重计入），九行求和恒等；
+ * 无强化骨时该行恒 0、八行退化不变。强化等级的写点在 GameService.enhanceBone（boneMult 乘区
+ * (1+enhanceLevel×BONE_ENHANCE_PER_LEVEL) 自动生效，本服务无感知改动）。
  */
 /**
  * 单件装备折出的战斗加成（成就加成复用同一形状）。
@@ -232,9 +236,9 @@ class EquipmentPowerService(
 
         /**
          * 纯函数：战力明细拆分（任务#23；成就系统集成后五行不变量；转生集成后六行不变量；
-         * 第十八轮武魂觉醒后七行不变量；第十九轮流派后八行不变量）。复用与 bonus() 完全相同的
-         * 单件公式，取整用最大余数法（largest remainder）保证拆分求和与 EquipmentBonus / powerOf
-         * 严格相等：
+         * 第十八轮武魂觉醒后七行不变量；第十九轮流派后八行不变量；第二十七轮魂骨强化后九行不变量）。
+         * 复用与 bonus() 完全相同的单件公式，取整用最大余数法（largest remainder）保证拆分求和与
+         * EquipmentBonus / powerOf 严格相等：
          *  - ringAtk + boneAtk + coreAtk == 装备部分的 atkBonus（不含成就加成）
          *  - ringHp + boneHp == 装备部分的 hpBonus（魂核只加攻击、玩家无基础生命 → coreHp/baseHp 恒 0）
          *  - basePower + ringPower + bonePower + corePower + achievement ==
@@ -250,6 +254,11 @@ class EquipmentPowerService(
          *    （流派贡献单列第 8 行 = 含流派战力 − 七行之和，差值法延续；流派不经 bonus() 单件拆分、
          *    又乘在「基础+加成」加总后（基础侧 powerOf 无法直接表达），全部增量归此行；school=null
          *    时该行恒 0，退化为原七行拆分。applySchool 取整式与 getGameState 的 power 组装逐位一致）
+         *  - 上式八行 + enhance == power（第二十七轮魂骨强化差值行）
+         *    （骨行 boneAtk/boneHp/bonePower 按【全骨 enhanceLevel 归零】口径重算——boneMult 本身已含
+         *    强化乘区，若骨行保持含强化口径再加差值行会双重计入；强化乘区的全部增量单列第 9 行
+         *    enhance = 含强化全量战力 − 全骨归零口径战力（差值法收尾，经同一 prestige/soul/school 管线）。
+         *    无强化骨时两口径逐位相同 → 该行恒 0、骨行与旧口径一致，退化为原八行恒等）
          *  achievementBonus / prestigeCount / soul / school 均为默认零/空时与既有调用行为完全一致。
          */
         fun detail(
@@ -262,18 +271,20 @@ class EquipmentPowerService(
             soul: GameBalance.MartialSoulDef? = null,
             school: GameBalance.SchoolMods? = null
         ): PowerDetailDto {
-            val b = bonus(level, rings, bones, cores)
+            // 骨行统一按归零口径拆分（强化增量单列第 9 行，见方法 KDoc 最后一条）
+            val bonesZero = bones.map { zeroEnhanceBone(it) }
+            val b = bonus(level, rings, bonesZero, cores)
             val baseAtk = baseAttack(level)
 
             // 攻击拆分：与 bonus() 相同的累加顺序（环→骨→核），逐件最大余数法分配后按来源归并
-            val atkParts = rings.map { ringAtkOf(it) } + bones.map { boneAtkOf(it) } + cores.map { coreAtkOf(it, baseAtk) }
+            val atkParts = rings.map { ringAtkOf(it) } + bonesZero.map { boneAtkOf(it) } + cores.map { coreAtkOf(it, baseAtk) }
             val atkAlloc = allocate(atkParts, b.atkBonus)
             val ringAtk = atkAlloc.take(rings.size).sum()
             val boneAtk = atkAlloc.slice(rings.size until rings.size + bones.size).sum()
             val coreAtk = atkAlloc.takeLast(cores.size).sum()
 
             // 生命拆分：环+骨
-            val hpParts = rings.map { ringHpOf(it) } + bones.map { boneHpOf(it) }
+            val hpParts = rings.map { ringHpOf(it) } + bonesZero.map { boneHpOf(it) }
             val hpAlloc = allocate(hpParts, b.hpBonus)
             val ringHp = hpAlloc.take(rings.size).sum()
             val boneHp = hpAlloc.takeLast(bones.size).sum()
@@ -302,15 +313,27 @@ class EquipmentPowerService(
             // 第 7 行 soul = 含武魂战力 − 六行之和（差值法，与第 6 行同款最大余数口径延续）；
             // 倍率取整式 applyPrestige(soulBonus, p) 与 GameService 战斗组装逐位一致（soulBonus 注释）
             val sixRowSum = fiveRowSum + prestigeRow
-            // 含武魂合计（soul=null 时即不含武魂口径，与 GameService getGameState 的 combatBonus 同构）
+            // 含武魂合计（soul=null 时即不含武魂口径，与 GameService getGameState 的 combatBonus 同构；
+            // 本口径为【全骨归零】基准，强化增量在第 9 行收尾）
             val withSoul = if (soul == null) applyPrestige(combined, prestigeCount)
             else plus(applyPrestige(combined, prestigeCount), applyPrestige(soulBonus(soul), prestigeCount))
             val soulRow = if (soul == null) 0L else powerOf(level, withSoul) - sixRowSum
             // 第 8 行 school = 含流派战力 − 七行之和（差值法延续）；applySchool 取整式与 getGameState
             // 的 power 组装逐位一致（applySchool 注释）——未选流派该行恒 0，退化为原七行恒等
             val sevenRowSum = sixRowSum + soulRow
-            val schoolRow = if (school == null) 0L else
-                powerOf(level, applySchool(withSoul, school)) - sevenRowSum
+            val zeroPower = powerOf(level, applySchool(withSoul, school))
+            val schoolRow = if (school == null) 0L else zeroPower - sevenRowSum
+            // 第 9 行 enhance = 含强化全量战力 − 全骨归零口径战力（差值法收尾；与 getGameState 的 power
+            // 组装同式——applySchool(withSoulFull, school) 即其加成包，九行之和恒等于 power）。
+            // 无强化骨（bones 空或全 0）时两口径逐位相同 → 恒 0，退化为原八行恒等
+            val eightRowSum = sevenRowSum + schoolRow
+            val enhanceRow = if (bones.all { it.enhanceLevel == 0 }) 0L else {
+                val bFull = bonus(level, rings, bones, cores)
+                val combinedFull = plus(bFull, achievementBonus)
+                val withSoulFull = if (soul == null) applyPrestige(combinedFull, prestigeCount)
+                else plus(applyPrestige(combinedFull, prestigeCount), applyPrestige(soulBonus(soul), prestigeCount))
+                powerOf(level, applySchool(withSoulFull, school)) - zeroPower
+            }
             return PowerDetailDto(
                 baseAtk = baseAtk,
                 baseHp = 0,
@@ -327,9 +350,21 @@ class EquipmentPowerService(
                 achievement = achievementRow,
                 prestige = prestigeRow,
                 soul = soulRow,
-                school = schoolRow
+                school = schoolRow,
+                enhance = enhanceRow
             )
         }
+
+        /**
+         * 魂骨 enhanceLevel 归零镜像（detail 第 9 行差值法的归零口径唯一写点）：
+         * 只保留加成公式消费的字段（year/quality/enhance 等），id/equipAt 原样透传不参与计算。
+         * 测试（EquipmentPowerServiceTest）同源复用，防止口径漂移。
+         */
+        fun zeroEnhanceBone(b: EquippedBone): EquippedBone = EquippedBone(
+            id = b.id, userId = b.userId, slotIndex = b.slotIndex, boneId = b.boneId,
+            yearOrdinal = b.yearOrdinal, qualityOrdinal = b.qualityOrdinal,
+            boneTypeOrdinal = b.boneTypeOrdinal, enhanceLevel = 0, equipAt = b.equipAt
+        )
 
         /**
          * 最大余数法：把非负 Double 列表取整分配成总和恰为 total 的 Long 列表

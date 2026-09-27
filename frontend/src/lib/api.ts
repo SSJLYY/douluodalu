@@ -401,6 +401,22 @@ class ApiClient {
             body: JSON.stringify({ slotIndex }),
         });
     }
+
+    /**
+     * 魂骨强化：itemIndex 与 slotIndex 二选一——
+     * - itemIndex：背包 BONE 子列表下标（同 equipBone 的 boneIndex 口径）；
+     * - slotIndex：已装备骨槽位 0-5（同 unequipBone 口径）。
+     * 都空/都非空 → 后端 400「参数无效…」。成功 200 { message }（含当前强化等级与花费）；
+     * 失败（金币不足/已达上限）也是 400 → request 统一抛 error 文案，调用方落到 message 条。
+     * 费用预览镜像见 lib/equipment.ts boneEnhanceCost（与后端 GameBalance 同源）。
+     */
+    async enhanceBone(req: { itemIndex?: number; slotIndex?: number }) {
+        return this.request<{ message: string }>('/api/equipment/bone/enhance', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req),
+        });
+    }
 }
 
 // Types
@@ -463,7 +479,8 @@ export interface CombatStats {
     /**
      * 对应后端 PowerDetailDto（任务#23）。
      * 后端保证：ringAtk+boneAtk+coreAtk == 攻击加成总值、ringHp+boneHp == 生命加成总值、
-     * 四行 power* 求和 == power（后端补 achievement/prestige/soul/school 字段后为五行/六行/七行/八行：+ achievement + prestige + soul + school）。
+     * 四行 power* 求和 == power（后端补 achievement/prestige/soul/school/enhance 字段后为五行~九行：
+     * + achievement + prestige + soul + school + enhance）。
      * 魂核只加攻击（coreHp=0），玩家模型无基础生命（baseHp=0）。
      */
 export interface PowerDetail {
@@ -487,6 +504,8 @@ export interface PowerDetail {
     soul?: number;
     /** 流派加成折算战力（第 8 行）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：base+ring+core+bone+achievement+prestige+soul+school == power */
     school?: number;
+    /** 魂骨强化加成折算战力（第 9 行「🔨 强化」）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：base+ring+core+bone+achievement+prestige+soul+school+enhance == power */
+    enhance?: number;
 }
 
 /** 成就属性奖励（Achievement.rewards）。matk/pdef/mdef/critRate/critDmg 后端暂未生效，前端只展示 hp/atk */

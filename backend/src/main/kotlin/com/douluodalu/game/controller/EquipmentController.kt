@@ -83,6 +83,22 @@ class EquipmentController(private val gameService: GameService) {
         }
     }
 
+    @Operation(summary = "强化魂骨", description = "消耗金币提升魂骨强化等级（背包骨 itemIndex 或已装备骨 slotIndex 二选一，上限 +15）")
+    @PostMapping("/bone/enhance")
+    fun enhanceBone(
+        auth: Authentication,
+        @Valid @RequestBody request: EnhanceBoneRequest
+    ): ResponseEntity<Any> {
+        val userId = auth.principal as Long
+        // 服务层返回消息对（成功带实际强化等级与花费）：照既有 Boolean→200/400 惯例转 HTTP
+        val result = gameService.enhanceBone(userId, request.itemIndex, request.slotIndex)
+        return if (result.success) {
+            ResponseEntity.ok(mapOf("message" to result.message))
+        } else {
+            ResponseEntity.badRequest().body(mapOf("error" to result.message))
+        }
+    }
+
     @Operation(summary = "装备魂核", description = "将背包中的魂核装备到指定槽位")
     @PostMapping("/core/equip")
     fun equipCore(
@@ -170,6 +186,20 @@ data class UnequipBoneRequest(
     @field:Min(0, message = "槽位索引不能为负")
     @field:Max(5, message = "魂骨槽位最大为 5")
     val slotIndex: Int
+)
+
+/**
+ * POST /api/equipment/bone/enhance 请求体：itemIndex（背包 BONE 列表索引，与 sell/equip 同口径）
+ * 或 slotIndex（已装备骨槽位 0-5）恰好一个非空——都空/都非空由服务层校验并返回
+ * 400 {"error": "参数无效：itemIndex 与 slotIndex 二选一"}（JSR-303 无跨字段非空约束，二层校验惯例）。
+ * 两者均可空故只挂 @Min(0)（slotIndex 上限 0-5 由服务层范围检查兜底）。
+ */
+data class EnhanceBoneRequest(
+    @field:Min(0, message = "魂骨索引不能为负")
+    val itemIndex: Int? = null,
+
+    @field:Min(0, message = "槽位索引不能为负")
+    val slotIndex: Int? = null
 )
 
 data class EquipCoreRequest(

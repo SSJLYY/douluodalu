@@ -269,12 +269,15 @@ class GameServiceTest {
         assertEquals("cult_10", response.achievements[0].id)
         assertTrue(response.achievements[0].unlocked)
         assertEquals("2026-09-26", response.achievements[0].unlockedAt)
-        // 六行求和不变量：base + ring + core + bone + achievement + prestige == power（成就行 = atk 5 + hp 100/10；0 转时 prestige 行恒 0）
+        // 九行求和不变量：base + ring + core + bone + achievement + prestige + soul + school + enhance
+        // == power（成就行 = atk 5 + hp 100/10；0 转时 prestige 行恒 0；本用例无骨 → enhance 行恒 0）
         val d = response.powerDetail
         assertEquals(15L, d.achievement)
         assertEquals(0L, d.prestige)
-        assertEquals(response.power, d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige,
-            "getGameState 的 power 与六行明细必须严格一致（含成就行与转生倍率行）")
+        assertEquals(0L, d.enhance)
+        assertEquals(response.power,
+            d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige + d.soul + d.school + d.enhance,
+            "getGameState 的 power 与九行明细必须严格一致（含成就/倍率/武魂/流派/强化行）")
         // 第十七轮战斗模型扩展：combatStats 组装（level=5 无装备 → matk = (50+5×10)×0.5 = 50，
         // pdef/mdef = 5×2 = 10，critRate/critDmg = 基础 0/150；成就加成此 mock 无五属性字段）
         assertEquals(50L, response.combatStats.matk)
@@ -282,6 +285,23 @@ class GameServiceTest {
         assertEquals(10L, response.combatStats.mdef)
         assertEquals(0, response.combatStats.critRate)
         assertEquals(150, response.combatStats.critDmg)
+    }
+
+    // ==================== 魂骨强化费用公式（第二十七轮）：三组锚点精确断言 ====================
+
+    @Test
+    fun `boneEnhanceCost formula anchors should match the calibrated curve`() {
+        // 800 × (currentLevel+1)² × (yearOrdinal+1) × qualityMult[quality]
+        // 锚点一：百年普通 0→1 = 800 × 1 × 2 × 1.0
+        assertEquals(1_600L, GameBalance.boneEnhanceCost(yearOrdinal = 1, qualityOrdinal = 0, currentLevel = 0))
+        // 锚点二：千年稀有 3→4 = 800 × 16 × 3 × 1.2
+        assertEquals(46_080L, GameBalance.boneEnhanceCost(yearOrdinal = 2, qualityOrdinal = 1, currentLevel = 3))
+        // 锚点三：百万年完美 9→10 = 800 × 100 × 5 × 2.2
+        assertEquals(880_000L, GameBalance.boneEnhanceCost(yearOrdinal = 4, qualityOrdinal = 4, currentLevel = 9))
+        // 区间边界：0→1 档全表 800（十年普通）~8.8k（百万年完美）；14→15 为最高一级
+        assertEquals(800L, GameBalance.boneEnhanceCost(0, 0, 0))
+        assertEquals(8_800L, GameBalance.boneEnhanceCost(4, 4, 0))
+        assertEquals(180_000L, GameBalance.boneEnhanceCost(0, 0, 14))
     }
 
     @Test
