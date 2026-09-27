@@ -330,6 +330,72 @@ class GameServiceTest {
         assertTrue(sawRing && sawNonRing, "600 次掉落应同时覆盖魂环与非环分支")
     }
 
+    // ==================== 魂骨词缀（第二十八轮）：掉落写入与 getGameState 透出 ====================
+
+    @Test
+    fun `rollBackpackDrop BONE drops carry parseable affixes while non-BONE stays affix-free`() {
+        val p = profile()
+        p.backpackCapacity = 5
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(backpackRepo.countByUserId(1L)).thenReturn(0L)
+        doAnswer { it.arguments[0] }.whenever(backpackRepo).save(any())
+
+        var sawBone = false
+        var sawNonBone = false
+        repeat(400) {
+            val dto = gameService.rollBackpackDrop(1L, 300)!!
+            if (dto.itemType == "BONE") {
+                sawBone = true
+                val affixes = GameBalance.parseBoneAffixes(dto.affixesJson)
+                assertTrue(affixes.isNotEmpty(), "BONE 掉落必须带可解析词缀（JSON=${dto.affixesJson}）")
+                assertEquals(dto.qualityOrdinal + 1, affixes.size, "条数 = 品质+1")
+                assertEquals(affixes.size, affixes.map { it.first }.distinct().size, "类型不重复")
+            } else {
+                sawNonBone = true
+                assertNull(dto.affixesJson, "非 BONE 掉落不得带词缀")
+            }
+        }
+        assertTrue(sawBone && sawNonBone, "400 次掉落应同时覆盖 BONE 与非 BONE 分支")
+    }
+
+    @Test
+    fun `getGameState passes bone affixes through to EquippedBoneDto`() {
+        val p = profile()
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(talentRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        val json = """[{"type":"CRIT_RATE","value":5}]"""
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(
+            listOf(
+                EquippedBone(
+                    userId = 1L, slotIndex = 0, boneId = 1L, yearOrdinal = 2, qualityOrdinal = 3,
+                    boneTypeOrdinal = 1, enhanceLevel = 2, affixesJson = json
+                )
+            )
+        )
+        whenever(equippedCoreRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(backpackRepo.findByUserIdOrderByCreatedAtAsc(1L)).thenReturn(emptyList())
+        whenever(achievementService.unlockedBonus(1L)).thenReturn(EquipmentBonus(0, 0))
+        whenever(achievementService.getStatus(1L)).thenReturn(emptyList())
+        whenever(checkInService.getCheckInStatus(1L)).thenReturn(CheckInStatusDto())
+        whenever(dailyQuestService.getTodayStatus(1L)).thenReturn(DailyQuestsDto(date = "2026-09-27", quests = emptyList()))
+
+        val response = gameService.getGameState(1L)
+
+        // 词缀位传真值（此前恒 null 的死位），passiveSkillName 无 equipped 列仍为 null
+        val boneDto = response.equippedBones.single()
+        assertEquals(json, boneDto.affixesJson)
+        assertEquals(null, boneDto.passiveSkillName)
+        // getGameState 的 power 经 bonusFor 同源自动含词缀（CRIT_RATE 5 → +25 战力）
+        val affixPower = 5L * GameBalance.POWER_CRIT_RATE_WEIGHT.toLong()
+        val withoutAffix = EquipmentPowerService.powerOf(
+            5, EquipmentPowerService.bonus(5, emptyList(),
+                listOf(EquippedBone(userId = 1L, slotIndex = 0, boneId = 1L, yearOrdinal = 2,
+                    qualityOrdinal = 3, boneTypeOrdinal = 1, enhanceLevel = 2)), emptyList())
+        )
+        assertEquals(withoutAffix + affixPower, response.power, "power 应自动包含骨词缀五属性折算")
+    }
+
     // ==================== 每日任务挂点 ====================
 
     @Test

@@ -5,6 +5,7 @@ import api, { BackpackItem } from '@/lib/api';
 import { useGameData } from '@/lib/hooks';
 import { boneEnhanceCost, boneEnhanceMaxed } from '@/lib/equipment';
 import { BootState, EmptyPanel } from '@/components/StateViews';
+import AffixChips from '@/components/AffixChips';
 
 const YEAR_NAMES = ['百年', '千年', '万年', '十万年', '百万年'];
 const QUALITY_NAMES = ['劣等', '普通', '优秀', '精良', '完美'];
@@ -283,6 +284,9 @@ export default function EquipmentPage() {
                                     {bone ? (
                                         <>
                                             <div className="text-blue-300 break-all leading-snug">{getBoneInfo(bone)}</div>
+                                            {/* 词缀 chips（slot 缩写 10px）：null/空不渲染零噪音；点击已被组件根
+                                                stopPropagation 拦截，不会误触「点槽=卸下」 */}
+                                            <AffixChips affixesJson={bone.affixesJson} variant="slot" index={i} />
                                             {/* 槽内强化：EquippedBoneDto 未下发 qualityOrdinal（背包 BONE 有）→
                                                 槽内不预览费用（避免报错数），实际花费以后端成功/400 文案为准 */}
                                             <button
@@ -386,6 +390,13 @@ export default function EquipmentPage() {
                                         {item.itemType === 'BONE' && `${YEAR_NAMES[item.yearOrdinal]} ${BONE_TYPE_NAMES[item.boneTypeOrdinal || 0]}`}
                                         {item.itemType === 'CORE' && item.coreName}
                                     </div>
+                                    {/* 词缀 chips（仅 BONE 卡，全称 11px）：稀有骨（塔/宗门 Boss）带词缀，
+                                        普通骨 affixesJson=null → 组件返回 null 不渲染零噪音；
+                                        index 与 enhance-btn-item-* 同为 BONE 子列表下标，点击已被组件根
+                                        stopPropagation 拦截，不会误触整卡「点击装备」 */}
+                                    {isBone && (
+                                        <AffixChips affixesJson={item.affixesJson} variant="item" index={boneItemIndex} />
+                                    )}
                                     {preview && (
                                         <div className={`text-xs ${cannotFit ? 'text-red-400 font-semibold' : 'text-gray-300'}`}>
                                             负荷 +{item.load.toLocaleString()} → {preview.projected.toLocaleString()}/{capacity.toLocaleString()}

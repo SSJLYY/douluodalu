@@ -36,11 +36,17 @@ import org.springframework.stereotype.Service
  * enhanceLevel 归零口径战力），骨行按归零口径重算（强化增量单列，防双重计入），九行求和恒等；
  * 无强化骨时该行恒 0、八行退化不变。强化等级的写点在 GameService.enhanceBone（boneMult 乘区
  * (1+enhanceLevel×BONE_ENHANCE_PER_LEVEL) 自动生效，本服务无感知改动）。
+ * 魂骨词缀集成（第二十八轮）：bonus() 解析每件已装备骨的 affixes_json（boneAffixBonus），
+ * 词缀五属性（matk/pdef/mdef/critRate/critDmg）累加进 EquipmentBonus 对应字段并经
+ * bonusFor/getGameState 的 power 自动生效；detail 的五属性折算（newAttrPower）自此不再整体
+ * 折进 achievementRow——按最大余数法分给骨行（词缀）与成就行（成就五属性），九行求和恒等
+ * 延续、词缀战力归骨行而非成就行（无词缀时退化与旧口径逐位一致）。
  */
 /**
  * 单件装备折出的战斗加成（成就加成复用同一形状）。
  * 第十七轮战斗模型扩展：五属性（matk/pdef/mdef/critRate/critDmg）加成接入战斗结算与战力折算；
- * 装备侧本轮无五属性数据（affixesJson 未生成，见 bonus() 注释），五属性加成当前只来自成就。
+ * 第二十八轮魂骨词缀起装备侧五属性由魂骨词缀供给（affixes_json 反查，见 boneAffixBonus），
+ * 成就加成仍经 achievementBonus 并入同字段。
  */
 data class EquipmentBonus(
     val atkBonus: Long,
@@ -65,7 +71,8 @@ class EquipmentPowerService(
 
     /** 读取该玩家已装备的魂环/魂骨/魂核 + 已解锁成就，计算战斗加成与战斗力（成就加成即时生效）。
      *  转生集成：装备+成就合计加成乘转生倍率（prestigeCount=0 时倍率恒 1.0，与旧版行为逐位一致）。
-     *  第十七轮扩展：五属性加成随 EquipmentBonus 七字段全量透传（装备侧恒 0，成就侧带值）。 */
+     *  第十七轮扩展：五属性加成随 EquipmentBonus 七字段全量透传；第二十八轮起装备侧五属性
+     *  由魂骨词缀供给（boneAffixBonus），成就侧带值照旧并入。 */
     fun bonusFor(userId: Long, level: Int, prestigeCount: Int = 0): EquipmentBonus {
         val equip = bonus(
             level,
@@ -144,11 +151,12 @@ class EquipmentPowerService(
             return EquipmentBonus(atk, hp, matk, pdef, mdef, critRate, critDmg)
         }
 
-        /** 纯函数：由装备列表与等级计算加成（不依赖 Spring，便于测试与仿真镜像复用）。
-         *  achievementBonus：成就加成并入返回值（默认零 = 既有四参调用行为不变）。
-         *  装备侧五属性：装备实体仅有 affixesJson 透传字段且掉落侧从未生成（恒 null），
-         *  魂环/魂骨/魂核本轮无可折算的 matk/pdef/mdef/crit 数据 → 五属性加成恒 0，
-         *  只透传成就部分；转生武魂下轮接入时在此补充单件折算公式。 */
+        /**
+         * 纯函数：由装备列表与等级计算加成（不依赖 Spring，便于测试与仿真镜像复用）。
+         * achievementBonus：成就加成并入返回值（默认零 = 既有四参调用行为不变）。
+         * 装备侧五属性（第二十八轮）：魂骨词缀经 boneAffixBonus 反查求和（affixes_json，
+         * V12 前的骨行恒 null → 空词缀零漂移）；魂环/魂核无词缀数据。五属性字段 =
+         * 骨词缀 + 成就透传；转生武魂乘区在 applyPrestige，本函数不感知。 */
         fun bonus(
             level: Int,
             rings: List<EquippedRing>,
@@ -170,11 +178,41 @@ class EquipmentPowerService(
             for (c in cores) {
                 atk += coreAtkOf(c, baseAtk)
             }
+            val affix = boneAffixBonus(bones)
             return EquipmentBonus(
                 atk.toLong() + achievementBonus.atkBonus, hp.toLong() + achievementBonus.hpBonus,
-                achievementBonus.matkBonus, achievementBonus.pdefBonus, achievementBonus.mdefBonus,
-                achievementBonus.critRateBonus, achievementBonus.critDmgBonus
+                affix.matkBonus + achievementBonus.matkBonus, affix.pdefBonus + achievementBonus.pdefBonus,
+                affix.mdefBonus + achievementBonus.mdefBonus,
+                affix.critRateBonus + achievementBonus.critRateBonus,
+                affix.critDmgBonus + achievementBonus.critDmgBonus
             )
+        }
+
+        /**
+         * 骨词缀五属性求和（第二十八轮）：解析每件已装备骨的 affixes_json（脏数据宽容为空词缀）
+         * 并累加进 EquipmentBonus 的五属性字段（atk/hp 恒 0——词缀表无攻血类型）。
+         * 纯函数：bonus() 与 detail() 的词缀行拆分同源，防止口径漂移；resolveBattle 的五属性
+         * 消费经 bonusFor → playerCombatStats 全自动生效（CRIT_RATE 1 = 1% 暴击、CRIT_DMG 1 =
+         * +1% 爆伤，与成就五属性同量纲）。
+         */
+        fun boneAffixBonus(bones: List<EquippedBone>): EquipmentBonus {
+            var matk = 0L
+            var pdef = 0L
+            var mdef = 0L
+            var critRate = 0L
+            var critDmg = 0L
+            for (b in bones) {
+                for ((type, value) in GameBalance.parseBoneAffixes(b.affixesJson)) {
+                    when (type) {
+                        GameBalance.BoneAffixType.MATK -> matk += value
+                        GameBalance.BoneAffixType.PDEF -> pdef += value
+                        GameBalance.BoneAffixType.MDEF -> mdef += value
+                        GameBalance.BoneAffixType.CRIT_RATE -> critRate += value
+                        GameBalance.BoneAffixType.CRIT_DMG -> critDmg += value
+                    }
+                }
+            }
+            return EquipmentBonus(0, 0, matk, pdef, mdef, critRate, critDmg)
         }
 
         /** 七字段逐项相加（bonusFor / detail 合并装备与成就加成共用，防止漏字段） */
@@ -259,6 +297,10 @@ class EquipmentPowerService(
          *    强化乘区，若骨行保持含强化口径再加差值行会双重计入；强化乘区的全部增量单列第 9 行
          *    enhance = 含强化全量战力 − 全骨归零口径战力（差值法收尾，经同一 prestige/soul/school 管线）。
          *    无强化骨时两口径逐位相同 → 该行恒 0、骨行与旧口径一致，退化为原八行恒等）
+         *  - 第二十八轮魂骨词缀：五属性折算 newAttrPower(combined) 不再整体折进成就行——按最大余数法
+         *    分给骨行（词缀折算，affixBonus = boneAffixBonus(bones)）与成就行（成就五属性），
+         *    词缀战力归骨行而非 achievement 行（无词缀时分配退化为 [0, newAttrPower(ach)]，与旧口径
+         *    逐位一致；newAttrPower 逐属性截断的 ≤1/属性 残差由 allocate 吃掉，恒等不破）
          *  achievementBonus / prestigeCount / soul / school 均为默认零/空时与既有调用行为完全一致。
          */
         fun detail(
@@ -291,7 +333,7 @@ class EquipmentPowerService(
 
             // 战力拆分：生命折算（/POWER_HP_DIVISOR）的取整余数按「环/骨/成就生命总量」最大余数法分配，
             // 保证五行战力求和 == powerOf（powerOf = 常数 + 等级 + 基础攻击 + atkBonus(装备+成就) +
-            // hpBonus(装备+成就)/D + newAttrPower(五属性，成就行承载)）
+            // hpBonus(装备+成就)/D + newAttrPower(五属性，第二十八轮起按词缀/成就最大余数法分承载)）
             val basePower = GameBalance.POWER_BASE + GameBalance.POWER_LEVEL_WEIGHT * level + baseAtk
             val hpPowerTotal = ((b.hpBonus + achievementBonus.hpBonus) / GameBalance.POWER_HP_DIVISOR).toLong()
             val hpPowerAlloc = allocate(
@@ -300,15 +342,23 @@ class EquipmentPowerService(
                         achievementBonus.hpBonus / GameBalance.POWER_HP_DIVISOR),
                 hpPowerTotal
             )
-            val achievementRow = achievementBonus.atkBonus + hpPowerAlloc[2] +
-                    // 第十七轮扩展：五属性折算并入成就行（装备侧五属性恒 0 → combined 的五属性 == 成就的，
-                    // newAttrPower(ach) == newAttrPower(combined)，恒等严格保持；装备侧接入（转生武魂）
-                    // 后需同步把该折算拆分到对应装备来源行）
-                    newAttrPower(achievementBonus)
-            // 第 6 行 prestige = 含倍率战力 − 五行（1.0 倍口径）战力：倍率产生的增量全部归此行，
-            // 六行求和与 getGameState 展示的 power（powerOf(applyPrestige(合计加成))）严格一致
-            val fiveRowSum = basePower + ringAtk + hpPowerAlloc[0] + boneAtk + hpPowerAlloc[1] + coreAtk + achievementRow
+            // 五属性战力拆分（第二十八轮词缀接入）：装备侧五属性现来自骨词缀（affixBonus），
+            // newAttrPower(combined) 按最大余数法分给骨行（词缀折算）与成就行（成就五属性）——
+            // 修复旧「装备侧折算整体折进 achievementRow」预留口径的归因错误。无词缀时 affixBonus
+            // 恒零 → 分配退化为 [0, newAttrPower(ach)]，与旧口径逐位一致。
+            val affixBonus = boneAffixBonus(bones)
             val combined = plus(b, achievementBonus)
+            val attrPowerAlloc = allocate(
+                listOf(newAttrPower(affixBonus).toDouble(), newAttrPower(achievementBonus).toDouble()),
+                newAttrPower(combined)
+            )
+            val achievementRow = achievementBonus.atkBonus + hpPowerAlloc[2] + attrPowerAlloc[1]
+            // 第 6 行 prestige = 含倍率战力 − 五行（1.0 倍口径）战力：倍率产生的增量全部归此行，
+            // 六行求和与 getGameState 展示的 power（powerOf(applyPrestige(合计加成))）严格一致。
+            // 注意五行和必须含骨行的词缀折算 attrPowerAlloc[0]（bonePower 的组成部分），
+            // 否则该增量会漏进差值行造成双重计入（第二十八轮回归用例捕获）
+            val fiveRowSum = basePower + ringAtk + hpPowerAlloc[0] + boneAtk + hpPowerAlloc[1] + coreAtk +
+                    achievementRow + attrPowerAlloc[0]
             val prestigeRow = powerOf(level, applyPrestige(combined, prestigeCount)) - fiveRowSum
             // 第 7 行 soul = 含武魂战力 − 六行之和（差值法，与第 6 行同款最大余数口径延续）；
             // 倍率取整式 applyPrestige(soulBonus, p) 与 GameService 战斗组装逐位一致（soulBonus 注释）
@@ -343,7 +393,8 @@ class EquipmentPowerService(
                 ringPower = ringAtk + hpPowerAlloc[0],
                 boneAtk = boneAtk,
                 boneHp = boneHp,
-                bonePower = boneAtk + hpPowerAlloc[1],
+                // 第二十八轮：词缀五属性折算归骨行（attrPowerAlloc[0]），与成就行拆分见上方注释
+                bonePower = boneAtk + hpPowerAlloc[1] + attrPowerAlloc[0],
                 coreAtk = coreAtk,
                 coreHp = 0,
                 corePower = coreAtk,
@@ -357,13 +408,15 @@ class EquipmentPowerService(
 
         /**
          * 魂骨 enhanceLevel 归零镜像（detail 第 9 行差值法的归零口径唯一写点）：
-         * 只保留加成公式消费的字段（year/quality/enhance 等），id/equipAt 原样透传不参与计算。
+         * 只保留加成公式消费的字段（year/quality/enhance 等），affixesJson 原样透传
+         * （第二十八轮：词缀不受强化归零影响，词缀行拆分依赖它）、id/equipAt 不参与计算。
          * 测试（EquipmentPowerServiceTest）同源复用，防止口径漂移。
          */
         fun zeroEnhanceBone(b: EquippedBone): EquippedBone = EquippedBone(
             id = b.id, userId = b.userId, slotIndex = b.slotIndex, boneId = b.boneId,
             yearOrdinal = b.yearOrdinal, qualityOrdinal = b.qualityOrdinal,
-            boneTypeOrdinal = b.boneTypeOrdinal, enhanceLevel = 0, equipAt = b.equipAt
+            boneTypeOrdinal = b.boneTypeOrdinal, enhanceLevel = 0, equipAt = b.equipAt,
+            affixesJson = b.affixesJson
         )
 
         /**
@@ -389,7 +442,8 @@ class EquipmentPowerService(
         /**
          * 五属性战力折算（第十七轮扩展）：matk×0.5 + pdef×0.2 + mdef×0.2 + critRate×5 + critDmg×0.2，
          * 逐项截断取整后求和（权重依据见 GameBalance POWER_*_WEIGHT 注释）。
-         * 独立成纯函数：powerOf 与 detail 的成就行共用，保证六行求和恒等不漂移。
+         * 独立成纯函数：powerOf 与 detail 的成就行/词缀行（第二十八轮按最大余数法分配）共用，
+         * 保证九行求和恒等不漂移。
          */
         fun newAttrPower(b: EquipmentBonus): Long =
             (b.matkBonus * GameBalance.POWER_MATK_WEIGHT).toLong() +
@@ -400,7 +454,7 @@ class EquipmentPowerService(
 
         /**
          * 战斗力 = 常数项 + 等级贡献 + 基础攻击 + 装备攻击加成 + 装备生命折算（POWER_HP_DIVISOR:1）
-         * + 五属性折算（newAttrPower；装备侧五属性恒 0，当前只来自成就加成）。
+         * + 五属性折算（newAttrPower；第二十八轮起装备侧五属性由骨词缀供给，成就加成照旧并入）。
          */
         fun powerOf(level: Int, b: EquipmentBonus): Long =
             GameBalance.POWER_BASE + GameBalance.POWER_LEVEL_WEIGHT * level +

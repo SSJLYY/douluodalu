@@ -29,3 +29,11 @@ management:
 app:
   monitoring:
     prometheus-public: false
+
+# 4) WebSocket 允许来源收敛（第二十八轮，照 CORS_ORIGINS 环境变量先例）：
+#    WebSocketConfig 两端点（/ws、/ws-native）读环境变量 WS_ALLOWED_ORIGINS
+#    （逗号分隔），缺省 "*" 保持向后兼容。生产部署务必设置环境变量覆盖为真实
+#    域名（不要写通配符），示例：
+#      WS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+#    （本文件不设该键——来源是部署环境属性而非应用配置，由启动环境注入）
+

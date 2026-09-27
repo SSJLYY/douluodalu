@@ -31,8 +31,13 @@ class EquippedBone(
     @Column(name = "enhance_level", nullable = false)
     var enhanceLevel: Int = 0,
 
+    // 第二十八轮魂骨词缀（V12 迁移）：equip/unequip/prestige 的「属性拷贝」模式必须随件搬运
+    // （JSON 形状与数值表见 GameBalance「魂骨词缀」区块；V12 前的行恒 null，消费侧宽容处理）
+    @Column(name = "affixes_json", columnDefinition = "JSON")
+    var affixesJson: String? = null,
+
     @Column(name = "equip_at")
     var equipAt: LocalDateTime = LocalDateTime.now()
 ) {
-    override fun toString() = "EquippedBone[id=$id,user=$userId,slot=$slotIndex,bone=$boneId,year=$yearOrdinal,quality=$qualityOrdinal,type=$boneTypeOrdinal,enh=$enhanceLevel]"
+    override fun toString() = "EquippedBone[id=$id,user=$userId,slot=$slotIndex,bone=$boneId,year=$yearOrdinal,quality=$qualityOrdinal,type=$boneTypeOrdinal,enh=$enhanceLevel,affixes=${affixesJson != null}]"
 }

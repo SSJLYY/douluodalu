@@ -513,4 +513,137 @@ class EquipmentPowerServiceTest {
             assertTrue(c0 >= GameBalance.TOWER_WIN_CHANCE_MIN)
         }
     }
+
+    // ======== 第二十八轮：魂骨词缀（bonus 消费 + detail 归因） ========
+
+    private fun affixedBone(
+        year: Int = 2, quality: Int = 4, enhance: Int = 0,
+        affixes: List<Pair<GameBalance.BoneAffixType, Int>> = emptyList()
+    ) = EquippedBone(
+        userId = 1L, slotIndex = 0, boneId = 1L, yearOrdinal = year, qualityOrdinal = quality,
+        boneTypeOrdinal = 0, enhanceLevel = enhance,
+        affixesJson = GameBalance.serializeBoneAffixes(affixes)
+    )
+
+    @Test
+    fun `bone affixes flow into bonus five attributes while atk hp stay untouched`() {
+        val affixes = listOf(
+            GameBalance.BoneAffixType.CRIT_RATE to 5,
+            GameBalance.BoneAffixType.CRIT_DMG to 40,
+            GameBalance.BoneAffixType.MATK to 42,
+            GameBalance.BoneAffixType.PDEF to 32,
+            GameBalance.BoneAffixType.MDEF to 32
+        )
+        val with = EquipmentPowerService.bonus(30, emptyList(), listOf(affixedBone(affixes = affixes)), emptyList())
+        val without = EquipmentPowerService.bonus(30, emptyList(), listOf(affixedBone()), emptyList())
+        // 词缀五属性直映（critRate 1 = 1% 暴击、critDmg 1 = +1% 爆伤，与成就加成同量纲）
+        assertEquals(5L, with.critRateBonus)
+        assertEquals(40L, with.critDmgBonus)
+        assertEquals(42L, with.matkBonus)
+        assertEquals(32L, with.pdefBonus)
+        assertEquals(32L, with.mdefBonus)
+        // atk/hp 与词缀无关；无词缀骨保持既有行为（五属性恒 0）
+        assertEquals(without.atkBonus, with.atkBonus)
+        assertEquals(without.hpBonus, with.hpBonus)
+        assertEquals(0L, without.critRateBonus)
+        assertEquals(0L, without.matkBonus)
+        // 成就加成照旧叠加在同字段上（bonusFor 同口径）
+        val both = EquipmentPowerService.bonus(
+            30, emptyList(), listOf(affixedBone(affixes = affixes)), emptyList(),
+            EquipmentBonus(0, 0, critRateBonus = 3)
+        )
+        assertEquals(8L, both.critRateBonus)
+    }
+
+    @Test
+    fun `power detail attributes affix power to bone row not achievement row`() {
+        // 同一块骨带/不带词缀对照：成就行逐位不变、骨行增量 == 词缀五属性折算。
+        // 选值保证 newAttrPower 各项整除（critRate×5.0、critDmg×0.2、matk×0.5 全整数）→
+        // 最大余数法无残差，归因断言可精确到逐位。
+        val level = 30
+        val affixes = listOf(GameBalance.BoneAffixType.CRIT_RATE to 8, GameBalance.BoneAffixType.MATK to 80)
+        val ach = EquipmentBonus(atkBonus = 7, hpBonus = 300, critRateBonus = 3, critDmgBonus = 10)
+        val plain = affixedBone(year = 3, quality = 4)
+        val affixed = affixedBone(year = 3, quality = 4, affixes = affixes)
+
+        val dNo = EquipmentPowerService.detail(level, emptyList(), listOf(plain), emptyList(), ach)
+        val dWith = EquipmentPowerService.detail(level, emptyList(), listOf(affixed), emptyList(), ach)
+
+        assertEquals(dNo.achievement, dWith.achievement, "词缀战力不得混入成就行")
+        assertEquals(
+            dNo.bonePower + EquipmentPowerService.newAttrPower(EquipmentPowerService.boneAffixBonus(listOf(affixed))),
+            dWith.bonePower,
+            "词缀折算战力必须全部归骨行"
+        )
+        // 两种情形九行之和均恒等
+        for ((bone, d) in listOf(plain to dNo, affixed to dWith)) {
+            val power = EquipmentPowerService.powerOf(
+                level, EquipmentPowerService.bonus(level, emptyList(), listOf(bone), emptyList(), ach)
+            )
+            assertEquals(
+                power,
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige +
+                        d.soul + d.school + d.enhance,
+                "九行求和必须恒等: bone=${bone.affixesJson}"
+            )
+        }
+    }
+
+    @Test
+    fun `power detail nine-row invariant holds with bone affixes across randomized equipment`() {
+        // 第二十八轮回归（200 组随机含词缀混合）：词缀（随机类型/条数/品质）+ 成就 + 转数 +
+        // 武魂 + 流派 + 强化全管线混合下，九行求和与含词缀总战力严格一致；
+        // 1/3 概率无词缀骨覆盖退化路径（attrPowerAlloc 分配退化为 [0, newAttrPower(ach)]）
+        val rng = Random(20260928)
+        repeat(200) {
+            val level = rng.nextInt(1, 121)
+            val prestigeCount = rng.nextInt(0, 6)
+            val rings = List(rng.nextInt(0, 7)) {
+                ring(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), percentage = rng.nextInt(0, 1000))
+            }
+            val bones = List(rng.nextInt(0, 6)) {
+                val q = rng.nextInt(0, 5)
+                val affixes =
+                    if (rng.nextInt(0, 3) == 0) emptyList()
+                    else GameBalance.rollBoneAffixList(q, rng)
+                affixedBone(year = rng.nextInt(0, 6), quality = q, enhance = rng.nextInt(0, 16), affixes = affixes)
+            }
+            val cores = List(rng.nextInt(0, 3)) {
+                core(rarity = rng.nextInt(0, 5), value = rng.nextInt(1, 300))
+            }
+            val ach = EquipmentBonus(
+                atkBonus = rng.nextLong(0, 500), hpBonus = rng.nextLong(0, 5000),
+                matkBonus = rng.nextLong(0, 300), pdefBonus = rng.nextLong(0, 100),
+                mdefBonus = rng.nextLong(0, 100), critRateBonus = rng.nextLong(0, 20),
+                critDmgBonus = rng.nextLong(0, 60)
+            )
+            val soul =
+                if (rng.nextInt(0, 4) == 0) null
+                else GameBalance.MARTIAL_SOULS[rng.nextInt(GameBalance.MARTIAL_SOULS.size)]
+            val school =
+                if (rng.nextInt(0, 3) == 0) null
+                else GameBalance.SCHOOLS[rng.nextInt(GameBalance.SCHOOLS.size)].mods
+            val d = EquipmentPowerService.detail(level, rings, bones, cores, ach, prestigeCount, soul, school)
+            val bFull = EquipmentPowerService.bonus(level, rings, bones, cores, ach)
+            // 与 GameService.getGameState 的 power 组装同式（prestige → soul → school 全管线）
+            val eff = EquipmentPowerService.applyPrestige(bFull, prestigeCount)
+            val withSoul = if (soul == null) eff else EquipmentPowerService.plus(
+                eff, EquipmentPowerService.applyPrestige(EquipmentPowerService.soulBonus(soul), prestigeCount)
+            )
+            val power = EquipmentPowerService.powerOf(level, EquipmentPowerService.applySchool(withSoul, school))
+            assertEquals(
+                power,
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige +
+                        d.soul + d.school + d.enhance,
+                "九行求和必须等于含词缀总战力: level=$level prestige=$prestigeCount bones=${bones.map { it.affixesJson }}"
+            )
+            // 词缀 critRate 必须真实并入 bonus 五属性（= 成就 + 词缀求和，防「解析被静默跳过」）
+            val critFromAffix = bones.sumOf { b ->
+                GameBalance.parseBoneAffixes(b.affixesJson)
+                    .filter { it.first == GameBalance.BoneAffixType.CRIT_RATE }
+                    .sumOf { it.second.toLong() }
+            }
+            assertEquals(ach.critRateBonus + critFromAffix, bFull.critRateBonus, "词缀 critRate 必须并入 bonus")
+        }
+    }
 }

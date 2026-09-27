@@ -49,6 +49,11 @@ import kotlin.random.Random
  *                            GameBalance.boneEnhanceCost/BONE_ENHANCE_MAX_LEVEL，费用走生产公式、100% 成功；
  *                            玩家策略见 ENHANCE_GOLD_FLOOR/ENHANCE_RESERVE 注释——预算约束防挤兑
  *                            扩容/商店，扣费镜像否则仿真高估金币存量），改动需同步
+ *   - boneAffix()            魂骨词缀掷点镜像（第二十八轮：塔掉落 BONE 分支在全部既有掷点之后
+ *                            调用生产同一 GameBalance.rollBoneAffixList 注入镜像自身 rng——条数=品质+1、
+ *                            逐条类型 nextInt(5−已选)、数值品质插值，掷点次序与生产逐位同构；
+ *                            词缀随 SimItem.affixes → EquippedBone.affixesJson 进 EquipSimPlayer
+ *                            的 bonus()/战力口径；battle 内联掉落不加词缀，与生产分层一致），改动需同步
  * 平衡常量直接引用 GameBalance（单一事实来源），但公式结构如有改动需同步本文件。
  *
  * 断言刻意只放软性的健康检查（跑通、数量级不离谱）；主要产出是根目录
@@ -501,11 +506,18 @@ class LongRunSimulationTest {
         val quality: Int,
         val pct: Int,
         val enhance: Int = 0,       // 魂骨强化（rollBackpackDrop: max(1, level/10)；battle 掉落恒 0）
-        val coreValue: Int = 0      // 魂核值（rollBackpackDrop: 10 + level×3）
+        val coreValue: Int = 0,     // 魂核值（rollBackpackDrop: 10 + level×3）
+        // 第二十八轮魂骨词缀（rollBackpackDrop BONE 分支末尾追加，rollBoneAffixList 同函数；
+        // battle 内联掉落恒空——普通掉落与「稀有掉落」分层，与生产一致）
+        val affixes: List<Pair<GameBalance.BoneAffixType, Int>> = emptyList()
     ) {
         val ringLoad: Long get() = if (type == 0) RingLoadCalculator.ringLoad(year, quality, pct) else 0L
         fun toEquippedRing(slot: Int) = EquippedRing(slotIndex = slot, yearOrdinal = year, qualityOrdinal = quality, percentage = pct)
-        fun toEquippedBone(slot: Int) = EquippedBone(slotIndex = slot, yearOrdinal = year, qualityOrdinal = quality, enhanceLevel = enhance)
+        // 词缀 JSON 随 EquippedBone.affixesJson 进 EquipSimPlayer 的属性镜像（bonus() 消费，战力同步）
+        fun toEquippedBone(slot: Int) = EquippedBone(
+            slotIndex = slot, yearOrdinal = year, qualityOrdinal = quality, enhanceLevel = enhance,
+            affixesJson = GameBalance.serializeBoneAffixes(affixes)
+        )
         fun toEquippedCore(slot: Int) = EquippedCore(slotType = if (slot == 0) "LEFT" else "RIGHT", rarityOrdinal = quality, coreValue = coreValue)
     }
 
@@ -786,7 +798,7 @@ class LongRunSimulationTest {
             // 满包则 rollBackpackDrop 在消耗任何属性 RNG 前返回 null（静默丢失）
             if (rng.nextDouble() < GameBalance.TOWER_DROP_CHANCE) {
                 if (bag.size < bagCap) {
-                    // rollBackpackDrop 逐行镜像 GameService:322~349（RNG 次序：类型→品质→年份→成熟度→命名）
+                    // rollBackpackDrop 逐行镜像（RNG 次序：类型→品质→年份→成熟度→命名→词缀[BONE 末尾]）
                     val t = if (rng.nextDouble() > 0.72) 1 else if (rng.nextDouble() > 0.45) 2 else 0
                     val q = min(4, towerLevel / 8 + rndInt(3))
                     val yBase = towerLevel / 12 + rndInt(2)
@@ -794,12 +806,19 @@ class LongRunSimulationTest {
                     val pct = 100 + towerLevel * 12 + rndInt(80)
                     val enhance = if (t == 1) maxOf(1, towerLevel / 10) else 0
                     val coreValue = if (t == 2) 10 + towerLevel * 3 else 0
+                    // 第二十八轮词缀掷点：BONE 分支在全部既有掷点之后追加（条数 = 品质+1 无掷点 →
+                    // 逐条类型 nextInt(5−已选)；数值由品质插值无掷点）。调用生产同一 rollBoneAffixList
+                    // 注入镜像自身 rng——掷点次序与生产逐位同构（同源防漂移）
+                    var affixes: List<Pair<GameBalance.BoneAffixType, Int>> = emptyList()
                     when (t) {
                         0 -> rndInt(3)                        // skillName
-                        1 -> { rndInt(6); rndInt(3) }         // boneType + passiveSkillName
+                        1 -> {                                // boneType + passiveSkillName + 词缀
+                            rndInt(6); rndInt(3)
+                            affixes = GameBalance.rollBoneAffixList(q, rng)
+                        }
                         else -> { rndInt(3); rndInt(3) }      // passiveSkillName + coreName
                     }
-                    val item = SimItem(t, y, q, pct, enhance, coreValue)
+                    val item = SimItem(t, y, q, pct, enhance, coreValue, affixes)
                     bag.add(item)
                     s.dropsGained++
                     if (item.type == 0) {

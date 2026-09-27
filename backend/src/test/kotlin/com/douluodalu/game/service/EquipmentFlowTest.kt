@@ -72,6 +72,9 @@ class EquipmentFlowTest {
     @Captor
     private lateinit var bagItemCaptor: ArgumentCaptor<BackpackItemEntity>
 
+    @Captor
+    private lateinit var savedBoneCaptor: ArgumentCaptor<EquippedBone>
+
     // GameService 构造新增 MeterRegistry（业务计数器）：@InjectMocks 对不可解析参数传 null
     // 会撞 Kotlin 非空检查，改为手动构造注入真实 SimpleMeterRegistry
     private val meterRegistry = SimpleMeterRegistry()
@@ -408,5 +411,43 @@ class EquipmentFlowTest {
         verify(backpackRepo, never()).save(any())
         verify(equippedBoneRepo, never()).save(any())
         verify(profileRepo, never()).save(any())
+    }
+
+    // ======== 第二十八轮：魂骨词缀随件搬运（equip 属性拷贝模式必须随件） ========
+
+    @Test
+    fun `equipBone copies affixes into equipped row and replaced bone keeps its own affixes`() {
+        val newBone = boneItem(id = 81L).apply { affixesJson = """[{"type":"CRIT_RATE","value":5}]""" }
+        val oldEquipped = equippedBone(slot = 0).apply { affixesJson = """[{"type":"MATK","value":42}]""" }
+        doReturn(listOf(newBone)).whenever(backpackRepo).findByUserIdAndItemType(1L, "BONE")
+        doReturn(oldEquipped).whenever(equippedBoneRepo).findByUserIdAndSlotIndex(1L, 0)
+
+        assertTrue(gameService.equipBone(1L, 0, 0))
+
+        // 新骨词缀拷入 equipped 行
+        verify(equippedBoneRepo).save(savedBoneCaptor.capture())
+        assertEquals(newBone.affixesJson, savedBoneCaptor.value.affixesJson)
+        assertEquals(newBone.enhanceLevel, savedBoneCaptor.value.enhanceLevel)
+        // 被换下的旧骨按属性拷贝回背包，词缀随件带回（换装不丢词缀）
+        verify(backpackRepo).save(bagItemCaptor.capture())
+        assertEquals(oldEquipped.affixesJson, bagItemCaptor.value.affixesJson)
+        assertEquals(oldEquipped.enhanceLevel, bagItemCaptor.value.enhanceLevel)
+        verify(backpackRepo).delete(newBone)
+        verify(equippedBoneRepo).delete(oldEquipped)
+    }
+
+    @Test
+    fun `unequipBone restores affixes back to backpack row`() {
+        val equipped = equippedBone(slot = 3).apply { affixesJson = """[{"type":"PDEF","value":32}]""" }
+        doReturn(equipped).whenever(equippedBoneRepo).findByUserIdAndSlotIndex(1L, 3)
+
+        assertTrue(gameService.unequipBone(1L, 3))
+
+        verify(backpackRepo).save(bagItemCaptor.capture())
+        val restored = bagItemCaptor.value
+        assertEquals("BONE", restored.itemType)
+        assertEquals(equipped.affixesJson, restored.affixesJson)
+        assertEquals(equipped.enhanceLevel, restored.enhanceLevel)
+        verify(equippedBoneRepo).delete(equipped)
     }
 }

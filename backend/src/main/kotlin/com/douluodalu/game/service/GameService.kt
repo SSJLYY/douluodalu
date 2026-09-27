@@ -388,7 +388,7 @@ class GameService(
             EquippedRingDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.percentage, null, null,
                 RingLoadCalculator.ringLoad(it))
         }
-        val equippedBones = bones.map { EquippedBoneDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.enhanceLevel, null, null) }
+        val equippedBones = bones.map { EquippedBoneDto(it.slotIndex, it.yearOrdinal, it.qualityOrdinal, it.enhanceLevel, it.affixesJson, null) }
         val equippedCores = cores.map { EquippedCoreDto(it.slotType, it.coreName, it.rarityOrdinal, null, it.coreValue, it.coreLevel) }
         // 任务#21：战力 + 魂环负荷/容量（公式同源：EquipmentPowerService / RingLoadCalculator）
         // 成就系统集成：已解锁成就的 hp/atk 加成并入 bonus（power/容量/明细同口径即时生效）
@@ -552,7 +552,9 @@ class GameService(
                     yearOrdinal = bone.yearOrdinal,
                     qualityOrdinal = bone.qualityOrdinal,
                     boneTypeOrdinal = bone.boneTypeOrdinal,
-                    enhanceLevel = bone.enhanceLevel
+                    enhanceLevel = bone.enhanceLevel,
+                    // 第二十八轮：转生卸装同款「属性拷贝」随件搬运——词缀不随转生丢失
+                    affixesJson = bone.affixesJson
                 )
             )
             equippedBoneRepo.delete(bone)
@@ -787,6 +789,9 @@ class GameService(
                         qualityOrdinal = qualityOrdinal,
                         percentage = Random.nextInt(100, 1000)
                     )
+                    // 第二十八轮注：battle 内联掉落的 BONE【不加】词缀（普通掉落与 rollBackpackDrop
+                    // 的词缀掉落分层，注释留档；若要对齐属主线决策，且需同步 LongRunSimulationTest
+                    // 的 battle 掉落镜像掷点次序）
                     backpackRepo.save(item)
                     drops.add(toBackpackItemDto(item))
                 } else {
@@ -906,6 +911,16 @@ class GameService(
     /**
      * 生成一件随机装备并放入背包，返回其 DTO；背包已满时拒绝发放并返回 null（掉落丢失）。
      * 掉落权重参照数值框架：魂骨 > 魂核 > 魂环，品质/年份随等级提升。
+     *
+     * RNG 掷点次序【写死，勿动】（LongRunSimulationTest 的掉落镜像逐行同步，改动需两侧一致）：
+     *  ①类型 nextDouble（>0.72→BONE，否则 >0.45→CORE，再否则 RING，最多两掷）
+     *  → ②品质 nextInt(3) → ③年份 nextInt(2) → ④成熟度 nextInt(80)
+     *  → ⑤按类型：RING skillName nextInt(3)／BONE boneType nextInt(6) + passiveSkill nextInt(3)
+     *    ／CORE passiveSkill nextInt(3) + coreName nextInt(3)
+     *  → ⑥【BONE 末尾追加，第二十八轮】词缀：条数 = 品质+1（无掷点）→ 逐条类型 nextInt(5−已选)
+     *    （数值由品质线性插值、无掷点；与镜像共用 GameBalance.rollBoneAffixList 防漂移）。
+     *  非 BONE 不掷词缀；battle 内联掉落（不经本函数）的 BONE 同样不加——普通掉落与
+     *  「稀有掉落」分层（battle 内联处注释留档）。
      */
     @Transactional
     fun rollBackpackDrop(userId: Long, level: Int): BackpackItemDto? {
@@ -935,6 +950,12 @@ class GameService(
             coreValue = if (itemType == "CORE") 10 + level * 3 else null,
             coreLevel = if (itemType == "CORE") max(1, level / 5) else 0
         )
+        // 第二十八轮魂骨词缀：BONE 分支末尾追加词缀掷点（全部既有掷点之后，见方法注释⑥）——
+        // 掉落本就是随机流，追加不破坏任何确定性契约；塔日志重模拟不经过本函数不受影响。
+        // 条数 = 品质+1 无掷点；逐条类型 nextInt(5−已选)；数值由品质插值无掷点。
+        if (itemType == "BONE") {
+            item.affixesJson = GameBalance.rollBoneAffixes(yearOrdinal, qualityOrdinal)
+        }
         backpackRepo.save(item)
         return toBackpackItemDto(item)
     }
@@ -1157,7 +1178,9 @@ class GameService(
                     yearOrdinal = existing.yearOrdinal,
                     qualityOrdinal = existing.qualityOrdinal,
                     boneTypeOrdinal = existing.boneTypeOrdinal,
-                    enhanceLevel = existing.enhanceLevel
+                    enhanceLevel = existing.enhanceLevel,
+                    // 第二十八轮：被换下的骨词缀随件回背包（换装不丢词缀）
+                    affixesJson = existing.affixesJson
                 )
             )
             equippedBoneRepo.delete(existing)
@@ -1171,7 +1194,9 @@ class GameService(
                 yearOrdinal = bone.yearOrdinal,
                 qualityOrdinal = bone.qualityOrdinal,
                 boneTypeOrdinal = bone.boneTypeOrdinal ?: 0,
-                enhanceLevel = bone.enhanceLevel
+                enhanceLevel = bone.enhanceLevel,
+                // 第二十八轮：equip 属性拷贝模式随件搬运——背包行词缀拷入 equipped 行（V12 注释）
+                affixesJson = bone.affixesJson
             )
         )
         backpackRepo.delete(bone)
@@ -1190,7 +1215,9 @@ class GameService(
                 yearOrdinal = equipped.yearOrdinal,
                 qualityOrdinal = equipped.qualityOrdinal,
                 boneTypeOrdinal = equipped.boneTypeOrdinal,
-                enhanceLevel = equipped.enhanceLevel
+                enhanceLevel = equipped.enhanceLevel,
+                // 第二十八轮：unequip 重建背包行时词缀带回（卸装不丢词缀）
+                affixesJson = equipped.affixesJson
             )
         )
         equippedBoneRepo.delete(equipped)

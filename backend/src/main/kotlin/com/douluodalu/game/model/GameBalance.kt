@@ -1,5 +1,7 @@
 package com.douluodalu.game.model
 
+import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.ObjectMapper
 import kotlin.random.Random
 
 /**
@@ -138,6 +140,79 @@ object GameBalance {
     fun boneEnhanceCost(yearOrdinal: Int, qualityOrdinal: Int, currentLevel: Int): Long {
         val mult = EQUIP_QUALITY_MULT.getOrElse(qualityOrdinal.coerceIn(0, EQUIP_QUALITY_MULT.size - 1)) { 1.0 }
         return (800L * (currentLevel + 1) * (currentLevel + 1) * (yearOrdinal.coerceIn(0, 4) + 1) * mult).toLong()
+    }
+
+    // ======== 魂骨词缀（第二十八轮） ========
+    // 数值框架：文档 §4.3 类型池 + §3.1 条数框架拼装提案。
+    //  - 5 类型（BoneAffixType）：数值范围按品质 0→4 线性插值、Math.round 半往上取整：
+    //    CRIT_RATE 1→8（critRateBonus 直映，百分点）、CRIT_DMG 5→40（critDmgBonus）、
+    //    PDEF 3→60（pdefBonus）、MDEF 3→60（mdefBonus）、MATK 4→80（matkBonus）；
+    //  - 条数 = qualityOrdinal + 1（1~5，照 §3.1 档位精神），类型从 5 种中【不重复】抽取
+    //    （品质低条数少时为随机子集）；
+    //  - JSON 形状：[{"type":"CRIT_RATE","value":5},...]（写入 backpack_item.affixes_json /
+    //    equipped_bone.affixes_json；消费侧 EquipmentPowerService.boneAffixBonus 反查求和）。
+    // RNG 契约（掷点次序写死，勿动）：条数由品质决定【无掷点】；随后逐条掷类型
+    // nextInt(5 − 已选条数)（即品质 4 的骨依次消耗 5/4/3/2/1 五掷）——数值由品质插值、无掷点。
+    // rollBackpackDrop 的 BONE 分支在全部既有掷点之后调用（主 Random 全局流）；battle 内联
+    // 掉落的 BONE 不掷词缀（普通掉落与「稀有掉落」分层）；LongRunSimulationTest 的掉落镜像
+    // 注入自身 rng 调用【同一 rollBoneAffixList】保持逐位同构（同源防漂移）。
+
+    /** 词缀类型池（5 种；entries 顺序即抽取的规范序——remaining 列表按此序裁剪） */
+    enum class BoneAffixType(val displayName: String, val minAtQ0: Int, val maxAtQ4: Int) {
+        CRIT_RATE("暴击率", 1, 8),
+        CRIT_DMG("暴击伤害", 5, 40),
+        PDEF("物防", 3, 60),
+        MDEF("魔防", 3, 60),
+        MATK("魔攻", 4, 80)
+    }
+
+    private val AFFIX_JSON_MAPPER = ObjectMapper()
+
+    /** Jackson 反查目标类型（泛型不能用类字面量，TypeReference 锚定 List<Map<String,Any>>） */
+    private val AFFIX_LIST_TYPE = object : TypeReference<List<Map<String, Any>>>() {}
+
+    /** 词缀数值：品质 0→4 对 [minAtQ0, maxAtQ4] 线性插值、Math.round 半往上取整（数值侧无 RNG） */
+    fun boneAffixValue(type: BoneAffixType, qualityOrdinal: Int): Int {
+        val q = qualityOrdinal.coerceIn(0, 4)
+        return Math.round(type.minAtQ0 + (type.maxAtQ4 - type.minAtQ0) * q / 4.0).toInt()
+    }
+
+    /**
+     * 掷 n=quality+1 条词缀（类型不重复：remaining 按 BoneAffixType.entries 规范序裁剪，
+     * 逐条 nextInt(remaining.size) —— 即品质 4 依次掷 nextInt(5/4/3/2/1)）。
+     * rng 显式注入：生产传全局 Random（主随机流），仿真镜像/测试注入自身 rng 保持可复现。
+     */
+    fun rollBoneAffixList(qualityOrdinal: Int, rng: Random): List<Pair<BoneAffixType, Int>> {
+        val q = qualityOrdinal.coerceIn(0, 4)
+        val remaining = BoneAffixType.entries.toMutableList()
+        return List(q + 1) {
+            val type = remaining.removeAt(rng.nextInt(remaining.size))
+            type to boneAffixValue(type, q)
+        }
+    }
+
+    /** 掉落侧唯一写点（GameService.rollBackpackDrop BONE 分支末尾）：返回词缀 JSON 串。
+     *  yearOrdinal 为契约预留参数——当前数值只随品质插值，不消耗 RNG、不影响掷点次序。 */
+    fun rollBoneAffixes(yearOrdinal: Int, qualityOrdinal: Int, rng: Random = Random): String =
+        serializeBoneAffixes(rollBoneAffixList(qualityOrdinal, rng))
+
+    /** 词缀列表 → JSON 串：[{"type":"CRIT_RATE","value":5},...] */
+    fun serializeBoneAffixes(affixes: List<Pair<BoneAffixType, Int>>): String =
+        AFFIX_JSON_MAPPER.writeValueAsString(affixes.map { mapOf("type" to it.first.name, "value" to it.second) })
+
+    /** JSON 串 → 词缀列表（反查）。脏数据（null/空串/坏 JSON/未知类型名）宽容处理为空/剔除、
+     *  负值钳 0——与战斗组装对历史脏数据的宽容口径一致（V12 前的骨行与背包行均无词缀）。 */
+    fun parseBoneAffixes(json: String?): List<Pair<BoneAffixType, Int>> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            AFFIX_JSON_MAPPER.readValue(json, AFFIX_LIST_TYPE).mapNotNull { m ->
+                val type = (m["type"] as? String)?.let { t -> runCatching { BoneAffixType.valueOf(t) }.getOrNull() }
+                val value = (m["value"] as? Number)?.toInt()?.coerceAtLeast(0)
+                if (type != null && value != null) type to value else null
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     // ======== 离线收益（P1 修复：语义由「每秒」改为「每小时」）========
