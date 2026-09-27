@@ -350,6 +350,15 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 4. **遗留**：/api/auth/me 在 auth 限流桶（SPA 高频刷新可能先触顶，建议读端点划归 global 桶）；多实例部署前置 Redis（黑名单/限流桶均为单机内存）；WebSocket allowedOriginPatterns("*") 随生产域名收敛；nginx 跨机部署需扩展 isTrustedProxy 范围。
 5. 回归清扫由子智能体执行（子代理环境 IAB 不可用，改用本地 Playwright 等价执行，40 张截图存证于临时目录）。
 
+## 🤖 第二十五轮：放置体验补全——自动战斗 + 全服公告 + 数据治理（2026-09-27）
+
+1. **自动战斗/自动突破/自动推图三开关**（放置类游戏的灵魂功能补全）：Profile 的 autoBattle/autoBreakthrough 两个死字段激活——`PUT /api/game/settings`（全后端第一个 PUT，三字段显式传值+部分更新语义，返回完整 Profile）；前端 `useAutoBattle` 客户端循环（2s/tick 直调 api.battle() 不走 runAction，状态刷新交给 WS 广播 debouncedRefresh；document.hidden 跳过；429 按 60s 退避；上场未返回防堆积；自动突破=魂力达 120·L^1.55 阈值顺手调一次）+ 战斗卡三 toggle chips（乐观更新+失败回滚）。频率核算：30(battle)+5(state) RPM ≈ 300 桶 12%。**设计依据**：autoBattle/autoBreakthrough 本就被 shared 引擎注释定性为客户端行为，离线侧已有离线收益闭环，在线侧前端循环正好衔接。
+2. **WS 全服公告激活**：broadcastAnnouncement（零调用死代码）首个生产调用——宗门 Boss 击杀时全服广播「⚔️ 「XX宗门」全员协力击杀了宗门 Boss！」；前端 live.ts 加 /topic/announcement 订阅 + useLiveAnnouncement hook，公告走 message 条 toast（📢 前缀 + testid）。真库实测跨用户 WS 推送全链路（A 宗门击杀 → B 浏览器 toast）。
+3. **/api/auth/me 限流分级**（第二十四轮遗留）：me 读端点从 auth 桶（10 RPM）移入 global 桶（300）——SPA 高频刷新不再触顶，login 防爆破不变（单测：me×11 全 200 而 login×11 第 11 次 429、me 与 global 共享桶验证）。
+4. **dev 数据治理脚本（ops/cleanup/）**：34 个测试账号（e2e/r13-r24 系列）按用户名正则清理；9 表 users 级联自动清 + backpack_item/shop_purchase_record 无 FK 手动清 + 测试号宗主宗门连带删；默认 DRY-RUN、--apply 真删（交互 yes 二次确认）、--keep-guild-ids 保留回归夹具、--purge-audit 清审计；干跑实测（31 用户/3 宗门/28+8 孤儿行预估）。**修复超时智能体残留的 count_manual 未定义函数 bug**。
+5. **集成验证**：mvn test 基线 310→**319 全绿**；真库冒烟：PUT 全量/缺字段 400/持久化回读、me×11 无 429、击杀广播触发；浏览器 E2E：三开关初始态与翻转、公告 toast 跨用户全链路 ✓、375px 零溢出。**自动战斗实弹验证受 IAB 文档可见性限制**（面板后台时 document.hidden=true，循环按设计跳过——正确行为：后台页签不烧限流配额；循环逻辑由 7 条 fake-timer 单测覆盖：翻转启停/429 暂停/hidden 跳过/防堆积/突破阈值/失败静默）。
+6. **遗留**：WS allowedOriginPatterns("*") 生产收敛；多账号同 IP 同开自动战斗共享 300 RPM 桶（429 退避已内置）；raid 血池专项平衡仿真仍留档。
+
 ---
 
 ## 🔮 后续建议
