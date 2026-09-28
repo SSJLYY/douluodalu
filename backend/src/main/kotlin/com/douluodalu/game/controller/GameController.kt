@@ -24,21 +24,21 @@ class GameController(
     @Operation(summary = "获取游戏状态", description = "获取玩家完整游戏数据")
     @GetMapping("/state")
     fun getState(auth: Authentication): ResponseEntity<GameStateResponse> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         return ResponseEntity.ok(gameService.getGameState(userId))
     }
 
     @Operation(summary = "领取离线奖励", description = "领取离线期间积累的金币和魂力")
     @PostMapping("/offline-claim")
     fun claimOffline(auth: Authentication): ResponseEntity<OfflineRewardResponse> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         return ResponseEntity.ok(gameService.claimOfflineReward(userId))
     }
 
     @Operation(summary = "每日签到", description = "7 日循环奖励；当日已签返回 400")
     @PostMapping("/checkin")
     fun checkIn(auth: Authentication): ResponseEntity<CheckInResult> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         return ResponseEntity.ok(checkInService.checkIn(userId))
     }
 
@@ -48,14 +48,14 @@ class GameController(
     )
     @PostMapping("/checkin/makeup")
     fun makeupCheckIn(auth: Authentication): ResponseEntity<MakeupResponse> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         return ResponseEntity.ok(checkInService.makeup(userId))
     }
 
     @Operation(summary = "领取每日任务奖励", description = "进度未达标/今日已领取/未知任务返回 400")
     @PostMapping("/quests/claim")
     fun claimQuest(auth: Authentication, @Valid @RequestBody request: ClaimQuestRequest): ResponseEntity<ClaimQuestResponse> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         return ResponseEntity.ok(dailyQuestService.claim(userId, request.questId))
     }
 
@@ -78,7 +78,7 @@ class GameController(
         auth: Authentication,
         @Valid @RequestBody request: UpdateSettingsRequest
     ): ResponseEntity<ProfileDto> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         return ResponseEntity.ok(gameService.updateSettings(userId, request))
     }
 }

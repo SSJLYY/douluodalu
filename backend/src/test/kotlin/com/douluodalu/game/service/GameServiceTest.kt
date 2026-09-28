@@ -89,7 +89,9 @@ class GameServiceTest {
             userRepository, webSocketService, checkInService, dailyQuestService,
             EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
             achievementService,
-            meterRegistry
+            meterRegistry,
+            // 装备域拆分：EquipService 复用同一组 mock 仓库（equip/unequip/enhance 门面委托落点）
+            EquipService(profileRepo, backpackRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementService)
         )
     }
 
@@ -633,7 +635,8 @@ class GameServiceTest {
             userRepository, webSocketService, checkInService, dailyQuestService,
             EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
             realAchievementService,
-            SimpleMeterRegistry()
+            SimpleMeterRegistry(),
+            EquipService(profileRepo, backpackRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo, realAchievementService)
         )
         val p = PlayerProfileEntity(userId = 1L, level = GameBalance.PRESTIGE_MIN_LEVEL)
         whenever(profileRepo.findByUserId(1L)).thenReturn(p)

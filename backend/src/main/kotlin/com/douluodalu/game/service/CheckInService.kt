@@ -5,6 +5,7 @@ import com.douluodalu.game.dto.CheckInRewardDto
 import com.douluodalu.game.dto.CheckInStatusDto
 import com.douluodalu.game.dto.MakeupResponse
 import com.douluodalu.game.entity.CheckInEntity
+import com.douluodalu.game.exception.PlayerSaveNotFoundException
 import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.CheckInRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
@@ -78,7 +79,7 @@ class CheckInService(
         }
 
         val profile = profileRepo.findByUserId(userId)
-            ?: throw IllegalStateException("玩家存档不存在")
+            ?: throw PlayerSaveNotFoundException()
         profile.gold += reward.gold
         profile.bossCoin += reward.bossCoin
         profile.soulPower += reward.soulPower
@@ -132,7 +133,7 @@ class CheckInService(
             return MakeupResponse(success = false, message = MAKEUP_ALREADY_MESSAGE)
         }
         val profile = profileRepo.findByUserId(userId)
-            ?: throw IllegalStateException("玩家存档不存在")
+            ?: throw PlayerSaveNotFoundException()
         // 失败③：金币不足
         if (profile.gold < GameBalance.CHECKIN_MAKEUP_COST_GOLD) {
             return MakeupResponse(

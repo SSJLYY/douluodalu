@@ -23,7 +23,7 @@ class ShopController(
         auth: Authentication,
         @PathVariable itemId: Long
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val item = NormalShopData.items.find { it.id == itemId }
             ?: return ResponseEntity.badRequest().body(mapOf("error" to "商品不存在"))
 
@@ -45,7 +45,7 @@ class ShopController(
         auth: Authentication,
         @PathVariable itemId: Long
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val item = BossShopData.items.find { it.id == itemId }
             ?: return ResponseEntity.badRequest().body(mapOf("error" to "商品不存在"))
         
@@ -67,7 +67,7 @@ class ShopController(
         auth: Authentication,
         @PathVariable itemId: Long
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val item = LimitedShopData.items.find { it.id == itemId }
             ?: return ResponseEntity.badRequest().body(mapOf("error" to "商品不存在"))
         

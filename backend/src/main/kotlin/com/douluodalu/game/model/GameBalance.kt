@@ -27,6 +27,13 @@ object GameBalance {
     const val PLAYER_ATK_PER_LEVEL = 10L
     const val MAX_BATTLE_ROUNDS = 30
 
+    /**
+     * 玩家基础生命上限（等级单点公式 50×level+100）。GameService.getMaxHp（scaledBaseMaxHp/
+     * 战斗回满）与 RingLoadCalculator.absorptionCapacityFor（魂环吸收容量）同源消费，
+     * 防止拆分后两处公式漂移。
+     */
+    fun playerBaseMaxHp(level: Int): Long = 50L * level + 100L
+
     // ======== 战斗：防御与暴击（第十七轮战斗模型扩展）========
     // 公式出处（shared 引擎只读参照，GameEngine.kt:1216~1267 defFactor/暴击/爆伤）：
     //   defFactor = (1.0 - def/(def+DEF_K)).coerceIn(0.1, 1.0)：def=0 → 1.0（无减免）、def→∞ → 0.1 下限；

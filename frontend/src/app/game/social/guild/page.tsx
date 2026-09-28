@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import api, { GuildBossRank, GuildBossResult, GuildBossStatus, GuildMemberInfo, GuildSummary, ShopItem } from '@/lib/api';
-import { useGameData } from '@/lib/hooks';
+import { useGameData } from '@/contexts/GameDataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { BootState, ErrorPanel, EmptyPanel } from '@/components/StateViews';
 import GuildBossPanel from '@/components/GuildBossPanel';
@@ -17,7 +17,7 @@ function formatJoinedAt(iso: string): string {
 
 export default function GuildPage() {
     const { user } = useAuth();
-    const { gameState, message, setMessage, actionLoading: loading, loadError, refresh, runAction } = useGameData();
+    const { gameState, message, setMessage, actionLoading: loading, loadError, refresh, runAction, runMessageAction } = useGameData();
     const [guilds, setGuilds] = useState<GuildSummary[]>([]);
     const [myGuild, setMyGuild] = useState<GuildSummary | null>(null);
     const [showCreateForm, setShowCreateForm] = useState(false);
@@ -170,27 +170,23 @@ export default function GuildPage() {
     // 解散仅宗主且只剩自己时可用（与服务端 disband 校验同口径），否则禁用态给 title 说明
     const canDisband = isLeader && members.length === 1;
 
-    const handleKickMember = (targetUserId: number) => runAction(
+    const handleKickMember = (targetUserId: number) => runMessageAction(
         () => api.kickGuildMember(targetUserId),
-        (result) => setMessage(result.message),
         '踢出失败',
     ).then(loadGuilds);
 
-    const handleTransferLeader = (targetUserId: number) => runAction(
+    const handleTransferLeader = (targetUserId: number) => runMessageAction(
         () => api.transferGuildLeader(targetUserId),
-        (result) => setMessage(result.message),
         '转让失败',
     ).then(loadGuilds);
 
-    const handleDisbandGuild = () => runAction(
+    const handleDisbandGuild = () => runMessageAction(
         () => api.disbandGuild(),
-        (result) => setMessage(result.message),
         '解散失败',
     ).then(loadGuilds);
 
-    const handleDonate = () => runAction(
+    const handleDonate = () => runMessageAction(
         () => api.donateGuild(donationAmount),
-        (result) => setMessage(result.message),
         '捐献失败',
     ).then(loadGuilds);
 
@@ -207,9 +203,8 @@ export default function GuildPage() {
         '挑战失败',
     ).then(loadGuilds);
 
-    const handleBuyGuildItem = (itemId: number) => runAction(
+    const handleBuyGuildItem = (itemId: number) => runMessageAction(
         () => api.buyGuildShopItem(itemId),
-        (result) => setMessage(result.message),
         '购买失败',
     );
 

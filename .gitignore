@@ -28,6 +28,10 @@ backend/target/
 
 # 日志
 *.log
+backend/logs/
+
+# TypeScript 增量构建缓存
+*.tsbuildinfo
 
 # 仿真生成报告（可由仿真脚本重新生成）
 simulation_reports/

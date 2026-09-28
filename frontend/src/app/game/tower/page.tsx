@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import api, { TowerBattleResult } from '@/lib/api';
-import { useGameData } from '@/lib/hooks';
+import { useGameData } from '@/contexts/GameDataContext';
 import { BootState } from '@/components/StateViews';
 import BattleReplay from '@/components/BattleReplay';
 

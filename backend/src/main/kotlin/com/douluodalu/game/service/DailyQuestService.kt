@@ -4,6 +4,7 @@ import com.douluodalu.game.dto.ClaimQuestResponse
 import com.douluodalu.game.dto.DailyQuestDto
 import com.douluodalu.game.dto.DailyQuestsDto
 import com.douluodalu.game.entity.DailyQuestProgressEntity
+import com.douluodalu.game.exception.PlayerSaveNotFoundException
 import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.DailyQuestProgressRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
@@ -128,7 +129,7 @@ class DailyQuestService(
         val granted = dailyQuestRepo.claimIfEligible(userId, today, questId, def.target)
         if (granted == 1) {
             val profile = profileRepo.findByUserId(userId)
-                ?: throw IllegalStateException("玩家存档不存在")
+                ?: throw PlayerSaveNotFoundException()
             profile.gold += def.rewardGold
             profile.bossCoin += def.rewardBossCoin
             profile.soulPower += def.rewardSoulPower

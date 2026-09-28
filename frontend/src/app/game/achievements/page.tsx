@@ -1,7 +1,7 @@
 'use client';
 
 import { normalizeAchievements } from '@/lib/api';
-import { useGameData } from '@/lib/hooks';
+import { useGameData } from '@/contexts/GameDataContext';
 import AchievementsPanel from '@/components/AchievementsPanel';
 import { BootState } from '@/components/StateViews';
 

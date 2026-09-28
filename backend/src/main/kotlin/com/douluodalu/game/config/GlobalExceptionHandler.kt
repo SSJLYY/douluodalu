@@ -1,5 +1,6 @@
 package com.douluodalu.game.config
 
+import com.douluodalu.game.exception.PlayerSaveNotFoundException
 import org.slf4j.LoggerFactory
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.dao.OptimisticLockingFailureException
@@ -63,17 +64,22 @@ class GlobalExceptionHandler {
         }
     }
 
+    /**
+     * 玩家存档缺失 → 404。此前靠 `message.contains("存档")/("不存在")` 中文子串猜测语义，
+     * 已升级为类型匹配：存档类抛出点统一改抛 PlayerSaveNotFoundException（继承
+     * IllegalStateException）。本处理器对其他 IllegalStateException 维持原 500 兜底口径，
+     * 两种情况的响应体与改造前逐字段一致（差异仅在由「字符串猜测」变为「类型即语义」）。
+     */
+    @ExceptionHandler(PlayerSaveNotFoundException::class)
+    fun handlePlayerSaveNotFound(e: PlayerSaveNotFoundException) =
+        ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(ErrorResponse("NOT_FOUND", e.message ?: "资源不存在"))
+
     @ExceptionHandler(IllegalStateException::class)
     fun handleIllegalState(e: IllegalStateException): ResponseEntity<ErrorResponse> {
-        val isBusinessError = e.message?.contains("不存在") == true || e.message?.contains("存档") == true
-        return if (isBusinessError) {
-            ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ErrorResponse("NOT_FOUND", e.message ?: "资源不存在"))
-        } else {
-            log.error("IllegalState", e)
-            ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ErrorResponse("SERVER_ERROR", e.message ?: "服务器内部错误"))
-        }
+        log.error("IllegalState", e)
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(ErrorResponse("SERVER_ERROR", e.message ?: "服务器内部错误"))
     }
 
     @ExceptionHandler(MethodArgumentNotValidException::class)

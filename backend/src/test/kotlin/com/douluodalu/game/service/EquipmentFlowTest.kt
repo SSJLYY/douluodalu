@@ -90,7 +90,9 @@ class EquipmentFlowTest {
         gameService = GameService(
             profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
             userRepository, webSocketService, checkInService, dailyQuestService,
-            equipmentPowerService, achievementService, meterRegistry
+            equipmentPowerService, achievementService, meterRegistry,
+            // 装备域拆分：equip/unequip/enhance 实现已在 EquipService，门面委托到同一组 mock
+            EquipService(profileRepo, backpackRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementService)
         )
     }
 

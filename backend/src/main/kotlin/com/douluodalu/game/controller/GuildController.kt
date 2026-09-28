@@ -43,7 +43,7 @@ class GuildController(
 
     @GetMapping("/my")
     fun getMyGuild(auth: Authentication): ResponseEntity<GuildMyResponse> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val guild = guildService.getMyGuild(userId)
         return ResponseEntity.ok(
             if (guild != null) GuildMyResponse(joined = true, guild = guild.toListDto())
@@ -54,7 +54,7 @@ class GuildController(
     /** 本会成员列表（按加入时间升序）：仅成员可查，未入宗门返回 400 {error} */
     @GetMapping("/members")
     fun getGuildMembers(auth: Authentication): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val members = guildService.getGuildMembers(userId)
             ?: return ResponseEntity.badRequest().body(mapOf("error" to "请先加入宗门"))
         return ResponseEntity.ok(members)
@@ -65,7 +65,7 @@ class GuildController(
         auth: Authentication,
         @Valid @RequestBody request: CreateGuildRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = guildService.createGuild(userId, request.name, request.description)
         return if (result != null) {
             ResponseEntity.ok(mapOf("message" to "宗门创建成功", "guild" to result.toListDto()))
@@ -79,7 +79,7 @@ class GuildController(
         auth: Authentication,
         @PathVariable guildId: Long
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val success = guildService.joinGuild(userId, guildId)
         return if (success) {
             ResponseEntity.ok(mapOf("message" to "加入宗门成功"))
@@ -90,7 +90,7 @@ class GuildController(
 
     @PostMapping("/leave")
     fun leaveGuild(auth: Authentication): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = guildService.leaveGuild(userId)
         return if (result != null) {
             // 宗主退出时服务端已自动处理：有成员→转让给加入最早者（transferredTo=继任昵称）；
@@ -106,7 +106,7 @@ class GuildController(
         auth: Authentication,
         @Valid @RequestBody request: KickMemberRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val success = guildService.kickMember(userId, request.targetUserId)
         return if (success) {
             ResponseEntity.ok(mapOf("message" to "已踢出成员"))
@@ -120,7 +120,7 @@ class GuildController(
         auth: Authentication,
         @Valid @RequestBody request: TransferLeaderRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val success = guildService.transferLeadership(userId, request.targetUserId)
         return if (success) {
             ResponseEntity.ok(mapOf("message" to "宗主已转让"))
@@ -131,7 +131,7 @@ class GuildController(
 
     @PostMapping("/disband")
     fun disbandGuild(auth: Authentication): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val success = guildService.disbandGuild(userId)
         return if (success) {
             ResponseEntity.ok(mapOf("message" to "宗门已解散"))
@@ -145,7 +145,7 @@ class GuildController(
         auth: Authentication,
         @Valid @RequestBody request: DonateRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = guildService.donate(userId, request.amount)
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "捐献成功"))
@@ -156,7 +156,7 @@ class GuildController(
 
     @PostMapping("/boss/challenge")
     fun challengeBoss(auth: Authentication): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = guildService.challengeBoss(userId)
         return if (result != null) {
             ResponseEntity.ok(result)
@@ -171,7 +171,7 @@ class GuildController(
      */
     @GetMapping("/boss/status")
     fun getGuildBossStatus(auth: Authentication): ResponseEntity<GuildBossStatusResponse> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         return ResponseEntity.ok(guildService.getGuildBossStatus(userId))
     }
 
@@ -181,7 +181,7 @@ class GuildController(
      */
     @GetMapping("/boss/rank")
     fun getGuildBossRank(auth: Authentication): ResponseEntity<GuildBossRankResponse> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         return ResponseEntity.ok(guildService.getGuildBossRank(userId))
     }
 
@@ -195,7 +195,7 @@ class GuildController(
         auth: Authentication,
         @PathVariable itemId: Long
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         if (guildService.getMyGuild(userId) == null) {
             return ResponseEntity.badRequest().body(mapOf("error" to "请先加入宗门"))
         }

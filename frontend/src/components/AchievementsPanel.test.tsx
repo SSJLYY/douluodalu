@@ -41,7 +41,7 @@ describe('AchievementsPanel', () => {
         // 分组顺序：修炼 → 魂环 → 战斗 → 杀戮之都 → 转生（排除组头 count 徽标）
         const groups = [...container.querySelectorAll('[data-testid^="achievement-group-"]')] as HTMLElement[];
         expect(
-            groups.map((g) => g.getAttribute('data-testid')).filter((id) => !id.startsWith('achievement-group-count-')),
+            groups.map((g) => g.getAttribute('data-testid')).filter((id) => !id?.startsWith('achievement-group-count-')),
         ).toEqual([
             'achievement-group-CULTIVATION',
             'achievement-group-SOUL_RING',

@@ -18,7 +18,7 @@ class EquipmentController(private val gameService: GameService) {
     @Operation(summary = "获取装备列表", description = "获取玩家已装备的魂环、魂骨、魂核")
     @GetMapping("")
     fun getEquipment(auth: Authentication): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val gameState = gameService.getGameState(userId)
         return ResponseEntity.ok(gameState)
     }
@@ -29,7 +29,7 @@ class EquipmentController(private val gameService: GameService) {
         auth: Authentication,
         @Valid @RequestBody request: EquipRingRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = gameService.equipRing(userId, request.slotIndex, request.ringIndex)
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "魂环装备成功"))
@@ -44,7 +44,7 @@ class EquipmentController(private val gameService: GameService) {
         auth: Authentication,
         @Valid @RequestBody request: UnequipRingRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = gameService.unequipRing(userId, request.slotIndex)
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "魂环卸下成功"))
@@ -59,7 +59,7 @@ class EquipmentController(private val gameService: GameService) {
         auth: Authentication,
         @Valid @RequestBody request: EquipBoneRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = gameService.equipBone(userId, request.slotIndex, request.boneIndex)
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "魂骨装备成功"))
@@ -74,7 +74,7 @@ class EquipmentController(private val gameService: GameService) {
         auth: Authentication,
         @Valid @RequestBody request: UnequipBoneRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = gameService.unequipBone(userId, request.slotIndex)
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "魂骨卸下成功"))
@@ -89,7 +89,7 @@ class EquipmentController(private val gameService: GameService) {
         auth: Authentication,
         @Valid @RequestBody request: EnhanceBoneRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         // 服务层返回消息对（成功带实际强化等级与花费）：照既有 Boolean→200/400 惯例转 HTTP
         val result = gameService.enhanceBone(userId, request.itemIndex, request.slotIndex)
         return if (result.success) {
@@ -105,7 +105,7 @@ class EquipmentController(private val gameService: GameService) {
         auth: Authentication,
         @Valid @RequestBody request: EquipCoreRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = gameService.equipCore(userId, if (request.slotIndex == 0) "LEFT" else "RIGHT", request.coreIndex)
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "魂核装备成功"))
@@ -120,7 +120,7 @@ class EquipmentController(private val gameService: GameService) {
         auth: Authentication,
         @Valid @RequestBody request: UnequipCoreRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = gameService.unequipCore(userId, if (request.slotIndex == 0) "LEFT" else "RIGHT")
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "魂核卸下成功"))
@@ -135,7 +135,7 @@ class EquipmentController(private val gameService: GameService) {
         auth: Authentication,
         @Valid @RequestBody request: SellItemRequest
     ): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = gameService.sellBackpackItem(userId, request.itemIndex)
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "出售成功"))
@@ -147,7 +147,7 @@ class EquipmentController(private val gameService: GameService) {
     @Operation(summary = "扩展背包", description = "消耗金币增加背包容量")
     @PostMapping("/backpack/expand")
     fun expandBackpack(auth: Authentication): ResponseEntity<Any> {
-        val userId = auth.principal as Long
+        val userId = auth.userId()
         val result = gameService.expandBackpack(userId)
         return if (result) {
             ResponseEntity.ok(mapOf("message" to "背包扩展成功"))

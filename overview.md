@@ -378,6 +378,16 @@ E2E 覆盖：注册/登录/修炼/战斗/塔防/装备/商店(含金币不足与
 6. **过程中的真 bug**（后端智能体自抓自修）：detail 首版漏把词缀折算计入 fiveRowSum，词缀增量漏进 prestige 差值行造成双重计入——被新增的 200 组随机含词缀回归用例暴露（差值恒等于词缀折算值 80），修复并注释留档。
 7. **遗留**：战斗内联掉落 BONE 无词缀（普通/稀有分层设计）；词缀无重 roll/转移机制（天然防刷）；文档无词缀数值表——本轮数值表为「§4.3 类型池 + §3.1 条数框架」拼装提案，已注释标注。
 
+## 🏗️ 第二十八轮：架构重构——GameService 拆分 + 死代码清理 + 前端组件化（2026-09-28）
+
+1. **后端拆上帝类**：`EquipService.kt`（330 行）自 GameService 逐行搬移装备域 7 方法（equip/unequip 环·骨·核 + enhanceBone，EnhanceResult 随迁）；GameService 保留同名 `@Transactional` 门面委托（调用面与既有测试零改动），事务边界=门面开事务、EquipService REQUIRED 加入，拆分前后逐项等价。GameService 1121 行（净 -318）。随件单点化：RingLoadCalculator 吸收 `absorptionCapacityFor`（getGameState 展示与 equipRing 校验同源）、GameBalance 新增 `playerBaseMaxHp(level)` 公式（GameService 与 RingLoadCalculator 共用防漂移）。
+2. **PlayerSaveNotFoundException 类型化**：7 个抛出点（GameService/CheckInService/DailyQuestService/EquipService）从「中文子串猜 IllegalStateException」改为类型化异常 → GlobalExceptionHandler 404；`handleIllegalState` 删掉 `contains("存档")` 猜测一律 500，响应体逐字段不变。
+3. **样板收敛 + 安全补强**：`AuthenticationExtensions.userId()` 收敛 6 控制器 40+ 处 `principal as Long` 强转；TalentController 升级端点无效分支改抛 IllegalArgumentException 走统一 400；`DatasourcePasswordValidator`（prod profile 下 datasource.password=change-me/空 → 启动失败，非 prod 告警，照 JwtUtil.validateSecret 先例）。
+4. **死代码/遗留物删除（-2743 行）**：`web/` 整目录（旧 Kotlin/JS 客户端 911 行，settings.gradle 本就未 include）、shared jsMain（PlatformTime/WebStorage + js(IR) target，commonMain/androidMain expect/actual 配对完整不受影响）、四份已被 Flyway V1~V12 取代的手写 SQL（backend/database/、database/init.sql）、build_deploy.bat/start_server.bat。全仓 grep 无悬空引用。
+5. **前端组件化 + 数据单实例化**：`GameDataProvider` 挂 game/layout.tsx——整个 /game 树一份 useGameData 实例（12s 轮询/WS/首拉）；page.tsx 864→144 行，拆出 7 组件（PlayerStatusBar/BattlePanel 含 useAutoBattle 内聚/QuickNav/OfflineRewardModal/PrestigeDialog/ReawakenDialog/SchoolDialog，DOM 与拆分前逐字节一致）；hooks.ts 增 `useModalEscape`（Esc 关闭+聚焦取消钮，三 Dialog 采用）；8 个 game 页 import 切至 GameDataContext。
+6. **测试**：后端 344→**356 全绿**（+DatasourcePasswordValidatorTest 4 / ControllerSmokeTest 6（Action/Equipment/Shop 匿名 401·403 与 JWT 200 成对冒烟）/ GlobalExceptionHandlerTest +2 类型映射）；前端 136→**140 全绿 + build 成功**（hooks.modal.test +4）；package.json 增 test:run/typecheck 脚本。**runMessageAction 迁移为渐进式**（page 补签/BattlePanel 突破/PrestigeDialog/equipment/guild 已迁，checkin/claimQuest/guild Boss 仍手写三参，留后续轮）。
+7. **文档/杂项**：README/DEPLOY/docker-compose 同步 Flyway V1~V12 与 web/ 删除说明；.gitignore 增 backend/logs 与 *.tsbuildinfo；数值仿真报告-90天.md 重跑补账（第二十七轮 RNG 次序变更后）。**typecheck 脚本未接入 CI**（ci.yml 仍只 lint/build，留后续轮）。
+
 ---
 
 ## 🔮 后续建议

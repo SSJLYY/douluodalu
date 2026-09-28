@@ -44,7 +44,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required, at least 32 bytes}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       # 其余可选：RATELIMIT_ENABLED / AUTH_RPM / GLOBAL_RPM / JWT_EXPIRATION / FLYWAY_ENABLED
-      # 表结构由 Flyway 在后端启动时自动迁移（V1~V4），无需手工建表
+      # 表结构由 Flyway 在后端启动时自动迁移（V1~V12），无需手工建表
     ports:
       # 8080 同时暴露 /api/** 与 GET /actuator/prometheus（Micrometer 指标端点）。
       # 非 prod 匿名可抓取（app.monitoring.prometheus-public=true 默认开）；

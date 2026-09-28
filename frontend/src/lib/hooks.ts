@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import api, { ApiError, BattleResult, GameState, STATE_REFRESH_EVENT } from '@/lib/api';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLiveBattle } from '@/lib/live';
@@ -139,6 +139,58 @@ export function useGameData(pollMs: number | false = POLL_INTERVAL_MS) {
     }, [refresh]);
 
     return { gameState, setGameState, message, setMessage, actionLoading, loadError, refresh, runAction };
+}
+
+/**
+ * 确认/选择类弹窗的键盘可达性收敛（Escape 关闭 + 打开时聚焦「取消」钮），
+ * 替换各弹窗复制的「focus(preventScroll)+keydown」effect：
+ * - preventScroll：内容超高的弹窗（流派 6 卡）focus 时不把容器滚到取消钮处，避免开弹窗看不到标题；
+ * - close 经 ref 中转、effect 只依赖 open——与原先 [open] 单依赖等价，
+ *   actionLoading 翻转等重渲染不会重复 focus 抢走「确认」钮焦点；
+ * - 未做完整焦点圈禁（Tab 仍可离开弹窗），与既有弹窗同级、不强拦截键盘路径。
+ */
+export function useModalEscape<T extends HTMLElement>(
+    open: boolean,
+    close: () => void,
+    cancelRef?: RefObject<T | null>,
+) {
+    const closeRef = useRef(close);
+    useEffect(() => {
+        closeRef.current = close;
+    });
+    useEffect(() => {
+        if (!open) return;
+        cancelRef?.current?.focus({ preventScroll: true });
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') closeRef.current();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [open, cancelRef]);
+}
+
+/** useGameData.runAction 的函数型签名：抽出来供 makeRunMessageAction 注入测试替身 */
+export type RunActionFn = <T,>(
+    action: () => Promise<T>,
+    onSuccess: (result: T) => void,
+    fallbackError?: string,
+) => Promise<void>;
+
+/**
+ * runAction 简写：成功路径固定为「把后端响应的 message 透传到提示条」，
+ * 收敛各页面 runAction(() => api.x(), (r) => setMessage(r.message), 'xx失败') 的重复三参写法。
+ * 失败落 message / 成功后自动刷新仍由注入的 runAction 承担，行为与手写调用完全一致。
+ */
+export function makeRunMessageAction(
+    runAction: RunActionFn,
+    setMessage: (msg: string) => void,
+) {
+    return async <T extends { message: string }>(
+        action: () => Promise<T>,
+        fallbackError = '操作失败',
+    ): Promise<void> => {
+        await runAction(action, (r) => setMessage(r.message), fallbackError);
+    };
 }
 
 // ---- 自动战斗（任务：挂机设置） ----

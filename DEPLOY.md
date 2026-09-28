@@ -77,7 +77,7 @@ v22.14.0
 
 ## 3. 安装 JDK 21、Maven 与 MySQL 8
 
-后端为 Spring Boot 3.2 (Kotlin)，需要 JDK（编译目标 17，建议直接装 21）与 Maven；数据层为 MySQL 8，建表由 **Flyway 在后端启动时自动完成**（V1~V4 迁移脚本），无需手动执行 SQL。
+后端为 Spring Boot 3.2 (Kotlin)，需要 JDK（编译目标 17，建议直接装 21）与 Maven；数据层为 MySQL 8，建表由 **Flyway 在后端启动时自动完成**（V1~V12 迁移脚本），无需手动执行 SQL。
 
 ```bash
 # JDK 21 + Maven
@@ -197,7 +197,7 @@ pm2 start "java -jar /opt/app/douluodalu/backend/target/douluo-game-1.0.0.jar" -
 pm2 save
 ```
 
-首次启动时 Flyway 自动建表（`users`、`player_profile`、`guild`、`audit_log` 等 V1~V4）。验证：
+首次启动时 Flyway 自动建表（`users`、`player_profile`、`guild`、`audit_log` 等，迁移脚本 V1~V12）。验证：
 
 ```bash
 curl http://127.0.0.1:8080/api/health

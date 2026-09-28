@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import api, { ShopItem } from '@/lib/api';
-import { useGameData } from '@/lib/hooks';
+import { useGameData } from '@/contexts/GameDataContext';
 import { BootState, ErrorPanel, EmptyPanel, SkeletonCards } from '@/components/StateViews';
 
 export default function ShopPage() {

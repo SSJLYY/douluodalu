@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import api, { CultivateResult, BreakthroughResult } from '@/lib/api';
-import { useGameData } from '@/lib/hooks';
+import { useGameData } from '@/contexts/GameDataContext';
 import { BootState } from '@/components/StateViews';
 
 const REALM_NAMES = [

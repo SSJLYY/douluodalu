@@ -1,5 +1,6 @@
 package com.douluodalu.game.config
 
+import com.douluodalu.game.exception.PlayerSaveNotFoundException
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.springframework.http.HttpHeaders
@@ -77,5 +78,26 @@ class GlobalExceptionHandlerTest {
 
         assertEquals(HttpStatus.METHOD_NOT_ALLOWED, resp.statusCode)
         assertEquals("METHOD_NOT_ALLOWED", resp.body?.error)
+    }
+
+    // ======== 任务#5：中文子串匹配（contains("存档")）→ 自定义异常类型 ========
+
+    @Test
+    fun `player save missing must map to 404 NOT_FOUND by exception type`() {
+        // 改造前靠 message.contains("存档")/("不存在") 猜测；改造后 PlayerSaveNotFoundException
+        // 类型即语义，响应体与改造前逐字段一致
+        val resp = handler.handlePlayerSaveNotFound(PlayerSaveNotFoundException())
+
+        assertEquals(HttpStatus.NOT_FOUND, resp.statusCode)
+        assertEquals("NOT_FOUND", resp.body?.error)
+        assertEquals("玩家存档不存在", resp.body?.message)
+    }
+
+    @Test
+    fun `other illegal state must stay on the 500 fallback`() {
+        val resp = handler.handleIllegalState(IllegalStateException("非存档类状态错误"))
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, resp.statusCode)
+        assertEquals("SERVER_ERROR", resp.body?.error)
     }
 }

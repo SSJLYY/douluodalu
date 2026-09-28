@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
-import { useGameData } from '@/lib/hooks';
+import { GameDataProvider, useGameData } from '@/contexts/GameDataContext';
 import ThemeToggle from '@/components/ThemeToggle';
 import { SkeletonRows } from '@/components/StateViews';
 
@@ -20,11 +20,23 @@ const NAV_ITEMS = [
     { href: '/game/social/guild', label: '宗门', icon: '🏛️' },
 ];
 
+/**
+ * /game 布局：GameDataProvider 在此挂载 useGameData 单实例（轮询/WS 订阅/首屏拉取只有一份），
+ * 顶栏与所有子页面经 useGameData()（GameDataContext）消费同一数据面。
+ */
 export default function GameLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <GameDataProvider>
+            <GameLayoutShell>{children}</GameLayoutShell>
+        </GameDataProvider>
+    );
+}
+
+function GameLayoutShell({ children }: { children: React.ReactNode }) {
     const { user, isLoading, authChecked, logout } = useAuth();
     const router = useRouter();
     const pathname = usePathname();
-    const { gameState, refresh } = useGameData();
+    const { gameState, refresh, setMessage } = useGameData();
 
     // 只在 token 校验完成后才判定「未登录」：authChecked 之前一律骨架屏，
     // 防止已登录用户在 getMe 返回前被误踢回登录页（见 AuthContext authChecked 注释）。
@@ -34,10 +46,13 @@ export default function GameLayout({ children }: { children: React.ReactNode }) 
         }
     }, [authChecked, user, isLoading, router]);
 
-    // 切换子页面时刷新顶部资源栏（金币/魂力/Boss币）
+    // 切换子页面时刷新顶部资源栏（金币/魂力/Boss币）；
+    // message 一并清零：单实例后提示条跨页共享，导航清空等价于原先「每个页面新建 useGameData 实例、
+    // message 初始为 ''」的行为（各页面自身不再持有 message 状态）
     useEffect(() => {
+        setMessage('');
         queueMicrotask(refresh);
-    }, [pathname, refresh]);
+    }, [pathname, refresh, setMessage]);
 
     if (!authChecked || isLoading || !user) {
         // 鉴权回源期间给整页框架骨架，替代纯文本「加载中...」

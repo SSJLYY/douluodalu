@@ -11,7 +11,7 @@
         /api/** ──▶ Spring Boot 后端 (:8080)
                         │
                         ▼
-                     MySQL 8 (Flyway V1~V4 自动建表/迁移)
+                     MySQL 8 (Flyway V1~V12 自动建表/迁移)
 ```
 
 ## 技术栈
@@ -23,7 +23,7 @@
 | 样式 | Tailwind CSS | 4.x |
 | 后端 | Spring Boot + Kotlin | 3.2.5 / 1.9.25 |
 | 运行时 | JDK（编译目标 17，本机以 JDK 21 运行） | 21 |
-| 数据库 | MySQL 8 + Flyway 迁移（V1~V4） | 8.0 |
+| 数据库 | MySQL 8 + Flyway 迁移（V1~V12） | 8.0 |
 | 认证 | JWT（Caffeine 黑名单）+ Bucket4j 限流 | — |
 | 构建 | 前端 npm / 后端 Maven | Node ≥ 22 |
 
@@ -111,7 +111,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8090
 ├── backend/                # Spring Boot 3.2 + Kotlin 后端
 │   └── src/main/
 │       ├── kotlin/com/douluodalu/game/   # controller / service / repository / entity / security / config
-│       └── resources/db/migration/       # Flyway V1~V4
+│       └── resources/db/migration/       # Flyway V1~V12
 ├── shared/                 # Android/KMP 共享游戏引擎（commonMain / androidMain）
 ├── app/                    # Android 客户端
 └── DEPLOY.md               # Rocky 9 服务器部署教程
@@ -119,7 +119,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8090
 
 ## Android 端
 
-`app/` + `shared/` 为 Android 客户端：游戏逻辑收敛到 `shared` 的 KMP 引擎（commonMain），存档保存在设备本地，**不连接 Spring Boot 后端**，与 Web 端数据互通无关。原 `web/` 目录（Compose for Web）已从 Gradle 构建中移除，属遗留死代码，不再维护。
+`app/` + `shared/` 为 Android 客户端：游戏逻辑收敛到 `shared` 的 KMP 引擎（commonMain / androidMain），存档保存在设备本地，**不连接 Spring Boot 后端**，与 Web 端数据互通无关。原 `web/` 目录（Compose for Web 遗留死代码）已删除。
 
 ## 部署
 

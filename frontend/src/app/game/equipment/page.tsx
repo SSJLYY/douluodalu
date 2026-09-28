@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import api, { BackpackItem } from '@/lib/api';
-import { useGameData } from '@/lib/hooks';
+import { useGameData } from '@/contexts/GameDataContext';
 import { boneEnhanceCost, boneEnhanceMaxed } from '@/lib/equipment';
 import { BootState, EmptyPanel } from '@/components/StateViews';
 import AffixChips from '@/components/AffixChips';
@@ -17,7 +17,7 @@ const CORE_SLOTS = [
 ];
 
 export default function EquipmentPage() {
-    const { gameState, message, setMessage, refresh, loadError, runAction } = useGameData();
+    const { gameState, message, setMessage, refresh, loadError, runMessageAction } = useGameData();
     const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
 
     if (!gameState) {
@@ -124,18 +124,16 @@ export default function EquipmentPage() {
     async function handleEnhanceItem(item: BackpackItem) {
         const itemIndex = indexOfBackpackType('BONE', item.id);
         if (itemIndex < 0) return;
-        await runAction(
+        await runMessageAction(
             () => api.enhanceBone({ itemIndex }),
-            (r) => setMessage(r.message),
             '强化失败',
         );
     }
 
-    /** 强化已装备魂骨：slotIndex 0-5（与 unequipBone 同口径），同样交 runAction 成功回调 + 自动 refresh */
+    /** 强化已装备魂骨：slotIndex 0-5（与 unequipBone 同口径），同样交 runMessageAction 成功回调 + 自动 refresh */
     async function handleEnhanceSlot(slotIndex: number) {
-        await runAction(
+        await runMessageAction(
             () => api.enhanceBone({ slotIndex }),
-            (r) => setMessage(r.message),
             '强化失败',
         );
     }

@@ -81,7 +81,8 @@ class MartialSoulIntegrationTest {
             userRepository, webSocketService, checkInService, dailyQuestService,
             EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
             achievementService,
-            SimpleMeterRegistry()
+            SimpleMeterRegistry(),
+            EquipService(profileRepo, backpackRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementService)
         )
     }
 

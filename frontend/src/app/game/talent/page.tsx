@@ -1,7 +1,7 @@
 'use client';
 
 import api from '@/lib/api';
-import { useGameData } from '@/lib/hooks';
+import { useGameData } from '@/contexts/GameDataContext';
 import { BootState } from '@/components/StateViews';
 
 const TALENT_BRANCHES = [

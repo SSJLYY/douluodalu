@@ -58,6 +58,22 @@ object RingLoadCalculator {
     fun absorptionCapacity(rootBone: Double): Long =
         absorptionCapacity(rootBone, GameBalance.RING_CAPACITY_ROOT_MULT)
 
+    /**
+     * 玩家魂环吸收容量：根骨×GameBalance.RING_CAPACITY_ROOT_MULT。原 GameService 私有
+     * absorptionCapacityFor 上移至此——状态展示（GameService.getGameState）与装环校验
+     * （EquipService.equipRing）两处同源单点维护。第十七轮战斗模型扩展后 matk/pdef/mdef
+     * 已进战斗结算，但容量口径【有意】维持 atk/hp 两维（负荷公式不动，避免容量带漂移扰动
+     * 任务#22 校准好的 40~92% 利用率带）——matk/pdef/mdef 传 0 并在此留档。
+     */
+    fun absorptionCapacityFor(profile: com.douluodalu.game.entity.PlayerProfileEntity, bonus: EquipmentBonus): Long =
+        absorptionCapacity(
+            calcRootBone(
+                maxHp = GameBalance.playerBaseMaxHp(profile.level) + bonus.hpBonus,
+                atk = GameBalance.PLAYER_ATK_BASE + profile.level * GameBalance.PLAYER_ATK_PER_LEVEL + bonus.atkBonus,
+                matk = 0, pdef = 0, mdef = 0
+            )
+        )
+
     /** 重载：容量乘数可注入（默认读 GameBalance；LongRunSimulationTest 调参扫描用） */
     fun absorptionCapacity(rootBone: Double, capacityMult: Long): Long =
         (rootBone * capacityMult).toLong().coerceAtLeast(100)
