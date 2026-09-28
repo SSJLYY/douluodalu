@@ -390,7 +390,13 @@ class GameService(
         // 第十八轮武魂集成：武魂加成（已乘转生倍率）并入战斗/战力口径；容量口径【有意】不并入
         // （负荷体系按装备校准，武魂非装备、不入根骨，与五属性不入容量的既有决定一致）
         val soulBonus = soulBonusOf(profile.martialSoulName, profile.prestigeCount)
-        val bonus = EquipmentPowerService.applyPrestige(rawBonus, profile.prestigeCount)
+        // 第二十九轮杀气商店集成：称号+属性购买加成与成就同通道（加成包内先合并、统一经
+        // applyPrestige 乘转生倍率——照成就 hp/atk 的倍率口径）；容量口径【有意】不并入
+        // （rawBonus 维持装备+成就，负荷体系契约范围外，照武魂不入容量的既有决定）
+        val killBonus = equipmentPowerService.killingBonusFor(userId)
+        val bonus = EquipmentPowerService.applyPrestige(
+            EquipmentPowerService.plus(rawBonus, killBonus), profile.prestigeCount
+        )
         val combatBonus = EquipmentPowerService.plus(bonus, soulBonus)
         // 第十九轮流派集成：chosenSchool 反查流派系数（未选 → null 恒等，零漂移）；power/powerDetail
         // 与战斗属性同一含流派口径（detail 第 8 行差值法依赖此一致性，否则恒等破）
@@ -417,10 +423,11 @@ class GameService(
             capacity = RingLoadCalculator.absorptionCapacityFor(profile, rawBonus),
             // 任务#23：战力明细（复用同一 rings/bones/cores 列表与公式，纯内存拆分，不再查库；
             // 九行含成就行、转生倍率增量行、武魂行、流派行与魂骨强化差值行（第二十七轮），九行求和 == power）
+            // 第二十九轮：增第 10 行 title（杀气商店称号+属性购买，差值法），十行求和 == power
             powerDetail = EquipmentPowerService.detail(
                 profile.level, rings, bones, cores, achBonus, profile.prestigeCount,
                 profile.martialSoulName?.let { GameBalance.soulByName(it) },
-                school
+                school, killBonus
             ),
             // 第十七轮战斗模型扩展：玩家有效战斗属性（含成就/装备五属性加成与转生倍率，与 battle
             // 结算入参同源 playerCombatStats）；尾部新增带默认值，向后兼容

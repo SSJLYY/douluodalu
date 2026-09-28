@@ -257,6 +257,24 @@ class ApiClient {
         });
     }
 
+    // 杀气商店（第二十九轮，设计文档 §7.4；后端 ShopController /api/shop/killing*。
+    // 业务失败如杀气不足/已拥有 → 后端 IllegalArgumentException 统一 400，ApiError.message 透传）
+    async getKillingShop() {
+        return this.request<KillingShop>('/api/shop/killing');
+    }
+
+    async buyKillingTitle(titleId: string) {
+        return this.request<KillingBuyResult>(`/api/shop/killing/title/${encodeURIComponent(titleId)}`, {
+            method: 'POST',
+        });
+    }
+
+    async buyKillingAttr(stat: 'hp' | 'atk') {
+        return this.request<KillingBuyResult>(`/api/shop/killing/attribute/${stat}`, {
+            method: 'POST',
+        });
+    }
+
     // Guild
     async getGuildList() {
         return this.request<GuildSummary[]>('/api/guild/list');
@@ -522,6 +540,9 @@ export interface PowerDetail {
     school?: number;
     /** 魂骨强化加成折算战力（第 9 行「🔨 强化」）。旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：base+ring+core+bone+achievement+prestige+soul+school+enhance == power */
     enhance?: number;
+    /** 杀气商店加成折算战力（第 10 行「🗡️ 称号」，第二十九轮：已拥有称号 + HP/ATK 属性购买）。
+     *  旧后端无此字段 → undefined 按 0 处理、行隐藏；求和不变量扩为：九行 + title == power（无称号无购买时恒 0，九行退化） */
+    title?: number;
 }
 
 /** 成就属性奖励（Achievement.rewards）。matk/pdef/mdef/critRate/critDmg 后端暂未生效，前端只展示 hp/atk */
@@ -912,6 +933,55 @@ export interface ShopItem {
     itemData: string;
     stock: number;
     requiresLevel: number;
+}
+
+// ======== 杀气商店（第二十九轮，对应后端 dto/GameDto.kt 的 KillingShopDto 三件套） ========
+
+/** GET /api/shop/killing 响应：8 称号拥有/价格/属性预览 + HP/ATK 两商品当前价/已购次数 + 杀气余额 */
+export interface KillingShop {
+    /** 当前杀气余额（与 profile.killingIntent 同源；面板内消费同快照数据保证一致性） */
+    killingIntent: number;
+    titles: KillingTitle[];
+    attrs: KillingAttr[];
+}
+
+/** 杀气称号条目（owned 为已拥有态——购买即永久拥有不可回购）；属性格式化见 lib/killing.ts */
+export interface KillingTitle {
+    id: string;
+    name: string;
+    cost: number;
+    hp: number;
+    atk: number;
+    pdef: number;
+    /** 暴击率加成（百分点：3 = 3%）；title_1/2/3 无暴击系加成恒 0 */
+    critRate: number;
+    critDmg: number;
+    owned: boolean;
+}
+
+/** 杀气属性购买条目（stat ∈ hp|atk；nextCost = 100×2^buys，公式镜像见 lib/killing.ts） */
+export interface KillingAttr {
+    stat: 'hp' | 'atk' | string;
+    displayName: string;
+    /** 单次购买效果：+100 HP / +10 ATK（基值固定不随等级缩放，照设计文档 §7.4） */
+    effectPerBuy: number;
+    /** 已购次数（HP/ATK 各自独立计数） */
+    buys: number;
+    /** 下一次购买价格（当前价） */
+    nextCost: number;
+}
+
+/** POST /api/shop/killing/title/{titleId} 与 /attribute/{stat} 成功响应 */
+export interface KillingBuyResult {
+    message: string;
+    /** 扣减后杀气余额 */
+    killingIntent: number;
+    /** 称号兑换成功回传称号 id；属性购买为 null */
+    titleId?: string | null;
+    /** 属性购买成功回传 stat；称号兑换为 null */
+    stat?: string | null;
+    /** 属性购买成功回传累计次数；称号兑换为 null */
+    buys?: number | null;
 }
 
 /** 后端裁剪 DTO：memberCount 为当前人数，notice 即宗门公告 */

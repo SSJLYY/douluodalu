@@ -9,6 +9,8 @@ import com.douluodalu.game.repository.AchievementRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
 import com.douluodalu.game.repository.EquippedRingRepository
+import com.douluodalu.game.repository.PlayerProfileRepository
+import com.douluodalu.game.repository.UserTitleRepository
 import org.springframework.stereotype.Service
 
 /**
@@ -41,6 +43,12 @@ import org.springframework.stereotype.Service
  * bonusFor/getGameState 的 power 自动生效；detail 的五属性折算（newAttrPower）自此不再整体
  * 折进 achievementRow——按最大余数法分给骨行（词缀）与成就行（成就五属性），九行求和恒等
  * 延续、词缀战力归骨行而非成就行（无词缀时退化与旧口径逐位一致）。
+ * 杀气商店集成（第二十九轮）：bonusFor 与 killingBonusFor 把「已拥有称号 + player_profile
+ * 杀气购买计数（killing_hp_buys/killing_atk_buys）」折成的 killingBonus 并入加成包——与成就
+ * 同通道：加成包内先合并、统一经 applyPrestige 乘转生倍率（照成就 hp/atk 的倍率口径）；
+ * detail 增加第 10 行 title（差值法，prestige/soul/school 行同款），十行求和恒等延续，
+ * 无称号/购买时该行恒 0、九行退化不变。负荷体系（吸收容量）不并入杀气加成（照武魂不入
+ * 容量的既有决定，容量口径维持装备+成就，见 GameService.getGameState 注释）。
  */
 /**
  * 单件装备折出的战斗加成（成就加成复用同一形状）。
@@ -66,13 +74,19 @@ class EquipmentPowerService(
     private val equippedRingRepo: EquippedRingRepository,
     private val equippedBoneRepo: EquippedBoneRepository,
     private val equippedCoreRepo: EquippedCoreRepository,
-    private val achievementRepo: AchievementRepository
+    private val achievementRepo: AchievementRepository,
+    /** 第二十九轮杀气商店：已拥有称号反查（killingBonusFor 读集合求和） */
+    private val userTitleRepo: UserTitleRepository,
+    /** 第二十九轮杀气商店：player_profile 杀气购买计数反查（profile 缺失按 0 次宽容） */
+    private val profileRepo: PlayerProfileRepository
 ) {
 
     /** 读取该玩家已装备的魂环/魂骨/魂核 + 已解锁成就，计算战斗加成与战斗力（成就加成即时生效）。
      *  转生集成：装备+成就合计加成乘转生倍率（prestigeCount=0 时倍率恒 1.0，与旧版行为逐位一致）。
      *  第十七轮扩展：五属性加成随 EquipmentBonus 七字段全量透传；第二十八轮起装备侧五属性
-     *  由魂骨词缀供给（boneAffixBonus），成就侧带值照旧并入。 */
+     *  由魂骨词缀供给（boneAffixBonus），成就侧带值照旧并入。
+     *  第二十九轮杀气商店：killingBonusFor（已拥有称号 + 杀气购买计数）并入加成包，与成就
+     *  同通道统一乘转生倍率（battle/塔战斗组装无感自动生效——bonusFor 唯一 choke point）。 */
     fun bonusFor(userId: Long, level: Int, prestigeCount: Int = 0): EquipmentBonus {
         val equip = bonus(
             level,
@@ -81,7 +95,19 @@ class EquipmentPowerService(
             equippedCoreRepo.findByUserId(userId)
         )
         val ach = achievementBonus(achievementRepo.findByUserId(userId).map { it.achievementId })
-        return applyPrestige(plus(equip, ach), prestigeCount)
+        val kill = killingBonusFor(userId)
+        return applyPrestige(plus(plus(equip, ach), kill), prestigeCount)
+    }
+
+    /**
+     * 第二十九轮杀气商店：读该玩家已拥有称号（user_title）+ 杀气属性购买计数
+     * （player_profile.killing_hp_buys/killing_atk_buys）折成七字段 EquipmentBonus。
+     * bonusFor 与 GameService.getGameState 的状态组装同源（两处不得各算各的）；
+     * profile 行缺失（理论不可达，历史脏数据）按 0 次宽容。 */
+    fun killingBonusFor(userId: Long): EquipmentBonus {
+        val ownedTitles = userTitleRepo.findByUserId(userId).map { it.titleId }
+        val profile = profileRepo.findById(userId).orElse(null)
+        return killingBonus(ownedTitles, profile?.killingHpBuys ?: 0, profile?.killingAtkBuys ?: 0)
     }
 
     companion object {
@@ -150,6 +176,42 @@ class EquipmentPowerService(
             }
             return EquipmentBonus(atk, hp, matk, pdef, mdef, critRate, critDmg)
         }
+
+        /**
+         * 纯函数：已拥有杀气称号集合的加成求和（第二十九轮；achievementBonus 同款模型——
+         * 拥有即生效、按集合求和、天然幂等）。未知 id（定义表已下线的历史记录行）静默忽略；
+         * 全部称号无 matk/mdef（文档 §7.4 属性表无此两项，恒 0）。
+         */
+        fun killingTitleBonus(ownedTitleIds: Collection<String>): EquipmentBonus {
+            var atk = 0L
+            var hp = 0L
+            var pdef = 0L
+            var critRate = 0L
+            var critDmg = 0L
+            for (id in ownedTitleIds) {
+                GameBalance.KILLING_TITLE_BY_ID[id]?.let {
+                    atk += it.atk
+                    hp += it.hp
+                    pdef += it.pdef
+                    critRate += it.critRate
+                    critDmg += it.critDmg
+                }
+            }
+            return EquipmentBonus(atk, hp, 0, pdef, 0, critRate, critDmg)
+        }
+
+        /**
+         * 纯函数：杀气属性购买（HP/ATK 各自独立计数）的加成——+100 HP / +10 ATK 每次，
+         * 基值固定不随等级缩放（照文档 §7.4；负数计数按 0 兜底防历史脏数据放大）。
+         */
+        fun killingAttrBonus(hpBuys: Int, atkBuys: Int): EquipmentBonus = EquipmentBonus(
+            atkBonus = GameBalance.KILLING_ATTR_ATK_PER_BUY * atkBuys.coerceAtLeast(0),
+            hpBonus = GameBalance.KILLING_ATTR_HP_PER_BUY * hpBuys.coerceAtLeast(0)
+        )
+
+        /** 纯函数：杀气商店加成合计 = 称号叠加 + 属性购买（killingBonusFor / 测试同源） */
+        fun killingBonus(ownedTitleIds: Collection<String>, hpBuys: Int, atkBuys: Int): EquipmentBonus =
+            plus(killingTitleBonus(ownedTitleIds), killingAttrBonus(hpBuys, atkBuys))
 
         /**
          * 纯函数：由装备列表与等级计算加成（不依赖 Spring，便于测试与仿真镜像复用）。
@@ -274,7 +336,8 @@ class EquipmentPowerService(
 
         /**
          * 纯函数：战力明细拆分（任务#23；成就系统集成后五行不变量；转生集成后六行不变量；
-         * 第十八轮武魂觉醒后七行不变量；第十九轮流派后八行不变量；第二十七轮魂骨强化后九行不变量）。
+         * 第十八轮武魂觉醒后七行不变量；第十九轮流派后八行不变量；第二十七轮魂骨强化后九行不变量；
+         * 第二十九轮杀气商店后十行不变量）。
          * 复用与 bonus() 完全相同的单件公式，取整用最大余数法（largest remainder）保证拆分求和与
          * EquipmentBonus / powerOf 严格相等：
          *  - ringAtk + boneAtk + coreAtk == 装备部分的 atkBonus（不含成就加成）
@@ -301,7 +364,13 @@ class EquipmentPowerService(
          *    分给骨行（词缀折算，affixBonus = boneAffixBonus(bones)）与成就行（成就五属性），
          *    词缀战力归骨行而非 achievement 行（无词缀时分配退化为 [0, newAttrPower(ach)]，与旧口径
          *    逐位一致；newAttrPower 逐属性截断的 ≤1/属性 残差由 allocate 吃掉，恒等不破）
-         *  achievementBonus / prestigeCount / soul / school 均为默认零/空时与既有调用行为完全一致。
+         *  - 上式九行 + title == power（第二十九轮杀气商店：称号+属性购买贡献单列第 10 行，
+         *    title = 含杀气加成战力 − 九行之和（差值法，prestige/soul/school 行同款）。杀气加成与成就
+         *    同通道：在加成包内【先合并、统一 applyPrestige 乘转生倍率】（getGameState 的 power 组装
+         *    同式——逐字段截断下与「先乘后合并」存在 ≤ 字段数的取整差，全量归 title 行吸收），
+         *    killingBonus 零（无称号且无购买）时该行恒 0，退化为原九行恒等）
+         *  achievementBonus / prestigeCount / soul / school / killingBonus 均为默认零/空时与既有
+         *  调用行为完全一致。
          */
         fun detail(
             level: Int,
@@ -311,7 +380,8 @@ class EquipmentPowerService(
             achievementBonus: EquipmentBonus = EquipmentBonus(0, 0),
             prestigeCount: Int = 0,
             soul: GameBalance.MartialSoulDef? = null,
-            school: GameBalance.SchoolMods? = null
+            school: GameBalance.SchoolMods? = null,
+            killingBonus: EquipmentBonus = EquipmentBonus(0, 0)
         ): PowerDetailDto {
             // 骨行统一按归零口径拆分（强化增量单列第 9 行，见方法 KDoc 最后一条）
             val bonesZero = bones.map { zeroEnhanceBone(it) }
@@ -384,6 +454,23 @@ class EquipmentPowerService(
                 else plus(applyPrestige(combinedFull, prestigeCount), applyPrestige(soulBonus(soul), prestigeCount))
                 powerOf(level, applySchool(withSoulFull, school)) - zeroPower
             }
+            // 第 10 行 title = 含杀气加成战力 − 九行之和（差值法收尾）。杀气加成与成就【同通道】：
+            // 在加成包内先与成就合并、统一 applyPrestige 乘转生倍率（getGameState 的 power 组装同式）。
+            // 逐字段截断下「先合并后乘」≠「先乘后合并」（差 ≤ 字段数），杀气增量与该截断差全部归入
+            // title 行吸收，恒等不破。killingBonus 零时两口径逐位相同 → 恒 0，退化为原九行恒等。
+            // 注：nineRowSum == powerOf(applySchool(withSoulFull, school))（enhance 行差值定义的收尾和），
+            // withSoulFull 为全骨含强化的全量口径——title 行必须以同一全量口径为基准。
+            val nineRowSum = eightRowSum + enhanceRow
+            val titleRow = if (killingBonus == EquipmentBonus(0, 0)) 0L else {
+                val bFullKill = bonus(level, rings, bones, cores)
+                val combinedFullKill = plus(bFullKill, achievementBonus)
+                val withKillFull = plus(
+                    applyPrestige(plus(combinedFullKill, killingBonus), prestigeCount),
+                    if (soul == null) EquipmentBonus(0, 0)
+                    else applyPrestige(soulBonus(soul), prestigeCount)
+                )
+                powerOf(level, applySchool(withKillFull, school)) - nineRowSum
+            }
             return PowerDetailDto(
                 baseAtk = baseAtk,
                 baseHp = 0,
@@ -402,7 +489,9 @@ class EquipmentPowerService(
                 prestige = prestigeRow,
                 soul = soulRow,
                 school = schoolRow,
-                enhance = enhanceRow
+                enhance = enhanceRow,
+                // 第二十九轮杀气商店：称号+属性购买战力行（差值法第 10 行，尾部新增向后兼容）
+                title = titleRow
             )
         }
 

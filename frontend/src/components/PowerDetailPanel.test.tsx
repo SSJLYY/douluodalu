@@ -279,6 +279,77 @@ describe('PowerDetailPanel 强化第 9 行', () => {
     });
 });
 
+describe('PowerDetailPanel 称号第 10 行（第二十九轮杀气商店）', () => {
+    /** 九行总和（100+40+15+5+25+10+7+9+3），称号行再额外累加 */
+    const NINE_ROW_POWER = BASE_POWER + 25 + 10 + 7 + 9 + 3;
+
+    it('title>0 追加第 10 行「称号」（aria-label=称号加成，bar=bg-rose-500），脚注升级为十行 + 称号加成', () => {
+        const container = openPanel(NINE_ROW_POWER + 12, {
+            ...BASE_DETAIL,
+            achievement: 25,
+            prestige: 10,
+            soul: 7,
+            school: 9,
+            enhance: 3,
+            title: 12,
+        });
+
+        expect(screen.getByRole('progressbar', { name: '称号加成' }).getAttribute('aria-valuenow')).toBe('12');
+        // 十行齐全：base/ring/bone/core/achievement/prestige/soul/school/enhance/title
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(10);
+        // 契约：称号行 bar 用 bg-rose-500
+        expect(container.querySelector('[data-power-row="title"] .bg-rose-500')).toBeTruthy();
+
+        const footnote = screen.getByText(/行求和恒等于总战力/).textContent ?? '';
+        expect(footnote).toContain('十行');
+        expect(footnote).toContain('称号加成');
+    });
+
+    it('title=0 → 称号行隐藏，脚注回退九行且不含称号加成', () => {
+        openPanel(NINE_ROW_POWER, {
+            ...BASE_DETAIL,
+            achievement: 25,
+            prestige: 10,
+            soul: 7,
+            school: 9,
+            enhance: 3,
+            title: 0,
+        });
+
+        expect(screen.queryByRole('progressbar', { name: '称号加成' })).toBeNull();
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(9);
+        const footnote = screen.getByText(/行求和恒等于总战力/).textContent ?? '';
+        expect(footnote).toContain('九行');
+        expect(footnote).not.toContain('称号加成');
+    });
+
+    it('旧后端 title 缺失（undefined）→ 称号行隐藏，其余可选行不受影响', () => {
+        openPanel(BASE_POWER + 3, { ...BASE_DETAIL, enhance: 3 });
+
+        expect(screen.queryByRole('progressbar', { name: '称号加成' })).toBeNull();
+        expect(document.querySelectorAll('[data-power-row]').length).toBe(5);
+        expect(screen.getByText(/行求和恒等于总战力/).textContent).toContain('五行');
+    });
+
+    it('十行 share 求和恒等于总战力（DOM aria-valuenow 逐行累加断言）', () => {
+        const power = NINE_ROW_POWER + 12;
+        const container = openPanel(power, {
+            ...BASE_DETAIL,
+            achievement: 25,
+            prestige: 10,
+            soul: 7,
+            school: 9,
+            enhance: 3,
+            title: 12,
+        });
+
+        const sum = Array.from(container.querySelectorAll('[data-power-row]'))
+            .map((row) => row.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow') ?? '0')
+            .reduce((acc, v) => acc + Number(v), 0);
+        expect(sum).toBe(power);
+    });
+});
+
 /** 战斗属性摘要（GameState.combatStats，后端增量字段） */
 const COMBAT_STATS: CombatStats = {
     matk: 12000,

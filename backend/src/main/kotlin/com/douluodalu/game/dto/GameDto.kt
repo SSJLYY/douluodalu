@@ -57,6 +57,9 @@ data class CombatStatsDto(
  *  - 上式八行 + enhance == power（第二十七轮魂骨强化：强化乘区战力增量单列第 9 行，enhance 行 =
  *    含强化全量战力 − 全骨 enhanceLevel 归零口径战力（差值法收尾）；骨行 boneAtk/boneHp/bonePower
  *    按归零口径重算，避免与强化行双重计入。无强化骨时该行恒为 0、骨行与旧口径逐位一致，退化为原八行恒等）
+ *  - 上式九行 + title == power（第二十九轮杀气商店：已拥有称号 + HP/ATK 属性购买的加成折算
+ *    单列第 10 行（差值法，prestige/soul/school 行同款，先乘转生倍率后并入）；无称号且无购买
+ *    恒为 0，退化为原九行恒等）
  */
 data class PowerDetailDto(
     /** 基础攻击 = PLAYER_ATK_BASE + level × PLAYER_ATK_PER_LEVEL */
@@ -84,7 +87,10 @@ data class PowerDetailDto(
     val school: Long = 0,
     /** 魂骨强化战力行（第二十七轮：= 含强化全量战力 − 全骨归零口径战力；骨行为归零口径。
      *  无强化骨恒为 0。尾部新增，向后兼容） */
-    val enhance: Long = 0
+    val enhance: Long = 0,
+    /** 杀气商店战力行（第二十九轮：已拥有称号 + HP/ATK 属性购买的加成折算，差值法第 10 行；
+     *  无称号且无购买恒为 0。尾部新增，向后兼容） */
+    val title: Long = 0
 )
 
 // ======== 成就 ========
@@ -111,6 +117,57 @@ data class AchievementDto(
     /** 解锁日期 yyyy-MM-dd（LocalDate.toString()）；未解锁为 null */
     val unlockedAt: String? = null,
     val rewards: AchievementRewardDto = AchievementRewardDto()
+)
+
+// ======== 杀气商店（第二十九轮） ========
+// 放置说明：需求为「Shop 相关 DTO 类之后」——GameDto.kt 内无 Shop DTO（ShopItem 在
+// model/GameModels.kt，GameBalance 挂商店定义），故插在成就区块之后、不放文件末尾
+// （避免与并行分支的尾部追加冲突）。
+/** GET /api/shop/killing 响应：8 称号的拥有/价格/属性预览 + HP/ATK 两商品当前价/已购次数 */
+data class KillingShopDto(
+    /** 当前杀气余额（profile.killingIntent 同源，塔页展示同一字段） */
+    val killingIntent: Int,
+    val titles: List<KillingTitleDto>,
+    val attrs: List<KillingAttrDto>
+)
+
+/** 杀气称号条目（GameBalance.KILLING_TITLES 全表下发，owned 为已拥有态——购买即永久拥有不可回购） */
+data class KillingTitleDto(
+    val id: String,
+    val name: String,
+    val cost: Long,
+    /** 属性预览（全部已拥有称号叠加生效，此处为单张的加成） */
+    val hp: Long,
+    val atk: Long,
+    val pdef: Long,
+    val critRate: Long,
+    val critDmg: Long,
+    val owned: Boolean
+)
+
+/** 杀气属性购买条目（stat ∈ hp|atk；价格 = 100×2^buys，GameBalance.killingAttrCost 前后端镜像同源） */
+data class KillingAttrDto(
+    val stat: String,
+    val displayName: String,
+    /** 单次购买效果：+100 HP / +10 ATK（基值固定不随等级缩放，照文档 §7.4） */
+    val effectPerBuy: Long,
+    /** 已购次数（HP/ATK 各自独立计数） */
+    val buys: Int,
+    /** 下一次购买价格（当前价） */
+    val nextCost: Long
+)
+
+/** POST /api/shop/killing/title/{titleId} 与 /attribute/{stat} 成功响应（失败抛 IllegalArgumentException → 统一 400） */
+data class KillingBuyResponse(
+    val message: String,
+    /** 扣减后杀气余额 */
+    val killingIntent: Int,
+    /** 称号兑换成功时回传称号 id（属性购买为 null） */
+    val titleId: String? = null,
+    /** 属性购买成功时回传 stat（称号兑换为 null） */
+    val stat: String? = null,
+    /** 属性购买成功时回传累计次数（称号兑换为 null） */
+    val buys: Int? = null
 )
 
 data class ProfileDto(

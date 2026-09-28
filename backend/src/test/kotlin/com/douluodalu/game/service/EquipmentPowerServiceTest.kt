@@ -4,11 +4,14 @@ import com.douluodalu.game.entity.AchievementEntity
 import com.douluodalu.game.entity.EquippedBone
 import com.douluodalu.game.entity.EquippedCore
 import com.douluodalu.game.entity.EquippedRing
+import com.douluodalu.game.entity.UserTitleEntity
 import com.douluodalu.game.model.GameBalance
 import com.douluodalu.game.repository.AchievementRepository
 import com.douluodalu.game.repository.EquippedBoneRepository
 import com.douluodalu.game.repository.EquippedCoreRepository
 import com.douluodalu.game.repository.EquippedRingRepository
+import com.douluodalu.game.repository.PlayerProfileRepository
+import com.douluodalu.game.repository.UserTitleRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -23,7 +26,8 @@ import kotlin.random.Random
  * 全部走 EquipmentPowerService / GameService 的 companion 纯函数，不依赖 Spring。
  * 成就系统集成：bonusFor 并入已解锁成就 hp/atk；转生集成：bonusFor 乘转生倍率、
  * detail 求和不变量逐轮扩展（六行 → 七行武魂 → 八行流派 → 九行魂骨强化，第二十七轮：
- * 骨行按 enhanceLevel 归零口径、强化增量单列 enhance 行）。
+ * 骨行按 enhanceLevel 归零口径、强化增量单列 enhance 行；第二十九轮杀气商店后增第 10 行
+ * title——称号+属性购买差值行，十行求和恒等）。
  */
 class EquipmentPowerServiceTest {
 
@@ -121,7 +125,7 @@ class EquipmentPowerServiceTest {
             listOf(AchievementEntity(userId = 1L, achievementId = "cult_10"), AchievementEntity(userId = 1L, achievementId = "battle_10"))
         )
 
-        val b = EquipmentPowerService(ringRepo, boneRepo, coreRepo, achRepo).bonusFor(1L, 10)
+        val b = EquipmentPowerService(ringRepo, boneRepo, coreRepo, achRepo, mock(), mock()).bonusFor(1L, 10)
 
         val equipOnly = EquipmentPowerService.bonus(10, listOf(ring(year = 2, quality = 1, percentage = 500)), emptyList(), emptyList())
         val ach = EquipmentPowerService.achievementBonus(listOf("cult_10", "battle_10"))
@@ -147,7 +151,7 @@ class EquipmentPowerServiceTest {
         whenever(achRepo.findByUserId(1L)).thenReturn(
             listOf(AchievementEntity(userId = 1L, achievementId = "cult_10"), AchievementEntity(userId = 1L, achievementId = "battle_10"))
         )
-        val svc = EquipmentPowerService(ringRepo, boneRepo, coreRepo, achRepo)
+        val svc = EquipmentPowerService(ringRepo, boneRepo, coreRepo, achRepo, mock(), mock())
 
         // 0 转回归：倍率 1.0，与不加参的旧行为逐位一致
         val b0 = svc.bonusFor(1L, 10, prestigeCount = 0)
@@ -644,6 +648,151 @@ class EquipmentPowerServiceTest {
                     .sumOf { it.second.toLong() }
             }
             assertEquals(ach.critRateBonus + critFromAffix, bFull.critRateBonus, "词缀 critRate 必须并入 bonus")
+        }
+    }
+
+    @Test
+    fun `bonusFor should fold killing title and attr purchase bonus through the prestige channel like achievements`() {
+        // 第二十九轮杀气商店：killingBonus 与成就同通道——加成包内合并后统一 applyPrestige 乘转生倍率
+        val ringRepo = mock<EquippedRingRepository>()
+        val boneRepo = mock<EquippedBoneRepository>()
+        val coreRepo = mock<EquippedCoreRepository>()
+        val achRepo = mock<AchievementRepository>()
+        val titleRepo = mock<UserTitleRepository>()
+        val profileRepo = mock<PlayerProfileRepository>()
+        whenever(titleRepo.findByUserId(1L)).thenReturn(
+            listOf(UserTitleEntity(userId = 1L, titleId = "title_4"), UserTitleEntity(userId = 1L, titleId = "title_5"))
+        )
+        val profile = com.douluodalu.game.entity.PlayerProfileEntity(userId = 1L, level = 10)
+        profile.killingHpBuys = 3
+        profile.killingAtkBuys = 2
+        whenever(profileRepo.findById(1L)).thenReturn(java.util.Optional.of(profile))
+        val svc = EquipmentPowerService(ringRepo, boneRepo, coreRepo, achRepo, titleRepo, profileRepo)
+
+        val b0 = svc.bonusFor(1L, 10)
+        // title_4+title_5 逐位（GameBalance.KILLING_TITLES）：hp 11000 / atk 300 / pdef 60 / critRate 8 / critDmg 15；
+        // 属性购买独立计数：+3×100 HP / +2×10 ATK
+        val kill = EquipmentPowerService.killingBonus(listOf("title_4", "title_5"), 3, 2)
+        assertEquals(300L + 20L, b0.atkBonus, "atk = 称号 300 + 属性购买 2 次×10")
+        assertEquals(11000L + 300L, b0.hpBonus, "hp = 称号 11000 + 属性购买 3 次×100")
+        assertEquals(60L, b0.pdefBonus, "pdef = title_4 20 + title_5 40（文档 DEF+n 落 pdef）")
+        assertEquals(0L, b0.matkBonus, "称号表无 matk（文档 §7.4 无此两项）")
+        assertEquals(0L, b0.mdefBonus)
+        assertEquals(8L, b0.critRateBonus, "critRate = title_4 3 + title_5 5（百分点，1 = 1%）")
+        assertEquals(15L, b0.critDmgBonus)
+        assertEquals(kill.atkBonus, b0.atkBonus, "bonusFor 与 killingBonus 纯函数同源")
+        assertEquals(kill.hpBonus, b0.hpBonus)
+
+        // 转生倍率同通道（照成就 hp/atk 口径）：2 转 → 加成包逐字段 ×1.2（.toLong() 截断一致）
+        val b2 = svc.bonusFor(1L, 10, prestigeCount = 2)
+        val mult = GameBalance.prestigeMultiplier(2)
+        assertEquals((b0.atkBonus * mult).toLong(), b2.atkBonus)
+        assertEquals((b0.hpBonus * mult).toLong(), b2.hpBonus)
+        assertEquals((b0.critRateBonus * mult).toLong(), b2.critRateBonus, "暴击率加成同乘转生倍率")
+        assertTrue(b2.atkBonus > b0.atkBonus && b2.hpBonus > b0.hpBonus)
+    }
+
+    @Test
+    fun `killing title row attribution does not touch achievement row and degrades to zero`() {
+        // 第二十九轮：title 行差值法归因——杀气加成单列第 10 行、不混入成就行；
+        // 无称号无购买时恒 0（九行退化）；无装备无转生时 title 行恰为杀气加成的战力折算
+        val level = 50
+        val ach = EquipmentBonus(atkBonus = 245, hpBonus = 4600)
+        // title_1+title_4 + HP 3 次/ATK 2 次：hp 3500（可被 POWER_HP_DIVISOR 整除）、atk 130、
+        // pdef 20、critRate 3 → 战力 130 + 350 + (20×0.2 + 3×5) = 499，取值保证无截断残差
+        val kill = EquipmentPowerService.killingBonus(listOf("title_1", "title_4"), 3, 2)
+
+        val dNo = EquipmentPowerService.detail(level, emptyList(), emptyList(), emptyList(), ach)
+        val dKill = EquipmentPowerService.detail(level, emptyList(), emptyList(), emptyList(), ach, killingBonus = kill)
+
+        assertEquals(0L, dNo.title, "无称号无购买时 title 行必须为 0（九行退化）")
+        assertEquals(dNo.achievement, dKill.achievement, "杀气加成不得混入成就行")
+        assertTrue(dKill.title > 0L)
+        // powerOf 含基础项（常数+等级+基础攻击），title 行只承载杀气加成 → 差值恰为杀气折算
+        assertEquals(
+            EquipmentPowerService.powerOf(level, kill) - EquipmentPowerService.powerOf(level, EquipmentBonus(0, 0)),
+            dKill.title,
+            "无装备无转生时 title 行应恰为杀气加成的战力折算"
+        )
+        // 十行求和恒等（两个口径都断言）
+        for (d in listOf(dNo, dKill)) {
+            val power = EquipmentPowerService.powerOf(
+                level, EquipmentPowerService.plus(ach, if (d === dKill) kill else EquipmentBonus(0, 0))
+            )
+            assertEquals(
+                power,
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige +
+                        d.soul + d.school + d.enhance + d.title,
+                "十行战力求和必须等于总战力"
+            )
+        }
+    }
+
+    @Test
+    fun `power detail ten-row invariant holds with killing shop bonuses across randomized equipment`() {
+        // 第二十九轮回归（200 组随机）：称号 0~8 张随机子集 + HP/ATK 购买 0~5 次独立计数，
+        // 与装备/成就/转数/武魂/流派/强化/词缀全管线混合下，十行求和与含杀气加成总战力
+        // 严格一致（GameService.getGameState 的 power 组装同式：killingBonus 在加成包内先合并、
+        // 统一乘转生倍率，再并武魂/流派）
+        val rng = Random(20260928)
+        repeat(200) {
+            val level = rng.nextInt(1, 121)
+            val prestigeCount = rng.nextInt(0, 6)
+            val rings = List(rng.nextInt(0, 7)) {
+                ring(year = rng.nextInt(0, 6), quality = rng.nextInt(0, 5), percentage = rng.nextInt(0, 1000))
+            }
+            val bones = List(rng.nextInt(0, 6)) {
+                val q = rng.nextInt(0, 5)
+                val affixes =
+                    if (rng.nextInt(0, 3) == 0) emptyList()
+                    else GameBalance.rollBoneAffixList(q, rng)
+                affixedBone(year = rng.nextInt(0, 6), quality = q, enhance = rng.nextInt(0, 16), affixes = affixes)
+            }
+            val cores = List(rng.nextInt(0, 3)) {
+                core(rarity = rng.nextInt(0, 5), value = rng.nextInt(1, 300))
+            }
+            val ach = EquipmentBonus(
+                atkBonus = rng.nextLong(0, 500), hpBonus = rng.nextLong(0, 5000),
+                matkBonus = rng.nextLong(0, 300), pdefBonus = rng.nextLong(0, 100),
+                mdefBonus = rng.nextLong(0, 100), critRateBonus = rng.nextLong(0, 20),
+                critDmgBonus = rng.nextLong(0, 60)
+            )
+            // 第二十九轮混合：称号随机子集（0~8 张）+ HP/ATK 购买独立随机（0~5 次）
+            val ownedTitles = GameBalance.KILLING_TITLES.filter { rng.nextBoolean() }.map { it.id }
+            val hpBuys = rng.nextInt(0, 6)
+            val atkBuys = rng.nextInt(0, 6)
+            val kill = EquipmentPowerService.killingBonus(ownedTitles, hpBuys, atkBuys)
+            val soul =
+                if (rng.nextInt(0, 4) == 0) null
+                else GameBalance.MARTIAL_SOULS[rng.nextInt(GameBalance.MARTIAL_SOULS.size)]
+            val school =
+                if (rng.nextInt(0, 3) == 0) null
+                else GameBalance.SCHOOLS[rng.nextInt(GameBalance.SCHOOLS.size)].mods
+            val d = EquipmentPowerService.detail(level, rings, bones, cores, ach, prestigeCount, soul, school, kill)
+            // 与 GameService.getGameState 的 power 组装同式（prestige（含杀气）→ soul → school 全管线）
+            val eff = EquipmentPowerService.applyPrestige(
+                EquipmentPowerService.plus(EquipmentPowerService.bonus(level, rings, bones, cores, ach), kill),
+                prestigeCount
+            )
+            val withSoul = if (soul == null) eff else EquipmentPowerService.plus(
+                eff, EquipmentPowerService.applyPrestige(EquipmentPowerService.soulBonus(soul), prestigeCount)
+            )
+            val power = EquipmentPowerService.powerOf(level, EquipmentPowerService.applySchool(withSoul, school))
+            assertEquals(
+                power,
+                d.basePower + d.ringPower + d.bonePower + d.corePower + d.achievement + d.prestige +
+                        d.soul + d.school + d.enhance + d.title,
+                "十行战力求和必须等于含杀气加成总战力: level=$level prestige=$prestigeCount titles=${ownedTitles.size} " +
+                        "hpBuys=$hpBuys atkBuys=$atkBuys soul=${soul?.name}"
+            )
+            // 杀气加成必经 applyPrestige：0 转且无杀气加成 → title 行恒 0（退化路径）
+            if (prestigeCount == 0 && ownedTitles.isEmpty() && hpBuys == 0 && atkBuys == 0) {
+                assertEquals(0L, d.title, "无称号无购买且 0 转时 title 行必须为 0")
+            }
+            // killingBonus 纯函数与定义表同源（防两处数值漂移）
+            val titleSum = EquipmentPowerService.killingTitleBonus(ownedTitles)
+            assertEquals(ownedTitles.sumOf { GameBalance.KILLING_TITLE_BY_ID.getValue(it).atk }, titleSum.atkBonus)
+            assertEquals(ownedTitles.sumOf { GameBalance.KILLING_TITLE_BY_ID.getValue(it).hp }, titleSum.hpBonus)
         }
     }
 }

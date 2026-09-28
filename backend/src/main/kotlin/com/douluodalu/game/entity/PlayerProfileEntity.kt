@@ -49,6 +49,15 @@ class PlayerProfileEntity(
     @Column(name = "killing_intent")
     var killingIntent: Int = 0,
 
+    /** 杀气商店 HP 提升已购次数（第二十九轮，V14）：价格 = 100×2^n（GameBalance.killingAttrCost），
+     *  效果 +100 HP/次基值固定；转生不清（区别于 level/gold/soulPower 的清零范围） */
+    @Column(name = "killing_hp_buys", nullable = false)
+    var killingHpBuys: Int = 0,
+
+    /** 杀气商店攻击提升已购次数（第二十九轮，V14）：价格同上，效果 +10 ATK/次；转生不清 */
+    @Column(name = "killing_atk_buys", nullable = false)
+    var killingAtkBuys: Int = 0,
+
     @Column(name = "prestige_count")
     var prestigeCount: Int = 0,
     @Column(name = "talent_points")

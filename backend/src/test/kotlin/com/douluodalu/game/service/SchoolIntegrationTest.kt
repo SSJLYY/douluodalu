@@ -13,6 +13,7 @@ import com.douluodalu.game.repository.EquippedRingRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
 import com.douluodalu.game.repository.TalentRepository
 import com.douluodalu.game.repository.UserRepository
+import com.douluodalu.game.repository.UserTitleRepository
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -69,6 +70,10 @@ class SchoolIntegrationTest {
     @Mock
     private lateinit var achievementRepo: AchievementRepository
 
+    /** 第二十九轮杀气商店：EquipmentPowerService 新增依赖（killingBonusFor 反查；默认空表=无称号零漂移） */
+    @Mock
+    private lateinit var userTitleRepo: UserTitleRepository
+
     @Mock
     private lateinit var achievementService: AchievementService
 
@@ -81,7 +86,7 @@ class SchoolIntegrationTest {
         gameService = GameService(
             profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
             userRepository, webSocketService, checkInService, dailyQuestService,
-            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
+            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo, userTitleRepo, profileRepo),
             achievementService,
             SimpleMeterRegistry(),
             EquipService(profileRepo, backpackRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementService)
