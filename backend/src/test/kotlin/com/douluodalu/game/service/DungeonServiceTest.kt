@@ -12,6 +12,7 @@ import com.douluodalu.game.repository.EquippedCoreRepository
 import com.douluodalu.game.repository.EquippedRingRepository
 import com.douluodalu.game.repository.PlayerProfileRepository
 import com.douluodalu.game.repository.TalentRepository
+import com.douluodalu.game.repository.UserTitleRepository
 import com.douluodalu.game.repository.UserRepository
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.*
@@ -78,6 +79,10 @@ class DungeonServiceTest {
     @Mock
     private lateinit var achievementRepo: AchievementRepository
 
+    /** 第二十九轮杀气商店：EquipmentPowerService 构造新增（本套用例无称号，恒空仓） */
+    @Mock
+    private lateinit var userTitleRepo: UserTitleRepository
+
     @Mock
     private lateinit var achievementService: AchievementService
 
@@ -107,7 +112,10 @@ class DungeonServiceTest {
             .whenever(dungeonProgressRepo).findById(any())
         meterRegistry.clear()
         val equipmentPowerService =
-            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo)
+            EquipmentPowerService(
+                equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo,
+                userTitleRepo, profileRepo
+            )
         gameService = GameService(
             profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
             userRepository, webSocketService, checkInService, dailyQuestService,

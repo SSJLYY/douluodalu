@@ -63,6 +63,10 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # tsc --noEmit：build 不覆盖的类型错误（如未走打包路径的测试文件）在此拦截
+      - name: Typecheck
+        run: npm run typecheck
+
       # --run：CI 单次执行（vitest 默认 watch 模式会挂起）
       - name: Test
         run: npm test -- --run
