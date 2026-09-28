@@ -2,7 +2,7 @@
 -- V14: 杀气商店（第二十九轮）
 --
 -- 背景：塔（杀戮之都）战斗胜利产出杀气 killing_intent
---（GameService.towerBattle：1 + towerFloor/10），此前无任何消耗出口。
+-- （GameService.towerBattle：1 + towerFloor/10），此前无任何消耗出口。
 -- 设计文档 §7.4 定义杀气商店：8 个永久称号兑换 + HP/ATK 属性购买（无限次，
 -- 价格 = 100 × 2^已购次数）。
 --

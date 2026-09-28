@@ -54,6 +54,16 @@ import kotlin.random.Random
  *                            逐条类型 nextInt(5−已选)、数值品质插值，掷点次序与生产逐位同构；
  *                            词缀随 SimItem.affixes → EquippedBone.affixesJson 进 EquipSimPlayer
  *                            的 bonus()/战力口径；battle 内联掉落不加词缀，与生产分层一致），改动需同步
+ *   - dungeon()              每日副本镜像（第二十九轮：DungeonService.fight/sweep + GameBalance.DUNGEON_DEFS）：
+ *                            每天唯一一次机会（胜败都占当日名额）挑战已解锁最高难度，ever_cleared 位掩码
+ *                            镜像历史通关、通关后改扫荡（耗魂力 50+等级×5）；金币=goldReward×
+ *                            prestigeMultiplier、杀气直加不乘倍率、掉落 rollBackpackDropMirror
+ *                            （level=dropTier×12，与塔共用一份镜像），改动需同步
+ *   - killingShop()          杀气商店镜像（第二十九轮：ShopService.buyKillingTitle/buyKillingAttr）：
+ *                            称号 title_1→title_8 顺序攒够即买（属性性价比高于属性购买，见方法 KDoc）、
+ *                            全满后剩余杀气轮替买 HP/ATK（价格 100×2^已购次数）；杀气收入=塔胜
+ *                            1+floor/10（既有）+副本直加，加成经生产纯函数 killingBonus 并入战斗/塔
+ *                            战力加成包（equip+ach+kill 合计后再乘转生倍率，与 bonusFor 同通道），改动需同步
  * 平衡常量直接引用 GameBalance（单一事实来源），但公式结构如有改动需同步本文件。
  *
  * 断言刻意只放软性的健康检查（跑通、数量级不离谱）；主要产出是根目录
@@ -100,6 +110,12 @@ class LongRunSimulationTest {
         var schoolChoices = 0
         // 第二十七轮魂骨强化镜像事件计数（当日；报告「强化镜像」小节汇总）
         var enhances = 0; var enhanceGold = 0L
+        // 第二十九轮每日副本镜像事件计数（当日；报告「每日副本镜像」小节汇总）
+        var dungeonGold = 0L; var dungeonWins = 0L; var dungeonLosses = 0L; var dungeonSweeps = 0L
+        var sweepSoulPower = 0L
+        // 第二十九轮杀气经济镜像（当日）：杀气收入来源（塔胜 + 副本）与商店支出（称号/属性购买）
+        var towerKilling = 0L; var dungeonKilling = 0L
+        var killingSpent = 0L; var titleBuys = 0; var attrBuys = 0
     }
 
     /** 每日固定收入镜像（SimPlayer/EquipSimPlayer 共用，保证两组画像经济口径一致） */
@@ -570,6 +586,21 @@ class LongRunSimulationTest {
         var prestigeCount = 0            // 镜像 profile.prestigeCount（talentPoints 不建模：对属性/收入曲线无反馈）
         // 第十九轮流派镜像（与 SimPlayer 同策略：第 1 天免费选 BALANCED 温和系数建模）
         var chosenSchool: GameBalance.SchoolDef? = null
+        // 第二十九轮杀气商店/每日副本镜像状态：杀气余额（跨转生保留——§15.2 重置项不含杀气/称号/
+        // 副本进度）、已拥有称号（列表顺序=购买顺序 title_1→title_8）、HP/ATK 属性购买计数、
+        // 副本历史通关位掩码（ever_cleared 镜像）
+        var killingIntent = 0L
+        val ownedTitles = mutableListOf<String>()
+        var killingHpBuys = 0
+        var killingAtkBuys = 0
+        var everCleared = 0
+
+        /**
+         * 杀气商店加成（生产 EquipmentPowerService.killingBonusFor 同源纯函数：称号叠加+属性购买）。
+         * 并入战斗/塔战力加成包的通道与生产 bonusFor 逐位同式：equip+ach+kill 合计后再乘转生倍率。
+         */
+        fun killBonus(): EquipmentBonus =
+            EquipmentPowerService.killingBonus(ownedTitles, killingHpBuys, killingAtkBuys)
         /** 成就属性加成（SOUL_RING 口径 = 已装备槽位数；prestigeCount 参与成就解锁口径） */
         fun achBonus(): EquipmentBonus = achievementBonusOf(level, totalBattleWins, towerFloor, slotsFilled(), prestigeCount)
         /** 流派系数镜像（GameService.schoolModsOf 同源纯函数：chosenSchool 反查 mods） */
@@ -709,6 +740,8 @@ class LongRunSimulationTest {
             hp = 50L * 1 + 100L
             rings.forEachIndexed { slot, item -> item?.let { rings[slot] = null; bag.add(it) } }
             bones.forEachIndexed { slot, item -> item?.let { bones[slot] = null; bag.add(it) } }
+            // 第二十九轮注：杀气余额/已拥有称号/属性购买计数/副本 everCleared 均跨转生保留
+            // （文档 §15.2 重置项不含杀气、称号与副本进度），镜像状态零改动即正确
         }
 
         fun battle(s: DayStats) {
@@ -716,9 +749,11 @@ class LongRunSimulationTest {
             val oldMap = mapId
             val oldStage = stage
             val monster = GameService.monsterStats(oldMap, oldStage)
-            // 镜像 bonusFor(userId, level, prestigeCount)：装备+成就七字段合计 ×转生倍率
+            // 镜像 bonusFor(userId, level, prestigeCount)：装备+成就+杀气商店（第二十九轮）合计 ×转生倍率
             val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
-            val equip = EquipmentPowerService.applyPrestige(EquipmentPowerService.plus(raw, ach), prestigeCount)
+            val equip = EquipmentPowerService.applyPrestige(
+                EquipmentPowerService.plus(EquipmentPowerService.plus(raw, ach), killBonus()), prestigeCount
+            )
             // 战斗属性（含五属性、武魂【无——本画像未建模武魂】与流派系数）直接调生产纯函数
             // playerCombatStats 组装，与生产 battle() 逐位同源；maxHp 乘在基础+加成加总后
             val school = schoolMods()
@@ -771,12 +806,14 @@ class LongRunSimulationTest {
         fun tower(s: DayStats) {
             val ach = achBonus()
             val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
-            // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就七字段合计 ×转生倍率；powerOf 含五属性折算）
+            // 镜像 towerBattle 的 power 口径：bonusFor（装备+成就+杀气商店合计 ×转生倍率；powerOf 含五属性折算）
             // + 流派系数（第十九轮 applySchool，与生产 towerBattle 同一含流派口径）
             val power = EquipmentPowerService.powerOf(
                 level,
                 EquipmentPowerService.applySchool(
-                    EquipmentPowerService.applyPrestige(EquipmentPowerService.plus(raw, ach), prestigeCount),
+                    EquipmentPowerService.applyPrestige(
+                        EquipmentPowerService.plus(EquipmentPowerService.plus(raw, ach), killBonus()), prestigeCount
+                    ),
                     schoolMods()
                 )
             )
@@ -786,6 +823,10 @@ class LongRunSimulationTest {
             if (!won) { s.towerLosses++; return }
             s.towerWins++
             totalBattleWins++                        // 生产 towerBattle：胜场 +1
+            // 杀气收入（第二十九轮既有口径镜像 GameService.towerBattle：1 + towerFloor/10 直加不乘
+            // 转生倍率，取【挑战时】楼层——生产 killingGained 在胜局 towerFloor+1 之前取值）
+            val killingGained = 1L + towerFloor / GameBalance.TOWER_KILLING_PER_FLOORS
+            killingIntent += killingGained; s.towerKilling += killingGained
             val towerLevel = towerFloor * GameBalance.TOWER_LEVEL_PER_FLOOR
             // 转生倍率镜像（GameService.towerBattle：塔胜产出 ×(1+转数×0.1)）
             val mult = GameBalance.prestigeMultiplier(prestigeCount)
@@ -794,38 +835,136 @@ class LongRunSimulationTest {
             soulPower += ((GameBalance.TOWER_EXP_BASE + towerLevel * GameBalance.TOWER_EXP_PER_LEVEL) * mult).toLong()
             if (rng.nextDouble() < GameBalance.TOWER_BOSS_COIN_CHANCE) { bossCoin += 1; s.bossCoins += 1 }
             towerFloor = min(GameBalance.TOWER_MAX_FLOOR, towerFloor + 1)
-            // 掉落判定：nextDouble 无论背包是否满都会消耗（镜像 towerBattle:289 的 `won && nextDouble(...)`），
+            // 掉落判定：nextDouble 无论背包是否满都会消耗（镜像 towerBattle 的 `won && nextDouble(...)`），
             // 满包则 rollBackpackDrop 在消耗任何属性 RNG 前返回 null（静默丢失）
             if (rng.nextDouble() < GameBalance.TOWER_DROP_CHANCE) {
-                if (bag.size < bagCap) {
-                    // rollBackpackDrop 逐行镜像（RNG 次序：类型→品质→年份→成熟度→命名→词缀[BONE 末尾]）
-                    val t = if (rng.nextDouble() > 0.72) 1 else if (rng.nextDouble() > 0.45) 2 else 0
-                    val q = min(4, towerLevel / 8 + rndInt(3))
-                    val yBase = towerLevel / 12 + rndInt(2)
-                    val y = if (t == 0) min(towerRingYearCap, yBase) else min(4, yBase)
-                    val pct = 100 + towerLevel * 12 + rndInt(80)
-                    val enhance = if (t == 1) maxOf(1, towerLevel / 10) else 0
-                    val coreValue = if (t == 2) 10 + towerLevel * 3 else 0
-                    // 第二十八轮词缀掷点：BONE 分支在全部既有掷点之后追加（条数 = 品质+1 无掷点 →
-                    // 逐条类型 nextInt(5−已选)；数值由品质插值无掷点）。调用生产同一 rollBoneAffixList
-                    // 注入镜像自身 rng——掷点次序与生产逐位同构（同源防漂移）
-                    var affixes: List<Pair<GameBalance.BoneAffixType, Int>> = emptyList()
-                    when (t) {
-                        0 -> rndInt(3)                        // skillName
-                        1 -> {                                // boneType + passiveSkillName + 词缀
-                            rndInt(6); rndInt(3)
-                            affixes = GameBalance.rollBoneAffixList(q, rng)
-                        }
-                        else -> { rndInt(3); rndInt(3) }      // passiveSkillName + coreName
-                    }
-                    val item = SimItem(t, y, q, pct, enhance, coreValue, affixes)
-                    bag.add(item)
-                    s.dropsGained++
-                    if (item.type == 0) {
-                        ringDropsToday++
-                        if (item.ringLoad > capacity()) deadRingDropsToday++
-                    }
-                } else { dropLostTotal++; s.dropsLost++ }
+                rollBackpackDropMirror(towerLevel, s)
+            }
+        }
+
+        /**
+         * rollBackpackDrop 逐行镜像（GameService.rollBackpackDrop；RNG 掷点次序【写死，勿动】：
+         * ①类型 nextDouble 两掷（>0.72→BONE，否则 >0.45→CORE，再否则 RING）→ ②品质 nextInt(3)
+         * → ③年份 nextInt(2)（先抽后截断）→ ④成熟度 nextInt(80) → ⑤按类型命名掷点（RING 1 掷/
+         * BONE 2 掷/CORE 2 掷）→ ⑥【BONE 末尾】词缀（生产同一 rollBoneAffixList 注入镜像 rng）。
+         * 背包满在消耗任何 RNG 前返回 null（静默丢失，计满包丢掉落）。塔（level=floor×3）与
+         * 每日副本（level=dropTier×12，第二十九轮）共用一份镜像，防两处手抄漂移。
+         */
+        private fun rollBackpackDropMirror(level: Int, s: DayStats): SimItem? {
+            if (bag.size >= bagCap) { dropLostTotal++; s.dropsLost++; return null }
+            val t = if (rng.nextDouble() > 0.72) 1 else if (rng.nextDouble() > 0.45) 2 else 0
+            val q = min(4, level / 8 + rndInt(3))
+            val yBase = level / 12 + rndInt(2)
+            // 魂环年份封顶 TOWER_RING_DROP_YEAR_CAP（死掉落治理同口径）；魂骨/魂核保留原曲线
+            val y = if (t == 0) min(towerRingYearCap, yBase) else min(4, yBase)
+            val pct = 100 + level * 12 + rndInt(80)
+            val enhance = if (t == 1) maxOf(1, level / 10) else 0
+            val coreValue = if (t == 2) 10 + level * 3 else 0
+            var affixes: List<Pair<GameBalance.BoneAffixType, Int>> = emptyList()
+            when (t) {
+                0 -> rndInt(3)                        // skillName
+                1 -> {                                // boneType + passiveSkillName + 词缀
+                    rndInt(6); rndInt(3)
+                    affixes = GameBalance.rollBoneAffixList(q, rng)
+                }
+                else -> { rndInt(3); rndInt(3) }      // passiveSkillName + coreName
+            }
+            val item = SimItem(t, y, q, pct, enhance, coreValue, affixes)
+            bag.add(item)
+            s.dropsGained++
+            if (item.type == 0) {
+                ringDropsToday++
+                if (item.ringLoad > capacity()) deadRingDropsToday++
+            }
+            return item
+        }
+
+        // ---- 每日副本镜像（第二十九轮，DungeonService.fight/sweep + GameBalance.DUNGEON_DEFS）----
+        // 玩家策略（理性）：每天唯一一次机会（胜败都占当日名额）放在首次登录，挑战当前已解锁的
+        // 最高难度（prestigeCount ≥ unlockPrestige 的最大 tier；0 转无任何难度解锁 → 空过）；
+        // 该难度历史已通关（everCleared 位掩码镜像，胜局置位、转生不清）后改扫荡（免战斗、耗魂力
+        // 50+等级×5；魂力不足则退回挑战——战斗免费，已通关难度的期望收益仍为正）。
+        // 奖励公式逐位镜像生产：金币 = goldReward × prestigeMultiplier（收入口径③）、杀气直加不乘
+        // 倍率（稀缺货币口径）、掉落 rollBackpackDropMirror(level=dropTier×12)；胜局 totalBattleWins+1
+        // 并保留战果血量（下限 1），败局回满血零奖励（与 battle 战败语义一致）。
+        fun dungeon(s: DayStats) {
+            val tier = GameBalance.DUNGEON_DEFS.indexOfLast { prestigeCount >= it.unlockPrestige }
+            if (tier < 0) return                             // 0 转未解锁任何难度
+            val def = GameBalance.DUNGEON_DEFS[tier]
+            val mult = GameBalance.prestigeMultiplier(prestigeCount)
+            if (GameBalance.dungeonHasCleared(everCleared, tier)) {
+                val cost = GameBalance.dungeonSweepSoulPowerCost(level)
+                if (soulPower >= cost) {                     // 扫荡：不战斗、不计胜负、不写通关标记
+                    soulPower -= cost
+                    s.sweepSoulPower += cost
+                    s.dungeonSweeps += 1
+                    val goldGained = (def.goldReward * mult).toLong()
+                    gold += goldGained; s.dungeonGold += goldGained
+                    killingIntent += def.killingReward; s.dungeonKilling += def.killingReward
+                    rollBackpackDropMirror(GameBalance.dungeonDropLevel(def.dropTier), s)
+                    return
+                }
+            }
+            // 挑战：战斗属性组装与 battle 同口径（装备+成就+杀气商店合计 ×转生倍率；流派系数并入）
+            val raw = EquipmentPowerService.bonus(level, equippedRingList(), equippedBoneList(), equippedCoreList())
+            val equip = EquipmentPowerService.applyPrestige(
+                EquipmentPowerService.plus(EquipmentPowerService.plus(raw, achBonus()), killBonus()), prestigeCount
+            )
+            val school = schoolMods()
+            val player = GameService.playerCombatStats(level, prestigeCount, equip, school)
+            val maxHp = GameService.schoolScaledMaxHp(scaledBaseMaxHp() + equip.hpBonus, school)
+            // Boss = 当前推图怪 × 难度倍率（DungeonService.dungeonMonster 同构：matk 镜像攻击、
+            // 双防 = 放大后攻击 × MONSTER_DEF_FACTOR、倍率下限夹 1）
+            val base = GameService.monsterStats(mapId, stage)
+            val atk = (base.atk * def.atkMult).toInt().coerceAtLeast(1)
+            val defV = (atk * GameBalance.MONSTER_DEF_FACTOR).toInt()
+            val boss = GameService.MonsterStats(
+                (base.hp * def.hpMult).toLong().coerceAtLeast(1), atk, atk, defV, defV
+            )
+            val outcome = GameService.resolveBattle(
+                player, hp.coerceAtMost(maxHp), boss, GameBalance.MAX_BATTLE_ROUNDS, rng, maxHp
+            )
+            if (!outcome.won) {                              // 败局：占当日名额、零奖励、回满血
+                s.dungeonLosses += 1
+                hp = maxHp
+                return
+            }
+            s.dungeonWins += 1
+            totalBattleWins += 1                             // 生产 fight：胜局 totalBattleWins +1（成就口径）
+            everCleared = everCleared or GameBalance.dungeonClearedBit(tier)
+            val goldGained = (def.goldReward * mult).toLong()
+            gold += goldGained; s.dungeonGold += goldGained
+            killingIntent += def.killingReward; s.dungeonKilling += def.killingReward
+            hp = outcome.playerHpLeft.coerceAtLeast(1)       // 胜局保留战果血量（battle 同款）
+            rollBackpackDropMirror(GameBalance.dungeonDropLevel(def.dropTier), s)
+        }
+
+        // ---- 杀气商店镜像（第二十九轮，ShopService.buyKillingTitle/buyKillingAttr + GameBalance）----
+        // 玩家策略：称号按 title_1→title_8 顺序攒够即买，【称号优先级高于属性购买】——KDoc 留档理由：
+        // 称号属性量随价格（100→150000）同步 ~2.5~3 倍递增且永久拥有叠加生效（「拥有即生效」模型），
+        // 单位杀气换得的属性显著高于属性购买（+100HP/+10ATK 基值固定不随等级缩放，文档定位为
+        // 前期小额补强）；称号全满后剩余杀气投入 HP/ATK 属性购买（HP/ATK 轮替、价格 100×2^已购次数）。
+        // 零掷点：商店购买不消耗 RNG；加成经 killBonus()（生产 killingBonus 纯函数）并入战斗/塔战力。
+        fun killingShop(s: DayStats) {
+            while (ownedTitles.size < GameBalance.KILLING_TITLES.size) {
+                val next = GameBalance.KILLING_TITLES[ownedTitles.size]
+                if (killingIntent < next.cost) break
+                killingIntent -= next.cost
+                s.killingSpent += next.cost
+                s.titleBuys += 1
+                ownedTitles.add(next.id)
+            }
+            if (ownedTitles.size == GameBalance.KILLING_TITLES.size) {
+                var hpTurn = true
+                while (true) {
+                    val cost = GameBalance.killingAttrCost(if (hpTurn) killingHpBuys else killingAtkBuys)
+                    if (killingIntent < cost) break
+                    killingIntent -= cost
+                    s.killingSpent += cost
+                    s.attrBuys += 1
+                    if (hpTurn) killingHpBuys += 1 else killingAtkBuys += 1
+                    hpTurn = !hpTurn
+                }
             }
         }
 
@@ -933,6 +1072,23 @@ class LongRunSimulationTest {
         val totalEnhances: Long = 0,
         val totalEnhanceGold: Long = 0,
         val totalGoldIncome: Long = 0,
+        // 第二十九轮每日副本镜像汇总：金币（占比）/胜败扫荡/扫荡魂力
+        val totalDungeonGold: Long = 0,
+        val totalDungeonWins: Long = 0,
+        val totalDungeonLosses: Long = 0,
+        val totalDungeonSweeps: Long = 0,
+        val totalSweepSoulPower: Long = 0,
+        /** 主动玩法金币总收入（战斗+塔+卖装备+副本）——副本占主动收入比的分母 */
+        val totalActiveGold: Long = 0,
+        // 第二十九轮杀气镜像汇总：收入来源（塔/副本）与商店支出（称号数/属性购买次数/期末状态）
+        val totalTowerKilling: Long = 0,
+        val totalDungeonKilling: Long = 0,
+        val totalKillingSpent: Long = 0,
+        val totalTitleBuys: Long = 0,
+        val totalAttrBuys: Long = 0,
+        val finalTitles: Int = 0,
+        val finalKillingIntent: Long = 0,
+        val nextTitleName: String = "全满",
     ) {
         val final: LoadLoopDay get() = rows.last()
         val maxUtilEver: Double get() = rows.maxOf { it.utilPct }
@@ -940,6 +1096,10 @@ class LongRunSimulationTest {
         val deadRingDropShare: Double get() = if (totalRingDrops == 0L) 0.0 else totalDeadRingDrops * 100.0 / totalRingDrops
         /** 强化消耗占全期金币总收入的百分比（经济 sink 占比） */
         val enhanceShareOfIncome: Double get() = if (totalGoldIncome == 0L) 0.0 else totalEnhanceGold * 100.0 / totalGoldIncome
+        /** 每日副本金币占全期金币总收入的百分比（第二十九轮新收入占比观察口径） */
+        val dungeonShareOfIncome: Double get() = if (totalGoldIncome == 0L) 0.0 else totalDungeonGold * 100.0 / totalGoldIncome
+        /** 每日副本金币占主动玩法（战斗+塔+卖装备+副本）收入的百分比 */
+        val dungeonShareOfActive: Double get() = if (totalActiveGold == 0L) 0.0 else totalDungeonGold * 100.0 / totalActiveGold
         fun rowsEvery(n: Int): List<LoadLoopDay> = rows.filter { it.day % n == 0 || it.day == rows.size }
     }
 
@@ -963,6 +1123,11 @@ class LongRunSimulationTest {
         var totalEnhances = 0L
         var totalEnhanceGold = 0L
         var totalGoldIncome = 0L
+        var totalDungeonGold = 0L; var totalDungeonWins = 0L
+        var totalDungeonLosses = 0L; var totalDungeonSweeps = 0L; var totalSweepSoulPower = 0L
+        var totalActiveGold = 0L
+        var totalTowerKilling = 0L; var totalDungeonKilling = 0L
+        var totalKillingSpent = 0L; var totalTitleBuys = 0L; var totalAttrBuys = 0L
         val loginHours = listOf(8.0, 14.0, 22.0)
         val battlesPerSession = listOf(6, 8, 6)
         val towersPerSession = listOf(5, 5, 8)
@@ -982,6 +1147,13 @@ class LongRunSimulationTest {
                 p.claimOffline(t, s)
                 repeat(8) { p.cultivate() }
                 s.breakthroughs += p.breakthroughAll(s, prestigeEnabled)
+                if (i == 0) {
+                    // 第二十九轮杀气商店镜像：每日首次登录先结账（昨日塔胜+副本杀气攒够即买，称号优先）
+                    p.killingShop(s)
+                    // 第二十九轮每日副本镜像：当日唯一一次机会（胜败都占名额），挑战已解锁最高难度、
+                    // 通关后扫荡（魂力不足退回挑战）
+                    p.dungeon(s)
+                }
                 repeat(battlesPerSession[i]) { p.battle(s) }
                 repeat(towersPerSession[i]) { p.tower(s) }
                 p.equipPass()
@@ -997,8 +1169,20 @@ class LongRunSimulationTest {
             totalDeadRingDrops += p.deadRingDropsToday
             totalEnhances += s.enhances
             totalEnhanceGold += s.enhanceGold
-            totalGoldIncome += s.offlineGold + s.battleGold + s.towerGold + s.sellGold +
+            // 第二十九轮副本/杀气镜像累计（副本金币计入金币总收入与主动玩法收入两个占比分母）
+            totalDungeonGold += s.dungeonGold
+            totalDungeonWins += s.dungeonWins
+            totalDungeonLosses += s.dungeonLosses
+            totalDungeonSweeps += s.dungeonSweeps
+            totalSweepSoulPower += s.sweepSoulPower
+            totalTowerKilling += s.towerKilling
+            totalDungeonKilling += s.dungeonKilling
+            totalKillingSpent += s.killingSpent
+            totalTitleBuys += s.titleBuys
+            totalAttrBuys += s.attrBuys
+            totalGoldIncome += s.offlineGold + s.battleGold + s.towerGold + s.sellGold + s.dungeonGold +
                     s.checkInGold + s.questGold
+            totalActiveGold += s.battleGold + s.towerGold + s.sellGold + s.dungeonGold
             val bagRings = p.bagRings()
             rows.add(LoadLoopDay(
                 day = d, level = p.level, mapId = p.mapId, stage = p.stage, towerFloor = p.towerFloor,
@@ -1019,7 +1203,15 @@ class LongRunSimulationTest {
         }
         return LoadLoopRun(rows, p.firstRejectDay, p.firstRejectMap, p.firstRejectLevel,
             p.firstRejectLoad, p.firstRejectYear, p.firstEquipDayByYear, p.dropLostTotal, totalRejects,
-            totalUpgrades, totalRingDrops, totalDeadRingDrops, totalEnhances, totalEnhanceGold, totalGoldIncome)
+            totalUpgrades, totalRingDrops, totalDeadRingDrops, totalEnhances, totalEnhanceGold, totalGoldIncome,
+            totalDungeonGold = totalDungeonGold, totalDungeonWins = totalDungeonWins,
+            totalDungeonLosses = totalDungeonLosses, totalDungeonSweeps = totalDungeonSweeps,
+            totalSweepSoulPower = totalSweepSoulPower, totalActiveGold = totalActiveGold,
+            totalTowerKilling = totalTowerKilling, totalDungeonKilling = totalDungeonKilling,
+            totalKillingSpent = totalKillingSpent, totalTitleBuys = totalTitleBuys,
+            totalAttrBuys = totalAttrBuys, finalTitles = p.ownedTitles.size,
+            finalKillingIntent = p.killingIntent,
+            nextTitleName = GameBalance.KILLING_TITLES.getOrNull(p.ownedTitles.size)?.name ?: "全满")
     }
 
     // ======== 报告生成 ========
@@ -1033,6 +1225,9 @@ class LongRunSimulationTest {
         val prestigeCount: Int = 0, val firstPrestigeDay: Int = 0,
         /** 第二十七轮强化镜像汇总（10 种子收敛锁观察列） */
         val enhances: Long = 0, val enhanceGold: Long = 0, val enhanceShare: Double = 0.0,
+        /** 第二十九轮副本/杀气商店镜像汇总（10 种子收敛锁观察列） */
+        val dungeonGold: Long = 0, val dungeonShare: Double = 0.0,
+        val titles: Int = 0, val killingSpent: Long = 0,
     )
 
     /** 后 60 天（31~90）掉落的魂环中「掉落当时就装不下」的比例 */
@@ -1153,14 +1348,16 @@ class LongRunSimulationTest {
         appendLine()
         appendLine("### 多种子鲁棒性抽查（10 种子 × 90 天，实装组·调参后）")
         appendLine()
-        appendLine("| 种子 | 90天等级 | 转数(首次转生日) | 推图 | 后期利用率 | 死环率(前30/后60天) | 换装/日 | 拒装/日 | 槽位 | 环积压(≥2档) | 首次拒装 | 强化(次/金/占收入) |")
-        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        appendLine("| 种子 | 90天等级 | 转数(首次转生日) | 推图 | 后期利用率 | 死环率(前30/后60天) | 换装/日 | 拒装/日 | 槽位 | 环积压(≥2档) | 首次拒装 | 强化(次/金/占收入) | 副本(金/占主动收入) | 杀气商店(称号/支出) |")
+        appendLine("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for (s in seeds) {
             appendLine("| ${s.seed} | ${s.level} | ${s.prestigeCount} (第 ${s.firstPrestigeDay} 天) | ${s.mapId + 1} | ${String.format("%.1f", s.utilLate)}% " +
                     "| ${String.format("%.1f", s.deadShareEarly)}% / ${String.format("%.1f", s.deadShareLate)}% " +
                     "| ${String.format("%.2f", s.upgradesPerDay)} | ${String.format("%.1f", s.totalRejects / 90.0)} " +
                     "| ${s.slots}/9 | ${s.bagRings} (${s.bagHighTier}) | 第 ${s.firstRejectDay} 天 " +
-                    "| ${s.enhances}/${eng(s.enhanceGold)}/${String.format("%.1f", s.enhanceShare)}% |")
+                    "| ${s.enhances}/${eng(s.enhanceGold)}/${String.format("%.1f", s.enhanceShare)}% " +
+                    "| ${eng(s.dungeonGold)}/${String.format("%.1f", s.dungeonShare)}% " +
+                    "| ${s.titles}个/${eng(s.killingSpent)} |")
         }
         appendLine()
         appendLine("- 10 种子汇总（转生开启）：满槽 ${seeds.count { it.slots == 9 }}/10、" +
@@ -1202,7 +1399,46 @@ class LongRunSimulationTest {
         appendLine()
         appendLine("- 10 种子强化汇总：累计 ${seeds.sumOf { it.enhances }} 次 / ${eng(seeds.sumOf { it.enhanceGold })} 金，" +
                 "占收入比 ${String.format("%.1f", seeds.minOf { it.enhanceShare })}%~${String.format("%.1f", seeds.maxOf { it.enhanceShare })}%——" +
-                "与 90 天金币存量 840k~2.6M 的健康 sink 锚点同量级，前期单次费用 ≤ 日收入量级。")
+                "期末金币存量（主种子 ${eng(load.final.gold)}）仍处健康量级，前期单次费用 ≤ 日收入量级。")
+        appendLine()
+        appendLine("### 每日副本镜像（第二十九轮）")
+        appendLine()
+        appendLine("- 玩家策略（理性）：每天唯一一次机会（胜败都占当日名额）放在首次登录，挑战当前已解锁的")
+        appendLine("  最高难度（转数 ≥ unlockPrestige 的最大 tier，0 转空过）；该难度历史通关（ever_cleared 位掩码")
+        appendLine("  镜像，胜局置位、转生不清）后改扫荡（免战斗、耗魂力 50+等级×5，魂力不足退回挑战——战斗")
+        appendLine("  免费，已通关难度期望收益仍为正）。")
+        appendLine("- 公式逐位镜像 DungeonService.fight/sweep：Boss = 当前推图怪 × HP/攻击倍率（matk 镜像攻击、")
+        appendLine("  双防 = 放大后攻击 × MONSTER_DEF_FACTOR），战斗走生产 resolveBattle（玩家属性与 battle 同口径，")
+        appendLine("  含杀气商店加成）；金币 = goldReward × prestigeMultiplier、杀气直加、掉落 rollBackpackDrop")
+        appendLine("  （level=dropTier×12——与塔共用 rollBackpackDropMirror，背包满丢失计满包丢掉落）。")
+        appendLine("- 主种子 90 天：副本金币累计 ${eng(load.totalDungeonGold)}" +
+                "（占全期金币总收入 ${String.format("%.1f", load.dungeonShareOfIncome)}%、" +
+                "占主动玩法收入 ${String.format("%.1f", load.dungeonShareOfActive)}%）、" +
+                "胜/败/扫荡 = ${load.totalDungeonWins}/${load.totalDungeonLosses}/${load.totalDungeonSweeps}、" +
+                "扫荡耗魂力合计 ${eng(load.totalSweepSoulPower)}；副本杀气累计 ${load.totalDungeonKilling}。")
+        appendLine("- 10 种子汇总：副本金币 ${eng(seeds.minOf { it.dungeonGold })}~${eng(seeds.maxOf { it.dungeonGold })}、" +
+                "占主动收入 ${String.format("%.1f", seeds.minOf { it.dungeonShare })}%~${String.format("%.1f", seeds.maxOf { it.dungeonShare })}%。" +
+                "解锁节奏=转生驱动（难度 0~4 依次需 1~5 转）：主种子 90 天末 ${load.final.prestigeCount} 转 → " +
+                "已解锁 ${GameBalance.DUNGEON_DEFS.count { load.final.prestigeCount >= it.unlockPrestige }}/5 档——")
+        appendLine("  高难度（噩梦 10 万/地狱 30 万名义金）属 4~5 转后的终局产出，本期画像未触及。")
+        appendLine()
+        appendLine("### 杀气商店镜像（第二十九轮）")
+        appendLine()
+        appendLine("- 玩家策略：称号按 title_1→title_8 顺序攒够即买，【称号优先级高于属性购买】——称号属性量")
+        appendLine("  随价格（100→150000）同步递增且永久拥有叠加生效，单位杀气换得的属性显著高于属性购买")
+        appendLine("  （+100HP/+10ATK 基值固定不随等级缩放，文档定位为前期小额补强）；称号全满后剩余杀气轮替")
+        appendLine("  投入 HP/ATK 属性购买（价格 100×2^已购次数）。")
+        appendLine("- 杀气收入：塔胜 1+floor/10（既有口径）+ 副本 10/25/50/100/200 直加（不乘转生倍率）；")
+        appendLine("  加成经生产纯函数 killingBonus 并入战斗/塔战力加成包（equip+ach+kill 合计后 ×转生倍率，")
+        appendLine("  与生产 bonusFor 同通道、战力第 10 行 title 口径）。")
+        appendLine("- 主种子 90 天：杀气收入 塔 ${load.totalTowerKilling} + 副本 ${load.totalDungeonKilling} = " +
+                "${load.totalTowerKilling + load.totalDungeonKilling}，商店支出 ${eng(load.totalKillingSpent)}" +
+                "（称号 ${load.totalTitleBuys} 个、属性购买 ${load.totalAttrBuys} 次），期末余额 ${load.finalKillingIntent}、")
+        appendLine("  期末称号 ${load.finalTitles}/8（下一档：${load.nextTitleName}）。")
+        appendLine("- 10 种子汇总：期末称号 ${seeds.minOf { it.titles }}~${seeds.maxOf { it.titles }}/8 个、" +
+                "杀气商店支出 ${eng(seeds.minOf { it.killingSpent })}~${eng(seeds.maxOf { it.killingSpent })}——" +
+                "杀气在 90 天窗口内是「收入＜称号定价」的稀缺货币（title_8 累计需 22.12 万），商店构成杀气的")
+        appendLine("  长线终局 sink，90 天画像验证的是其前期节奏（称号逐档解锁）而非终局饱和。")
     }
 
     /**
@@ -1313,6 +1549,9 @@ class LongRunSimulationTest {
         appendLine("  （温和系数建模：HP×105%、双防×105%、暴击+5%/爆伤+5%，atk/matk ×1.0；选流派不重 roll 武魂、零掷点），")
         appendLine("  系数经 schoolModsOf/playerCombatStats/schoolScaledMaxHp/applySchool 计入镜像战斗属性、maxHp 与")
         appendLine("  塔胜率战力（报告附流派事件行）。")
+        appendLine("- 每日副本与杀气商店（第二十九轮镜像，DungeonService/ShopService 同源）：在文末《魂环负荷")
+        appendLine("  反馈回路专项》的穿装画像（EquipSimPlayer）中建模——每天唯一一次副本机会（挑战已解锁最高")
+        appendLine("  难度、通关后扫荡）+ 杀气收入（塔胜 1+floor/10 与副本直加）按称号顺序消费；本节零装备基线画像不参与。")
         appendLine("- 未建模：宗门 Boss、天赋、穿装行为——画像只捡/卖装备不穿戴，故装备战力加成按 0 计")
         appendLine("  （装备对战力的贡献已由 EquipmentPowerServiceTest 单测覆盖，见「已修复项」P7；成就加成不属装备，照常计入）。")
         appendLine("  **注（任务#22）**：上文各节维持「零装备基线」口径；穿装画像 + 魂环负荷/容量反馈回路的专项仿真")
@@ -1496,6 +1735,8 @@ class LongRunSimulationTest {
                 firstPrestigeDay = run.rows.firstOrNull { it.prestigeCount > 0 }?.day ?: 0,
                 enhances = run.totalEnhances, enhanceGold = run.totalEnhanceGold,
                 enhanceShare = run.enhanceShareOfIncome,
+                dungeonGold = run.totalDungeonGold, dungeonShare = run.dungeonShareOfActive,
+                titles = run.finalTitles, killingSpent = run.totalKillingSpent,
             )
         }
         val elapsed = System.currentTimeMillis() - start
@@ -1521,6 +1762,13 @@ class LongRunSimulationTest {
         assertTrue(seeds.all { it.utilLate in 40.0..92.0 },
             "10 种子后期利用率应在健康带 40~92%（实测 ${seeds.map { String.format("%.1f", it.utilLate) }}，" +
                     "越界=强化镜像扰动负荷回路）")
+        // 第二十九轮副本/杀气商店镜像收敛锁（10 种子 × 90 天）：新经济流必须真实触发
+        //  ① 每日副本金币收入 > 0（转生 ≥1 后镜像被 exercised，防未来改动静默废掉镜像 → 低估收入）；
+        //  ② 杀气商店至少购入一个称号（杀气 sink 生效，防镜像失效 → 高估杀气余额/漏算战力）
+        assertTrue(seeds.all { it.dungeonGold > 0 },
+            "所有种子的每日副本金币收入都应触发（实测 ${seeds.map { it.dungeonGold }}）")
+        assertTrue(seeds.all { it.killingSpent > 0 && it.titles > 0 },
+            "所有种子都应购买至少一个杀气称号（商店 sink 生效，实测 ${seeds.map { it.titles }}）")
         // 任务#22 调参后的收敛锁（固定种子实测 9/9 槽、死环率~0、利用率带内）：
         // 若未来改动使回路退化（恒卡或形同虚设），此三断言会先炸
         assertEquals(9, load90.final.slots, "主种子 90 天应满 9 槽（实测 ${load90.final.slots}）")
