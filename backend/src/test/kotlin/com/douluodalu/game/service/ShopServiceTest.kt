@@ -8,6 +8,9 @@ import com.douluodalu.game.model.*
 import com.douluodalu.game.repository.BackpackItemRepository
 import com.douluodalu.game.repository.ShopPurchaseRecordRepository
 import com.douluodalu.game.repository.UserRepository
+import com.douluodalu.game.repository.UserTitleRepository
+import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -16,6 +19,7 @@ import org.mockito.Captor
 import org.mockito.InjectMocks
 import org.mockito.Mock
 import org.mockito.MockitoAnnotations
+import org.mockito.Spy
 import org.mockito.kotlin.*
 import com.douluodalu.game.entity.BackpackItemEntity
 import java.util.Optional
@@ -35,6 +39,13 @@ class ShopServiceTest {
 
     @Mock
     private lateinit var dailyQuestService: DailyQuestService
+
+    /** 第二十九轮杀气商店：@InjectMocks 补齐新构造依赖（既有用例不触碰，默认空表/空注册表） */
+    @Mock
+    private lateinit var userTitleRepository: UserTitleRepository
+
+    @Spy
+    private val meterRegistry: MeterRegistry = SimpleMeterRegistry()
 
     @Captor
     private lateinit var itemCaptor: ArgumentCaptor<BackpackItemEntity>

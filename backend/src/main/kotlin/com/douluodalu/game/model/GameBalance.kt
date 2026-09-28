@@ -259,6 +259,66 @@ object GameBalance {
     const val TOWER_WIN_CHANCE_MIN = 0.05
     const val TOWER_WIN_CHANCE_MAX = 0.95
 
+    /* ==== 杀气商店（第二十九轮） ==== */
+    // 设计文档 §7.4：塔（杀戮之都）战斗胜利产出杀气（GameService.towerBattle：
+    // 1 + towerFloor/10），本节给杀气一个消耗出口——8 个永久称号 + HP/ATK 属性购买。
+    //  - 称号：购买即永久拥有（user_title 落库，V14），【全部已拥有称号的属性叠加生效】——
+    //    不做「佩戴唯一」，与成就系统的「拥有即生效、按集合求和、天然幂等」模型一致
+    //    （实现决策）；已拥有不可回购。转生不清称号（文档 §15.2 重置项不含称号）。
+    //  - 属性购买：HP/ATK 两商品各自独立计数（player_profile.killing_hp_buys/killing_atk_buys），
+    //    价格 = KILLING_ATTR_BASE_COST × 2^已购次数（杀气计价），无限次购买；
+    //    效果 +100 HP / +10 ATK 每次。
+    //  - 五属性口径：文档的「DEF+n」落为 pdef（KillingTitleDef 无 mdef 字段——本轮需求表的
+    //    数据类定义即 id/name/cost/hp/atk/pdef/critRate/critDmg，照此执行；title_1/2/3 无
+    //    CRIT/CDMG 字段用 0 补齐）；critRate/critDmg 为百分点数（3 = 3% 暴击 / +3% 爆伤），
+    //    与成就/骨词缀同量纲，经 EquipmentBonus 五属性字段进 playerCombatStats 全自动生效。
+    //  - 量级锚点（数值留档）：Lv.100 玩家基础 HP=5100/ATK=1050，满称号（title_1~8 全购，
+    //    累计杀气 221200）属性 +239700 HP / +5085 ATK / +620 pdef / +43% 暴击 / +175% 爆伤，
+    //    为 90 天存量的终局追求；属性购买基值固定不随等级缩放（照文档），后期相对等级成长
+    //    量级退化为有意为之——HP 买 10 次仅 +1000（< title_2 一张），定位前期小额补强。
+    data class KillingTitleDef(
+        val id: String,
+        val name: String,
+        /** 兑换价格（杀气计价） */
+        val cost: Long,
+        val hp: Long,
+        val atk: Long,
+        val pdef: Long,
+        /** 暴击率加成（百分点：3 = 3%）与暴击伤害加成（百分点），与成就/词缀同量纲 */
+        val critRate: Long,
+        val critDmg: Long
+    )
+
+    // 数值照设计文档 §7.4 逐位（title_1/2/3 无 CRIT 字段用 0 补齐）
+    val KILLING_TITLES = listOf(
+        KillingTitleDef("title_1", "初出茅庐", 100, hp = 200, atk = 10, pdef = 0, critRate = 0, critDmg = 0),
+        KillingTitleDef("title_2", "猎魂勇士", 300, hp = 500, atk = 25, pdef = 0, critRate = 0, critDmg = 0),
+        KillingTitleDef("title_3", "百战精英", 800, hp = 1200, atk = 50, pdef = 10, critRate = 0, critDmg = 0),
+        KillingTitleDef("title_4", "屠戮者", 2000, hp = 3000, atk = 100, pdef = 20, critRate = 3, critDmg = 0),
+        KillingTitleDef("title_5", "魂兽克星", 5000, hp = 8000, atk = 200, pdef = 40, critRate = 5, critDmg = 15),
+        KillingTitleDef("title_6", "传奇猎手", 15000, hp = 20000, atk = 500, pdef = 80, critRate = 8, critDmg = 30),
+        KillingTitleDef("title_7", "万人斩", 50000, hp = 50000, atk = 1200, pdef = 150, critRate = 12, critDmg = 50),
+        KillingTitleDef("title_8", "征服者", 150000, hp = 150000, atk = 3000, pdef = 300, critRate = 15, critDmg = 80)
+    )
+
+    /** id → 称号定义（回购判定 / 属性加成求和 / 商店面板三处同源，防止数值漂移） */
+    val KILLING_TITLE_BY_ID = KILLING_TITLES.associateBy { it.id }
+
+    /** 属性购买单次效果：+100 HP（与 KillingTitleDef 分离，两商品独立计数） */
+    const val KILLING_ATTR_HP_PER_BUY = 100L
+    /** 属性购买单次效果：+10 ATK */
+    const val KILLING_ATTR_ATK_PER_BUY = 10L
+
+    /** 属性购买基础价格（杀气）：第 n 次购买价格 = 100 × 2^已购次数（100/200/400/800...） */
+    const val KILLING_ATTR_BASE_COST = 100L
+
+    /**
+     * 属性购买当前价格（杀气计价，纯函数前后端镜像同源）：100 × 2^buys。
+     * buys 夹取 [0, 56]：2^56 × 100 ≈ 7.2e18 < Long.MAX，此后价格封顶防溢出
+     * （56 次购买在杀气产出速率（1 + floor/10 每胜）下不可达，封顶仅作数值防御）。
+     */
+    fun killingAttrCost(buys: Int): Long = KILLING_ATTR_BASE_COST shl buys.coerceIn(0, 56)
+
     // ======== 每日签到（7 日循环）========
     // 量级依据（《数值仿真报告-90天.md》）：主动日收入约 7,000 金，离线 12h ≈ 2,100~4,200 金。
     // 单日签到金币控制在 100~500 ≈ 挂机 1~2 小时量级，全循环合计 1,900 金 ≈ 挂机半天，

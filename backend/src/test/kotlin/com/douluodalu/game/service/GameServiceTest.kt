@@ -31,6 +31,7 @@ import org.mockito.kotlin.argThat
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
+import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import java.time.LocalDateTime
 import kotlin.math.abs
@@ -69,6 +70,10 @@ class GameServiceTest {
     @Mock
     private lateinit var achievementRepo: AchievementRepository
 
+    /** 第二十九轮杀气商店：EquipmentPowerService 新增依赖（bonusFor/killingBonusFor 反查） */
+    @Mock
+    private lateinit var userTitleRepo: com.douluodalu.game.repository.UserTitleRepository
+
     @Mock
     private lateinit var achievementService: AchievementService
 
@@ -87,7 +92,7 @@ class GameServiceTest {
         gameService = GameService(
             profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
             userRepository, webSocketService, checkInService, dailyQuestService,
-            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
+            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo, userTitleRepo, profileRepo),
             achievementService,
             meterRegistry,
             // 装备域拆分：EquipService 复用同一组 mock 仓库（equip/unequip/enhance 门面委托落点）
@@ -627,13 +632,40 @@ class GameServiceTest {
     }
 
     @Test
+    fun `prestige should keep killing shop titles attr buys and killing intent (第二十九轮)`() {
+        // 转生重置范围清单（level/gold/soulPower/currentStage，§15.2）不含杀气商店数据：
+        // 称号永久（user_title 表不触碰）、杀气购买计数与杀气余额保留——与 towerFloor/codexKills
+        // 同属「保留项」。verifyNoInteractions 钉住：prestige 全程不得读写 user_title。
+        val p = PlayerProfileEntity(userId = 1L, level = GameBalance.PRESTIGE_MIN_LEVEL)
+        p.killingIntent = 777
+        p.killingHpBuys = 3
+        p.killingAtkBuys = 2
+        whenever(profileRepo.findByUserId(1L)).thenReturn(p)
+        whenever(equippedRingRepo.findByUserId(1L)).thenReturn(emptyList())
+        whenever(equippedBoneRepo.findByUserId(1L)).thenReturn(emptyList())
+
+        val response = gameService.prestige(1L)
+
+        assertTrue(response.success)
+        // 清零项照旧：level/gold/soulPower/currentStage
+        assertEquals(1, p.level)
+        assertEquals(0L, p.gold)
+        assertEquals(0L, p.soulPower)
+        // 保留项（第二十九轮）：称号（user_title 零交互）+ 购买计数 + 杀气余额
+        assertEquals(777, p.killingIntent, "杀气余额不随转生清零（称号商店的货币）")
+        assertEquals(3, p.killingHpBuys, "HP 提升已购次数不随转生清零")
+        assertEquals(2, p.killingAtkBuys, "攻击提升已购次数不随转生清零")
+        verifyNoInteractions(userTitleRepo)
+    }
+
+    @Test
     fun `prestige should trigger achievement sync that unlocks prestige_1 record`() {
         // 真实 AchievementService 管线（wire 同一组 mock 仓库）：prestige → sync → prestige_1 解锁落库
         val realAchievementService = AchievementService(achievementRepo, profileRepo, equippedRingRepo)
         val svc = GameService(
             profileRepo, backpackRepo, talentRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo,
             userRepository, webSocketService, checkInService, dailyQuestService,
-            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo),
+            EquipmentPowerService(equippedRingRepo, equippedBoneRepo, equippedCoreRepo, achievementRepo, userTitleRepo, profileRepo),
             realAchievementService,
             SimpleMeterRegistry(),
             EquipService(profileRepo, backpackRepo, equippedRingRepo, equippedBoneRepo, equippedCoreRepo, realAchievementService)
