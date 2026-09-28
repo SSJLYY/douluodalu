@@ -3,6 +3,11 @@
 import { useState } from 'react';
 import { SOUL_POOL_TABLE, SOUL_RARITY_META, SOUL_RARITY_WEIGHTS, soulRarityMeta } from '@/lib/soul';
 import { RESCHOOL_COST_GOLD, SCHOOL_META, schoolRequirementText } from '@/lib/school';
+import {
+    DUNGEON_DEFS,
+    DUNGEON_SWEEP_SOUL_POWER_BASE,
+    DUNGEON_SWEEP_SOUL_POWER_PER_LEVEL,
+} from '@/lib/dungeon';
 
 // 品质池门槛表：0/1/2/3/5 转各一档（数据与 lib/soul.ts 同源，避免双份硬编码）
 const SOUL_POOL_ROWS = SOUL_POOL_TABLE.map((row) => ({
@@ -34,6 +39,21 @@ const SCHOOL_ROWS = Object.entries(SCHOOL_META).map(([key, meta]) => ({
     name: `${meta.icon} ${meta.label}`,
     description: `${meta.description}；系数：${meta.modsSummary}`,
     requirement: schoolRequirementText(key),
+}));
+
+// 每日副本机制行（第二十九轮，照设计文档 §8：每天一次机会/胜败都算已挑战/扫荡共用名额）
+const DUNGEON_MECHANIC_ROWS = [
+    { name: '每日节奏', description: '每天一次机会：任选一个已解锁难度挑战，胜或败都算当日已挑战（防刷），次日凌晨重置' },
+    { name: 'Boss 强度', description: 'Boss 取你当前推图怪的数值 × 难度倍率（HP/攻击），推图进度越深副本难度同步成长；战斗结算与普通战斗同口径（回放可逐回合查看）' },
+    { name: '奖励规则', description: '胜局才发奖：金币随转生倍率放大（每转 +10%）、杀气按表直加（稀缺货币不乘倍率）、掉落 tier 档装备（背包满则丢失）；失败无奖励' },
+    { name: '扫荡', description: `通关过某难度后可用扫荡：不战斗直接拿该难度的金币+杀气+掉落，消耗魂力 ${DUNGEON_SWEEP_SOUL_POWER_BASE} + 等级 × ${DUNGEON_SWEEP_SOUL_POWER_PER_LEVEL}；扫荡与挑战共用当日唯一一次奖励名额` },
+];
+
+// 五难度表（与 lib/dungeon.ts DUNGEON_DEFS 同源逐位；门槛徽章 n转+ 由 prestige 字段渲染）
+const DUNGEON_ROWS = DUNGEON_DEFS.map((d) => ({
+    name: `${d.name}·${d.difficulty}`,
+    prestige: d.unlockPrestige,
+    description: `Boss：${d.boss}（HP×${d.hpMult}、攻击×${d.atkMult}）；奖励 ${d.gold.toLocaleString()} 金币 + ${d.killing} 杀气；掉落 tier ${d.dropTier} 档装备`,
 }));
 
 const WIKI_CATEGORIES = [
@@ -118,6 +138,17 @@ const WIKI_CATEGORIES = [
             { name: '流派机制', description: `共 6 流派：均衡/物理/法系 3 个基础流派开局可选，辅助/控制/暗杀 3 个特殊流派需等级+转数门槛解锁（按选择时校验）；首选免费，重选花费 ${RESCHOOL_COST_GOLD} 金币；转生不会清除流派；流派系数作用于全部战斗属性（含武魂加成），主页状态卡可随时查看/更换` },
             // 六流派表：名称/定位/系数摘要/门槛（与后端 School 枚举同源，逐字对照）
             ...SCHOOL_ROWS,
+        ]
+    },
+    {
+        id: 'dungeon',
+        title: '每日副本',
+        icon: '🏯',
+        content: [
+            // 机制段：每天一次机会 / Boss 强度口径 / 奖励规则 / 扫荡（照设计文档 §8）
+            ...DUNGEON_MECHANIC_ROWS,
+            // 五难度表：名称/门槛（n转+ 徽章）/Boss/倍率/奖励/掉落层级（与后端 GameBalance.DUNGEON_DEFS 同源）
+            ...DUNGEON_ROWS,
         ]
     },
     {

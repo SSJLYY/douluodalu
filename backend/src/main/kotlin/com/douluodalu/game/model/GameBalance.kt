@@ -584,4 +584,77 @@ object GameBalance {
      * 防零成本来回切换刷门槛差值；重选不限次数。
      */
     const val RESCHOOL_COST_GOLD = 5000L
+
+    // ======== 每日副本（第二十九轮，设计文档 §8，V5） ========
+    // 五难度表驱动（逐位照设计文档 §8 表格）：解锁门槛按转数（1~5 转），Boss 数值 =
+    // 玩家当前推图怪（GameService.monsterStats(mapId, stage)，与 battle() 同源）× HP/攻击倍率；
+    // 金币奖励为名义值，结算时 ×prestigeMultiplier（收入口径③，与 battle/tower 一致）；
+    // 杀气（killingIntent）按名义值直加（稀缺货币，不乘倍率——转生收入倍率只作用于
+    // 金币/魂力类产出，与签到/任务固定表不乘的既有口径一致）。
+    // 每日节奏（实现口径，依据 §8「重置时间：每日凌晨（每天一次机会）」+ V13 单列
+    // challenge_date）：每天一次副本机会，任选一个已解锁难度；胜或败都算当日已挑战（防刷）；
+    // 扫荡与战斗共用当日唯一一次奖励名额（细节见 DungeonService KDoc）。
+    data class DungeonDef(
+        val name: String,
+        val difficultyName: String,
+        val bossName: String,
+        /** Boss HP 相对当前推图怪的倍率（§8 表 HP倍率列） */
+        val hpMult: Double,
+        /** Boss 攻击相对当前推图怪的倍率（§8 表 攻击倍率列）；双防按怪物构造约定随攻击同步放大 */
+        val atkMult: Double,
+        /** 金币奖励名义值（结算 ×prestigeMultiplier） */
+        val goldReward: Long,
+        /** 杀气奖励名义值（直加，不乘倍率） */
+        val killingReward: Int,
+        /**
+         * 掉落层级（§8 表 tier 列）：dungeonDropLevel 换算为 rollBackpackDrop 的 level 入参
+         * （命中对应魂环年份档，依据见 DUNGEON_DROP_LEVEL_PER_TIER 注释）。
+         */
+        val dropTier: Int,
+        /** 解锁条件：转生次数下限（§8 表 解锁条件列） */
+        val unlockPrestige: Int
+    )
+
+    val DUNGEON_DEFS = listOf(
+        DungeonDef("魂兽森林", "简单", "千年魂兽·泰坦巨猿", 3.0, 1.8, 5_000L, 10, 7, 1),
+        DungeonDef("暗影峡谷", "普通", "暗影君王·鬼魅", 5.0, 2.5, 15_000L, 25, 12, 2),
+        DungeonDef("龙墓禁地", "困难", "远古龙皇·赤王", 8.0, 3.5, 40_000L, 50, 17, 3),
+        DungeonDef("神之遗迹", "噩梦", "堕落天使·路西法", 12.0, 5.0, 100_000L, 100, 22, 4),
+        DungeonDef("深渊之门", "地狱", "深渊之主·阿萨谢尔", 20.0, 8.0, 300_000L, 200, 24, 5)
+    )
+
+    /** 层级（0~4）→ 定义反查（fight/sweep 校验与状态合成同源）；越界返回 null 由调用方 400 */
+    fun dungeonDefByTier(tier: Int): DungeonDef? = DUNGEON_DEFS.getOrNull(tier)
+
+    // ===== 扫荡定价（设计文档「消耗战斗魂力×3」语义不明：battle 本身不耗魂力，无量纲可乘）——
+    // 实现决策：与玩家等级线性挂钩的温和定价 50 + level×5（锚点：Lv.50 需 300，约为突破
+    // 单次消耗 120·50^1.55≈5.2 万的零头、离线 12h 魂力产出的同量级；扫荡只是跳过战斗的
+    // 便利功能，定价不应构成主要魂力 sink）。前端镜像见 lib/dungeon.ts dungeonSweepCost。
+    const val DUNGEON_SWEEP_SOUL_POWER_BASE = 50L
+    const val DUNGEON_SWEEP_SOUL_POWER_PER_LEVEL = 5L
+
+    /** 扫荡魂力费用：50 + 玩家等级 × 5（结算与状态预览同源单点） */
+    fun dungeonSweepSoulPowerCost(level: Int): Long =
+        DUNGEON_SWEEP_SOUL_POWER_BASE + level * DUNGEON_SWEEP_SOUL_POWER_PER_LEVEL
+
+    /**
+     * 掉落层级 → rollBackpackDrop 的 level 入参换算：level = dropTier × 12。
+     * 依据（GameService.rollBackpackDrop 换算逻辑）：掉落年份档 yearRoll = level/12 + rand(2)，
+     * 取 level = tier×12 使 level/12 == tier → yearRoll ≥ tier 恒成立（魂骨/魂核不封顶、
+     * 精确命中 tier 档；魂环受 TOWER_RING_DROP_YEAR_CAP=2 死掉落治理封顶，与塔掉落同口径）。
+     * 顺带品质档 quality = min(4, level/8 + rand(3))：tier 7（level 84）起即满品质 4，
+     * 高难度副本的掉落「层数更高品质更高」的体感由该曲线自然承接。
+     * 前端/百科无需此换算（状态接口只透出 dropTier 原始层级）。
+     */
+    const val DUNGEON_DROP_LEVEL_PER_TIER = 12
+
+    /** 掉落层级 → rollBackpackDrop level（GameService.rollBackpackDrop 入参同源单点） */
+    fun dungeonDropLevel(dropTier: Int): Int = dropTier * DUNGEON_DROP_LEVEL_PER_TIER
+
+    /** 难度 t 的历史通关位（ever_cleared 位掩码第 t 位；t 经 dungeonDefByTier 校验后为 0~4） */
+    fun dungeonClearedBit(tier: Int): Int = 1 shl tier
+
+    /** 历史是否通关过难度 t（位掩码判定单点：fight 胜局置位、sweep 前置判定共用） */
+    fun dungeonHasCleared(everClearedMask: Int, tier: Int): Boolean =
+        everClearedMask and dungeonClearedBit(tier) != 0
 }

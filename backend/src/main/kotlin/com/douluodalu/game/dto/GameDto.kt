@@ -362,3 +362,87 @@ data class ClaimQuestResponse(
     val bossCoinGained: Long,
     val soulPowerGained: Long
 )
+
+// ======== 每日副本（第二十九轮，设计文档 §8） ========
+/**
+ * 单难度状态（DungeonStateDto.tiers 固定 5 条，tier = 数组下标 0~4）。
+ * 奖励预览口径：goldReward 已乘转生倍率（与结算同式，前端直接展示不再镜像倍率公式）；
+ * killingReward 为名义值（结算同样直加不乘倍率）。
+ */
+data class DungeonTierStateDto(
+    val tier: Int,
+    val name: String,
+    val difficultyName: String,
+    val bossName: String,
+    val hpMult: Double,
+    val atkMult: Double,
+    /** 奖励预览：金币（已乘转生倍率，与结算同式） */
+    val goldReward: Long,
+    val killingReward: Int,
+    /** 掉落层级（§8 表 tier 列；掉落本身遵循 rollBackpackDrop 内部口径：背包有空间必掉） */
+    val dropTier: Int,
+    /** 解锁条件：转生次数下限 */
+    val unlockPrestige: Int,
+    /** 当前转数是否已解锁（prestigeCount >= unlockPrestige） */
+    val unlocked: Boolean = false,
+    /** 今日机会是否已用（一天一次机会全体难度共享——战斗胜/败、扫荡都算，见 DungeonService KDoc） */
+    val challengedToday: Boolean = false,
+    /** 该难度今日是否已通关（胜局写入 tier_completed 后按层级判定） */
+    val clearedToday: Boolean = false,
+    /** 可否扫荡：已解锁 且 历史通关过该难度（ever_cleared 位掩码） 且 今日机会未用 */
+    val sweepable: Boolean = false,
+    /** 扫荡魂力消耗（50 + 玩家等级 × 5，与结算同源 dungeonSweepSoulPowerCost） */
+    val sweepSoulPowerCost: Long = 0
+)
+
+/** GET /api/dungeon/state 响应：date=yyyy-MM-dd（LocalDate.now()，与签到/每日任务同一时区口径） */
+data class DungeonStateDto(
+    val date: String = "",
+    /** 当日机会是否已用（战斗胜/败、扫荡都算；全体难度共享——一天一次机会，见 DungeonService KDoc） */
+    val challengedToday: Boolean = false,
+    /** 当日最高已通关难度（-1=未通关，0~4=难度层级；跨天惰性重置） */
+    val tierCompleted: Int = -1,
+    val tiers: List<DungeonTierStateDto> = emptyList()
+)
+
+/**
+ * POST /api/dungeon/fight/{tier} 响应：结构与 BattleResponse/TowerResponse 同族
+ * （battleLog 复用 BattleRoundLog，前端直接复用 BattleReplay 回放组件）。
+ * 失败无奖励（金币/杀气/掉落为 0/空），当天该难度机会已用。
+ */
+data class DungeonFightResponse(
+    val won: Boolean,
+    val rounds: Int,
+    val tier: Int,
+    val monsterName: String,
+    val monsterMaxHp: Long,
+    val goldGained: Long = 0,
+    val killingGained: Int = 0,
+    val drops: List<BackpackItemDto> = emptyList(),
+    val playerHp: Long = 0,
+    val playerLevel: Int = 0,
+    val playerGold: Long = 0,
+    val playerKillingIntent: Int = 0,
+    /** 战斗回合日志（与 battle/tower 同构，前端复用 BattleReplay） */
+    val battleLog: List<BattleRoundLog> = emptyList(),
+    /** 背包满导致掉落丢失时的提示（照 battle 的 message 口径） */
+    val message: String? = null,
+    /** 战斗力（含装备加成，与 battle 响应同口径） */
+    val power: Long = 0
+)
+
+/**
+ * POST /api/dungeon/sweep/{tier} 响应：不战斗直接拿该难度的金币+杀气+掉落
+ * （同当日唯一一次奖励名额），扣减魂力 sweepSoulPowerCost = 50 + 玩家等级 × 5。
+ */
+data class DungeonSweepResponse(
+    val tier: Int,
+    val soulPowerSpent: Long,
+    val goldGained: Long,
+    val killingGained: Int,
+    val drops: List<BackpackItemDto> = emptyList(),
+    val playerGold: Long = 0,
+    val playerSoulPower: Long = 0,
+    /** 背包满导致掉落丢失时的提示（照 battle 的 message 口径） */
+    val message: String? = null
+)

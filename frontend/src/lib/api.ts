@@ -201,6 +201,22 @@ class ApiClient {
         return this.request<TowerBattleResult>('/api/action/tower', { method: 'POST' });
     }
 
+    // Dungeon（每日副本，第二十九轮）：资格类前置不足（未解锁/今日已挑战/未通关/魂力不足）
+    // 由后端统一 400 → request 抛 ApiError，调用方落 message 即可
+    async getDungeonState() {
+        return this.request<DungeonState>('/api/dungeon/state');
+    }
+
+    /** 挑战难度 tier（0~4）：每天一次机会（任选已解锁难度，胜败都算已挑战） */
+    async fightDungeon(tier: number) {
+        return this.request<DungeonFightResult>(`/api/dungeon/fight/${tier}`, { method: 'POST' });
+    }
+
+    /** 扫荡难度 tier：历史通关后可用，扣魂力 dungeonSweepCost(level) 直接拿奖励（同当日唯一一次名额） */
+    async sweepDungeon(tier: number) {
+        return this.request<DungeonSweepResult>(`/api/dungeon/sweep/${tier}`, { method: 'POST' });
+    }
+
     // Rank
     async getLevelRank(limit = 50) {
         return this.request<RankEntry[]>(`/api/rank/level?limit=${limit}`);
@@ -673,6 +689,76 @@ export interface TowerBattleResult {
     playerLevel: number;
     /** 战斗回合日志：后端升级前可能缺失（undefined），消费方走无回放的原展示 */
     battleLog?: BattleRound[];
+}
+
+// ======== 每日副本（第二十九轮，设计文档 §8） ========
+
+/** 单难度状态（DungeonState.tiers 固定 5 条，tier = 数组下标 0~4） */
+export interface DungeonTierState {
+    tier: number;
+    name: string;
+    difficultyName: string;
+    bossName: string;
+    hpMult: number;
+    atkMult: number;
+    /** 奖励预览：金币（后端已乘转生倍率，直接展示） */
+    goldReward: number;
+    killingReward: number;
+    /** 掉落层级（§8 表 tier 列；背包有空间必掉，满则丢失） */
+    dropTier: number;
+    /** 解锁条件：转生次数下限 */
+    unlockPrestige: number;
+    unlocked: boolean;
+    /** 今日机会是否已用（一天一次机会全体难度共享——战斗胜/败、扫荡都算） */
+    challengedToday: boolean;
+    /** 该难度今日是否已通关 */
+    clearedToday: boolean;
+    /** 可否扫荡：已解锁 且 历史通关过该难度 且 今日机会未用 */
+    sweepable: boolean;
+    /** 扫荡魂力消耗（后端按当前等级现算：50 + 等级 × 5） */
+    sweepSoulPowerCost: number;
+}
+
+/** GET /api/dungeon/state 响应（date=yyyy-MM-dd，与签到/每日任务同一时区口径） */
+export interface DungeonState {
+    date: string;
+    challengedToday: boolean;
+    /** 当日最高已通关难度（-1=未通关，0~4=难度层级） */
+    tierCompleted: number;
+    tiers: DungeonTierState[];
+}
+
+/** POST /api/dungeon/fight/{tier} 响应：结构与 TowerBattleResult 同族，battleLog 复用 BattleReplay 回放 */
+export interface DungeonFightResult {
+    won: boolean;
+    rounds: number;
+    tier: number;
+    monsterName: string;
+    monsterMaxHp: number;
+    /** 失败无奖励：金币/杀气/掉落为 0/空 */
+    goldGained: number;
+    killingGained: number;
+    drops: BackpackItem[];
+    playerHp: number;
+    playerLevel: number;
+    playerGold: number;
+    playerKillingIntent: number;
+    battleLog?: BattleRound[];
+    /** 背包满导致掉落丢失时的提示 */
+    message?: string | null;
+    power: number;
+}
+
+/** POST /api/dungeon/sweep/{tier} 响应：不战斗直接拿该难度奖励（同当日唯一一次名额） */
+export interface DungeonSweepResult {
+    tier: number;
+    soulPowerSpent: number;
+    goldGained: number;
+    killingGained: number;
+    drops: BackpackItem[];
+    playerGold: number;
+    playerSoulPower: number;
+    message?: string | null;
 }
 
 export interface CultivateResult {
